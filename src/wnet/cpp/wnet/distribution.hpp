@@ -45,6 +45,14 @@ public:
         return {&py_positions, idx};
     }
 
+    const nb::ndarray<> get_positions() const {
+        return py_positions;
+    }
+
+    const nb::ndarray<LEMON_INT, nb::shape<-1>> get_intensities() const {
+        return py_intensities;
+    }
+
     std::pair<std::vector<size_t>, std::vector<LEMON_INT>> closer_than(
         const Point_t point,
         const nb::callable* wrapped_dist_fun,

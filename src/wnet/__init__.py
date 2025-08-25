@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 
-def py_hello():
-    print("Hello, World from WNet (Python)!")
+from .distribution import Distribution_1D, Distribution
+from .wnet_cpp import WassersteinNetwork
+
