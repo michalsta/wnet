@@ -17,7 +17,7 @@
 
 
 
-class FlowSubgraph {
+class WassersteinNetworkSubgraph {
     std::vector<FlowNode> nodes;
     std::vector<FlowEdge> edges;
     lemon::StaticDigraph lemon_graph;
@@ -31,7 +31,7 @@ class FlowSubgraph {
     const size_t no_theoretical_spectra;
 
 public:
-    FlowSubgraph(
+    WassersteinNetworkSubgraph(
         const std::vector<size_t>& subgraph_node_ids,
         const std::vector<FlowNode>& all_nodes,
         const std::vector<FlowEdge>& all_edges,
@@ -325,17 +325,17 @@ public:
 
 };
 
-class DecompositableFlowGraph {
+class WassersteinNetwork {
     std::vector<FlowNode> nodes;
     std::vector<FlowEdge> edges;
 
     const size_t _no_theoretical_spectra;
 
     std::vector<size_t> dead_end_node_ids;
-    std::vector<std::unique_ptr<FlowSubgraph>> flow_subgraphs;
+    std::vector<std::unique_ptr<WassersteinNetworkSubgraph>> flow_subgraphs;
 
 public:
-    DecompositableFlowGraph(
+    WassersteinNetwork(
     const Spectrum* empirical_spectrum,
     const std::vector<Spectrum*>& theoretical_spectra,
     const nb::callable* dist_fun,
@@ -486,7 +486,7 @@ public:
             #ifdef DO_TONS_OF_PRINTS
             std::cout << "Subgraph" << std::endl;
             #endif
-            flow_subgraphs.emplace_back(std::make_unique<FlowSubgraph>(
+            flow_subgraphs.emplace_back(std::make_unique<WassersteinNetworkSubgraph>(
                     subgraph_node_ids,
                     nodes,
                     edges,
@@ -521,7 +521,7 @@ public:
         return flow_subgraphs.size();
     };
 
-    const FlowSubgraph& get_subgraph(size_t idx) const {
+    const WassersteinNetworkSubgraph& get_subgraph(size_t idx) const {
         if (idx >= flow_subgraphs.size())
             throw std::out_of_range("Subgraph index out of range");
         return *flow_subgraphs[idx];
