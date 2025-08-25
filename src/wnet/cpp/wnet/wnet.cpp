@@ -4,7 +4,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
-
+#include "decompositable_graph.hpp"
+#include "graph_elements.hpp"
 
 
 NB_MODULE(wnetalign_cpp, m) {
