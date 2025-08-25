@@ -1,3 +1,6 @@
+#ifndef WNET_DECOMPOSITABLE_GRAPH_HPP
+#define WNET_DECOMPOSITABLE_GRAPH_HPP
+
 #include <vector>
 #include <span>
 #include <algorithm>
@@ -98,6 +101,11 @@ public:
             );
         }
     }
+
+    WassersteinNetworkSubgraph(const WassersteinNetworkSubgraph&) = delete;
+    WassersteinNetworkSubgraph& operator=(const WassersteinNetworkSubgraph&) = delete;
+    WassersteinNetworkSubgraph(WassersteinNetworkSubgraph&&) = delete;
+    WassersteinNetworkSubgraph& operator=(WassersteinNetworkSubgraph&&) = delete;
 
     void add_simple_trash(LEMON_INT cost) {
         edges.emplace_back(
@@ -336,8 +344,8 @@ class WassersteinNetwork {
 
 public:
     WassersteinNetwork(
-    const Spectrum* empirical_spectrum,
-    const std::vector<Spectrum*>& theoretical_spectra,
+    const Distribution* empirical_spectrum,
+    const std::vector<Distribution*>& theoretical_spectra,
     const nb::callable* dist_fun,
     LEMON_INT max_dist
     ) :
@@ -403,6 +411,11 @@ public:
         }
         build_subgraphs();
     };
+
+    WassersteinNetwork(const WassersteinNetwork&) = delete;
+    WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
+    WassersteinNetwork(WassersteinNetwork&&) = delete;
+    WassersteinNetwork& operator=(WassersteinNetwork&&) = delete;
 
     size_t no_nodes() const {
         return nodes.size();
@@ -588,3 +601,4 @@ public:
     }
 };
 
+#endif // WNET_DECOMPOSITABLE_GRAPH_HPP

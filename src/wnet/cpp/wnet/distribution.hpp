@@ -1,5 +1,5 @@
-#ifndef PYLMCF_SPECTRUM_HPP
-#define PYLMCF_SPECTRUM_HPP
+#ifndef WNET_DISTRIBUTION_HPP
+#define WNET_DISTRIBUTION_HPP
 
 #include <array>
 
@@ -17,14 +17,14 @@ std::span<const T> numpy_to_span(const nb::ndarray<T, nb::shape<-1>>& array) {
     return std::span<const T>(static_cast<T*>(array.data()), array.shape(0));
 }
 
-class Spectrum {
+class Distribution {
     using Point_t = std::pair<const nb::ndarray<>*, size_t>;
     const nb::ndarray<> py_positions;
     const nb::ndarray<LEMON_INT, nb::shape<-1>> py_intensities;
 public:
     const std::span<const LEMON_INT> intensities;
 
-    Spectrum(nb::ndarray<> positions, nb::ndarray<LEMON_INT, nb::shape<-1>> intensities)
+    Distribution(nb::ndarray<> positions, nb::ndarray<LEMON_INT, nb::shape<-1>> intensities)
         : py_positions(positions), py_intensities(intensities), intensities(numpy_to_span(intensities)) {
         if (positions.shape(1) != intensities.shape(0)) {
             throw std::invalid_argument("Positions and intensities must have the same size");
@@ -75,4 +75,4 @@ public:
     }
 };
 
-#endif // PYLMCF_SPECTRUM_HPP
+#endif // WNET_DISTRIBUTION_HPP

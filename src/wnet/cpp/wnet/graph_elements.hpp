@@ -1,5 +1,5 @@
-#ifndef GRAPH_ELEMENTS_HPP
-#define GRAPH_ELEMENTS_HPP
+#ifndef WNET_GRAPH_ELEMENTS_HPP
+#define WNET_GRAPH_ELEMENTS_HPP
 
 #include <iostream>
 #include <vector>
@@ -137,4 +137,4 @@ public:
     };
 };
 
-#endif // GRAPH_ELEMENTS_HPP
+#endif // wNET_GRAPH_ELEMENTS_HPP
