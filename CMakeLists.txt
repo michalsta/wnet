@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.15)
+
+execute_process(
+    COMMAND python -m pylmcf --include
+    OUTPUT_VARIABLE PYLMCF_INCLUDE_DIRS
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+
+project(wnet)
+find_package(Python COMPONENTS Interpreter Development REQUIRED)
+find_package(nanobind REQUIRED CONFIG)
+
+set(CMAKE_CXX_STANDARD 20)
+
+nanobind_add_module(wnet_cpp
+    NB_STATIC
+    src/wnet/cpp/wnet/wnet.cpp)
+
+target_include_directories(wnet_cpp PRIVATE ${PYLMCF_INCLUDE_DIRS})
+
+install(TARGETS wnet_cpp LIBRARY DESTINATION wnet)
