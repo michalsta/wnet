@@ -10,7 +10,10 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/tuple.h>
 namespace nb = nanobind;
+
+
 
 template<typename T>
 std::span<const T> numpy_to_span(const nb::ndarray<T, nb::shape<-1>>& array) {
@@ -18,10 +21,10 @@ std::span<const T> numpy_to_span(const nb::ndarray<T, nb::shape<-1>>& array) {
 }
 
 class Distribution {
-    using Point_t = std::pair<const nb::ndarray<>*, size_t>;
     const nb::ndarray<> py_positions;
     const nb::ndarray<LEMON_INT, nb::shape<-1>> py_intensities;
 public:
+    using Point_t = std::pair<const nb::ndarray<>*, size_t>;
     const std::span<const LEMON_INT> intensities;
 
     Distribution(nb::ndarray<> positions, nb::ndarray<LEMON_INT, nb::shape<-1>> intensities)

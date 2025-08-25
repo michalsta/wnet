@@ -8,7 +8,7 @@
 #include "graph_elements.hpp"
 
 
-NB_MODULE(wnetalign_cpp, m) {
+NB_MODULE(wnet_cpp, m) {
     m.doc() = "WNet C++ imlementation module";
 
     // Define a simple function to demonstrate the module
@@ -61,6 +61,9 @@ NB_MODULE(wnetalign_cpp, m) {
     nb::class_<Distribution>(m, "Distribution")
         .def(nb::init<nb::ndarray<>, nb::ndarray<LEMON_INT, nb::shape<-1>>>())
         .def("size", &Distribution::size)
-        .def("get_point", &Distribution::get_point)
+        //.def("get_point", &Distribution::get_point)
         .def("closer_than", &Distribution::closer_than);
+    nb::class_<Distribution::Point_t>(m, "DistributionPoint")
+        .def_ro("positions", &Distribution::Point_t::first)
+        .def_ro("index", &Distribution::Point_t::second);
 }

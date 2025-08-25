@@ -375,8 +375,8 @@ public:
             #ifdef DO_TONS_OF_PRINTS
             size_t no_processed = 0;
             size_t no_included = 0;
+            std::cout << "Processing theoretical spectrum " << theoretical_spectrum_idx << " / " << theoretical_spectra.size() << std::endl;
             #endif
-
             const auto& theoretical_spectrum = theoretical_spectra[theoretical_spectrum_idx];
 
             for (size_t theoretical_peak_idx = 0; theoretical_peak_idx < theoretical_spectrum->size(); ++theoretical_peak_idx) {
