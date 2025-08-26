@@ -1,6 +1,5 @@
 from wnet import WassersteinNetwork, Distribution
 from wnet.distances import wrap_distance_function
-from pylmcf.trashes import TrashFactorySimple
 import numpy as np
 
 
