@@ -14,8 +14,6 @@
 
 NB_MODULE(wnet_cpp, m) {
     m.doc() = "WNet C++ imlementation module";
-    m.def("one_arr", []() { std::vector<int> v = {1,2,3}; return std::make_tuple(vector_to_numpy(v)); });
-    // Define a simple function to demonstrate the module
     m.def("wnet_cpp_hello", []() {
         std::cout << "Hello from WNet (C++)!" << std::endl;
     }, "A simple hello world function for the WNet (C++) extension");
