@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <variant>
 
-#include "pylmcf/basics.hpp"
+#include <pylmcf/basics.hpp>
 
 class SourceNode {};
 class SinkNode {};

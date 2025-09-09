@@ -13,9 +13,9 @@ namespace nb = nanobind;
 
 inline std::string get_type_str(const nb::object &obj) {
     nb::handle type = obj.type();
-    nb::str name = nb::str(type.attr("__name__"));
-    nb::str module = nb::str(type.attr("__module__"));
-    return std::string(module.c_str()) + "." + std::string(name.c_str());
+    std::string name = nb::cast<std::string>(type.attr("__name__"));
+    std::string module = nb::cast<std::string>(type.attr("__module__"));
+    return module + "." + name;
 }
 
 template<typename T>
