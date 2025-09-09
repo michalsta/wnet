@@ -8,7 +8,9 @@ execute_process(
 
 
 project(wnet)
-find_package(Python COMPONENTS Interpreter Development REQUIRED)
+find_package(Python 3.8
+  REQUIRED COMPONENTS Interpreter Development.Module
+  OPTIONAL_COMPONENTS Development.SABIModule)
 find_package(nanobind REQUIRED CONFIG)
 
 set(CMAKE_CXX_STANDARD 20)
