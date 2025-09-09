@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core", "nanobind", "pylmcf @ git+https://github.com/michalsta/pylmcf"]
+requires = ["scikit-build-core", "nanobind", "pylmcf"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -9,4 +9,4 @@ description = "Tools for calculation of Wasserstein metric between distributions
 authors = [
     { name="Michał Startek", email="michal.startek@mimuw.edu.pl" }
 ]
-dependencies = ["pylmcf @ git+https://github.com/michalsta/pylmcf"]
+dependencies = ["pylmcf"]
