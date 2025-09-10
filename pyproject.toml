@@ -9,4 +9,4 @@ description = "Tools for calculation of Wasserstein metric between distributions
 authors = [
     { name="Michał Startek", email="michal.startek@mimuw.edu.pl" }
 ]
-dependencies = ["pylmcf"]
+dependencies = ["pylmcf", "numpy"]

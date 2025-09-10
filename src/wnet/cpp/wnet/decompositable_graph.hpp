@@ -20,23 +20,23 @@
 #include <iostream>
 
 
-
+template <typename VALUE_TYPE>
 class WassersteinNetworkSubgraph {
     std::vector<FlowNode> nodes;
     std::vector<FlowEdge> edges;
     lemon::StaticDigraph lemon_graph;
-    lemon::StaticDigraph::NodeMap<LEMON_INT> node_supply_map;
-    lemon::StaticDigraph::ArcMap<LEMON_INT> capacities_map;
-    lemon::StaticDigraph::ArcMap<LEMON_INT> costs_map;
-    std::optional<lemon::NetworkSimplex<lemon::StaticDigraph, LEMON_INT, LEMON_INT>> solver;
-    size_t simple_trash_idx;
-    LEMON_INT empirical_intensity;
-    LEMON_INT theoretical_intensity;
+    lemon::StaticDigraph::NodeMap<VALUE_TYPE> node_supply_map;
+    lemon::StaticDigraph::ArcMap<VALUE_TYPE> capacities_map;
+    lemon::StaticDigraph::ArcMap<VALUE_TYPE> costs_map;
+    std::optional<lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> solver;
+    LEMON_INDEX simple_trash_idx;
+    VALUE_TYPE empirical_intensity;
+    VALUE_TYPE theoretical_intensity;
     const size_t no_theoretical_spectra;
 
 public:
     WassersteinNetworkSubgraph(
-        const std::vector<size_t>& subgraph_node_ids,
+        const std::vector<LEMON_INDEX>& subgraph_node_ids,
         const std::vector<FlowNode>& all_nodes,
         const std::vector<FlowEdge>& all_edges,
         size_t no_theoretical_spectra
@@ -46,7 +46,7 @@ public:
         capacities_map(lemon_graph),
         costs_map(lemon_graph),
         solver(),
-        simple_trash_idx(std::numeric_limits<size_t>::max()),
+        simple_trash_idx(std::numeric_limits<LEMON_INDEX>::max()),
         empirical_intensity(0),
         theoretical_intensity(0),
         no_theoretical_spectra(no_theoretical_spectra)
@@ -57,7 +57,7 @@ public:
         auto& source_node = nodes[0];
         auto& sink_node = nodes[1];
 
-        std::unordered_map<size_t, size_t> node_id_map;
+        std::unordered_map<LEMON_INDEX, LEMON_INDEX> node_id_map;
 
         for (const auto& node_id : subgraph_node_ids)
         {
@@ -108,7 +108,7 @@ public:
     WassersteinNetworkSubgraph(WassersteinNetworkSubgraph&&) = delete;
     WassersteinNetworkSubgraph& operator=(WassersteinNetworkSubgraph&&) = delete;
 
-    void add_simple_trash(LEMON_INT cost) {
+    void add_simple_trash(VALUE_TYPE cost) {
         edges.emplace_back(
             edges.size(),
             nodes[0],
@@ -123,37 +123,37 @@ public:
                 return a.get_start_node_id() < b.get_start_node_id();
             return a.get_end_node_id() < b.get_end_node_id();
         });
-        std::vector<std::pair<int, int>> arcs;
+        std::vector<std::pair<LEMON_INDEX, LEMON_INDEX>> arcs;
         arcs.reserve(edges.size());
         for (const FlowEdge& edge : edges)
             arcs.emplace_back(edge.get_start_node_id(), edge.get_end_node_id());
         lemon_graph.build(nodes.size(), arcs.begin(), arcs.end());
 
-        for (size_t ii = 0; ii < nodes.size(); ++ii)
+        for (LEMON_INDEX ii = 0; ii < nodes.size(); ++ii)
             node_supply_map[lemon_graph.nodeFromId(ii)] = 0;
 
-        for (size_t ii = 0; ii < edges.size(); ++ii)
+        for (LEMON_INDEX ii = 0; ii < edges.size(); ++ii)
             costs_map[lemon_graph.arcFromId(ii)] = std::visit([&](const auto& arg) {
                     using T = std::decay_t<decltype(arg)>;
                     if constexpr (std::is_same_v<T, MatchingEdge>) return arg.get_cost();
-                    else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) return (LEMON_INT) 0;
-                    else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (LEMON_INT) 0;
+                    else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) return (VALUE_TYPE) 0;
+                    else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SimpleTrashEdge>) { simple_trash_idx = ii; return arg.get_cost(); }
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
 
-        for (size_t ii = 0; ii < edges.size(); ++ii)
+        for (LEMON_INDEX ii = 0; ii < edges.size(); ++ii)
         {
             capacities_map[lemon_graph.arcFromId(ii)] = std::visit([&](const auto& arg) {
                     using T = std::decay_t<decltype(arg)>;
-                    if constexpr (std::is_same_v<T, MatchingEdge>) return (LEMON_INT) 0;
+                    if constexpr (std::is_same_v<T, MatchingEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {
-                        LEMON_INT intensity = (LEMON_INT) std::get<EmpiricalNode>(edges[ii].get_end_node().get_type()).get_intensity();
+                        VALUE_TYPE intensity = (VALUE_TYPE) std::get<EmpiricalNode>(edges[ii].get_end_node().get_type()).get_intensity();
                         empirical_intensity += intensity;
                         return intensity;
                     }
-                    else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (LEMON_INT) 0;
-                    else if constexpr (std::is_same_v<T, SimpleTrashEdge>) return (LEMON_INT) 0;
+                    else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
+                    else if constexpr (std::is_same_v<T, SimpleTrashEdge>) return (VALUE_TYPE) 0;
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
         }
@@ -161,22 +161,22 @@ public:
         //solver->upperMap(capacities_map);
     }
 
-    void set_point(const std::vector<INTENSITY_TYPE>& point) {
+    void set_point(const std::vector<double>& point) {
         theoretical_intensity = 0;
-        for (size_t ii = 0; ii < edges.size(); ++ii)
+        for (LEMON_INDEX ii = 0; ii < edges.size(); ++ii)
         {
             const FlowEdge& edge = edges[ii];
             std::visit([&](const auto& arg) {
                 using T = std::decay_t<decltype(arg)>;
                 if constexpr (std::is_same_v<T, MatchingEdge>) {
                     const auto& theoretical_node_type = std::get<TheoreticalNode>(edge.get_end_node().get_type());
-                    capacities_map[lemon_graph.arcFromId(ii)] = (LEMON_INT) std::min<double>(
+                    capacities_map[lemon_graph.arcFromId(ii)] = (VALUE_TYPE) std::min<double>(
                         theoretical_node_type.get_intensity() * point[theoretical_node_type.get_spectrum_id()],
                         std::get<EmpiricalNode>(edge.get_start_node().get_type()).get_intensity());
                     }
                 else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
                     const auto& theoretical_node_type = std::get<TheoreticalNode>(edge.get_start_node().get_type());
-                    LEMON_INT intensity = (LEMON_INT) (theoretical_node_type.get_intensity() * point[theoretical_node_type.get_spectrum_id()]);
+                    VALUE_TYPE intensity = (VALUE_TYPE) (theoretical_node_type.get_intensity() * point[theoretical_node_type.get_spectrum_id()]);
                     lemon_graph.arcFromId(ii);
                     capacities_map[lemon_graph.arcFromId(ii)] = intensity;
                     theoretical_intensity += intensity;
@@ -186,8 +186,8 @@ public:
                 else { throw std::runtime_error("Invalid FlowEdgeType"); };
             }, edge.get_type());
         }
-        const LEMON_INT total_flow = std::max<LEMON_INT>(empirical_intensity, theoretical_intensity);
-        if(simple_trash_idx != std::numeric_limits<size_t>::max())
+        const VALUE_TYPE total_flow = std::max<VALUE_TYPE>(empirical_intensity, theoretical_intensity);
+        if(simple_trash_idx != std::numeric_limits<LEMON_INDEX>::max())
         {
             capacities_map[lemon_graph.arcFromId(simple_trash_idx)] = total_flow;
             costs_map[lemon_graph.arcFromId(simple_trash_idx)] = std::get<SimpleTrashEdge>(edges[simple_trash_idx].get_type()).get_cost();
@@ -201,7 +201,7 @@ public:
         solver->run();
     }
 
-    LEMON_INT total_cost() const {
+    VALUE_TYPE total_cost() const {
         if(!solver) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
         return solver->totalCost();
     };
@@ -262,14 +262,14 @@ public:
     };
 
     void flows_for_spectrum(size_t spectrum_id,
-                            std::vector<size_t>& empirical_peak_indices,
-                            std::vector<size_t>& theoretical_peak_indices,
-                            std::vector<LEMON_INT>& flows) const
+                            std::vector<LEMON_INDEX>& empirical_peak_indices,
+                            std::vector<LEMON_INDEX>& theoretical_peak_indices,
+                            std::vector<VALUE_TYPE>& flows) const
     {
-        for (size_t ii = 0; ii < edges.size(); ++ii)
+        for (LEMON_INDEX ii = 0; ii < edges.size(); ++ii)
         {
             const FlowEdge& edge = edges[ii];
-            const LEMON_INT flow = solver->flow(lemon_graph.arcFromId(ii));
+            const VALUE_TYPE flow = solver->flow(lemon_graph.arcFromId(ii));
             if (flow == 0) continue;
             std::visit([&](const auto& arg) {
                 using T = std::decay_t<decltype(arg)>;
@@ -334,21 +334,22 @@ public:
 
 };
 
+template <typename VALUE_TYPE>
 class WassersteinNetwork {
     std::vector<FlowNode> nodes;
     std::vector<FlowEdge> edges;
 
     const size_t _no_theoretical_spectra;
 
-    std::vector<size_t> dead_end_node_ids;
-    std::vector<std::unique_ptr<WassersteinNetworkSubgraph>> flow_subgraphs;
+    std::vector<LEMON_INDEX> dead_end_node_ids;
+    std::vector<std::unique_ptr<WassersteinNetworkSubgraph<VALUE_TYPE>>> flow_subgraphs;
 
 public:
     WassersteinNetwork(
     const Distribution* empirical_spectrum,
     const std::vector<Distribution*>& theoretical_spectra,
     const nb::callable* dist_fun,
-    LEMON_INT max_dist
+    VALUE_TYPE max_dist
     ) :
     _no_theoretical_spectra(theoretical_spectra.size())
     {
@@ -363,7 +364,7 @@ public:
         nodes.emplace_back(FlowNode(0, SourceNode()));
         nodes.emplace_back(FlowNode(1, SinkNode()));
 
-        for (size_t empirical_idx = 0; empirical_idx < empirical_spectrum->size(); ++empirical_idx) {
+        for (LEMON_INDEX empirical_idx = 0; empirical_idx < empirical_spectrum->size(); ++empirical_idx) {
             nodes.emplace_back(FlowNode(
                                     nodes.size(),
                                     EmpiricalNode(
@@ -380,7 +381,7 @@ public:
             #endif
             const auto& theoretical_spectrum = theoretical_spectra[theoretical_spectrum_idx];
 
-            for (size_t theoretical_peak_idx = 0; theoretical_peak_idx < theoretical_spectrum->size(); ++theoretical_peak_idx) {
+            for (LEMON_INDEX theoretical_peak_idx = 0; theoretical_peak_idx < theoretical_spectrum->size(); ++theoretical_peak_idx) {
                 nodes.emplace_back(FlowNode(
                                         nodes.size(),
                                             TheoreticalNode(
@@ -401,7 +402,7 @@ public:
                 std::cout << no_included << " / " << no_processed << " = " << static_cast<float>(no_included) / static_cast<float>(no_processed) << std::endl;
                 #endif
 
-                for (size_t ii = 0; ii < indices.size(); ++ii)
+                for (LEMON_INDEX ii = 0; ii < indices.size(); ++ii)
                     edges.emplace_back(FlowEdge(
                         edges.size(),
                         nodes[indices[ii] + 2], // +2 to skip the source and sink nodes
@@ -435,43 +436,43 @@ public:
         return edges;
     };
 
-    std::vector<std::vector<size_t>> neighbourhood_lists() const {
-        std::vector<std::vector<size_t>> neighbourhood_lists;
+    std::vector<std::vector<LEMON_INDEX>> neighbourhood_lists() const {
+        std::vector<std::vector<LEMON_INDEX>> neighbourhood_lists;
         neighbourhood_lists.resize(nodes.size());
         for (const auto& edge : edges) {
-            const size_t start_node_id = edge.get_start_node_id();
-            const size_t end_node_id = edge.get_end_node_id();
+            const LEMON_INDEX start_node_id = edge.get_start_node_id();
+            const LEMON_INDEX end_node_id = edge.get_end_node_id();
             neighbourhood_lists[start_node_id].push_back(end_node_id);
             neighbourhood_lists[end_node_id].push_back(start_node_id);
         }
         return neighbourhood_lists;
     };
 
-    std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> split_into_subgraphs() const {
-        std::vector<std::vector<size_t>> subgraphs;
-        std::vector<size_t> dead_end_nodes;
+    std::pair<std::vector<std::vector<LEMON_INDEX>>, std::vector<LEMON_INDEX>> split_into_subgraphs() const {
+        std::vector<std::vector<LEMON_INDEX>> subgraphs;
+        std::vector<LEMON_INDEX> dead_end_nodes;
 
         std::vector<bool> visited(nodes.size(), false);
         visited[0] = true; // Mark the source node as visited
         visited[1] = true; // Mark the sink node as visited
-        std::vector<size_t> stack;
-        std::vector<std::vector<size_t>> neighbourhood_lists = this->neighbourhood_lists();
+        std::vector<LEMON_INDEX> stack;
+        std::vector<std::vector<LEMON_INDEX>> neighbourhood_lists = this->neighbourhood_lists();
 
-        for (size_t node_id = 0; node_id < nodes.size(); ++node_id) {
+        for (LEMON_INDEX node_id = 0; node_id < nodes.size(); ++node_id) {
             if (!visited[node_id]) {
-                std::vector<size_t>& neighbours = neighbourhood_lists[node_id];
+                std::vector<LEMON_INDEX>& neighbours = neighbourhood_lists[node_id];
                 if(neighbours.size() == 0) {
                     dead_end_nodes.push_back(node_id);
                 } else {
-                    std::vector<size_t> subgraph;
+                    std::vector<LEMON_INDEX> subgraph;
                     stack.push_back(node_id);
                     while (!stack.empty()) {
-                        size_t current_node = stack.back();
+                        LEMON_INDEX current_node = stack.back();
                         stack.pop_back();
                         if (!visited[current_node]) {
                             visited[current_node] = true;
                             subgraph.push_back(current_node);
-                            for (size_t neighbour : neighbourhood_lists[current_node]) {
+                            for (LEMON_INDEX neighbour : neighbourhood_lists[current_node]) {
                                 if (!visited[neighbour]) {
                                     stack.push_back(neighbour);
                                 }
@@ -500,7 +501,7 @@ public:
             #ifdef DO_TONS_OF_PRINTS
             std::cout << "Subgraph" << std::endl;
             #endif
-            flow_subgraphs.emplace_back(std::make_unique<WassersteinNetworkSubgraph>(
+            flow_subgraphs.emplace_back(std::make_unique<WassersteinNetworkSubgraph<VALUE_TYPE>>(
                     subgraph_node_ids,
                     nodes,
                     edges,
@@ -509,7 +510,7 @@ public:
         }
     }
 
-    void add_simple_trash(LEMON_INT cost) {
+    void add_simple_trash(VALUE_TYPE cost) {
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_simple_trash(cost);
     };
@@ -519,13 +520,13 @@ public:
             flow_subgraph->build();
     };
 
-    void set_point(const std::vector<INTENSITY_TYPE>& point) {
+    void set_point(const std::vector<double>& point) {
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->set_point(point);
     };
 
-    LEMON_INT total_cost() const {
-        LEMON_INT total_cost = 0;
+    VALUE_TYPE total_cost() const {
+        VALUE_TYPE total_cost = 0;
         for (const auto& flow_subgraph : flow_subgraphs)
             total_cost += flow_subgraph->total_cost();
         return total_cost;
@@ -535,7 +536,7 @@ public:
         return flow_subgraphs.size();
     };
 
-    const WassersteinNetworkSubgraph& get_subgraph(size_t idx) const {
+    const WassersteinNetworkSubgraph<VALUE_TYPE>& get_subgraph(size_t idx) const {
         if (idx >= flow_subgraphs.size())
             throw std::out_of_range("Subgraph index out of range");
         return *flow_subgraphs[idx];
@@ -555,10 +556,10 @@ public:
         return result;
     };
 
-    std::tuple<std::vector<size_t>, std::vector<size_t>, std::vector<LEMON_INT>> flows_for_spectrum(size_t spectrum_id) const {
-        std::vector<size_t> empirical_peak_indices;
-        std::vector<size_t> theoretical_peak_indices;
-        std::vector<LEMON_INT> flows;
+    std::tuple<std::vector<LEMON_INDEX>, std::vector<LEMON_INDEX>, std::vector<VALUE_TYPE>> flows_for_spectrum(size_t spectrum_id) const {
+        std::vector<LEMON_INDEX> empirical_peak_indices;
+        std::vector<LEMON_INDEX> theoretical_peak_indices;
+        std::vector<VALUE_TYPE> flows;
         for (const auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->flows_for_spectrum(spectrum_id, empirical_peak_indices, theoretical_peak_indices, flows);
         return {empirical_peak_indices, theoretical_peak_indices, flows};
@@ -597,7 +598,7 @@ public:
         const double nominator = count_edges_of_type<MatchingEdge>();
         double denominator = 0;
         for (const auto& flow_subgraph : flow_subgraphs)
-            denominator += flow_subgraph->count_nodes_of_type<EmpiricalNode>() * flow_subgraph->count_nodes_of_type<TheoreticalNode>();
+            denominator += flow_subgraph->template count_nodes_of_type<EmpiricalNode>() * flow_subgraph->template count_nodes_of_type<TheoreticalNode>();
         return nominator / denominator;
     }
 };

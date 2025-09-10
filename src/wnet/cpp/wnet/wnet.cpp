@@ -20,10 +20,10 @@ NB_MODULE(wnet_cpp, m) {
     // Bind the classes to the module
 
     nb::class_<FlowNode>(m, "FlowNode")
-        .def(nb::init<LEMON_INT, SourceNode>())
-        .def(nb::init<LEMON_INT, SinkNode>())
-        .def(nb::init<LEMON_INT, EmpiricalNode>())
-        .def(nb::init<LEMON_INT, TheoreticalNode>())
+        .def(nb::init<LEMON_INDEX, SourceNode>())
+        .def(nb::init<LEMON_INDEX, SinkNode>())
+        .def(nb::init<LEMON_INDEX, EmpiricalNode>())
+        .def(nb::init<LEMON_INDEX, TheoreticalNode>())
         .def("get_id", &FlowNode::get_id)
         .def("get_type", &FlowNode::get_type)
         .def("layer", &FlowNode::layer)
@@ -31,7 +31,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("to_string", &FlowNode::to_string);
 
     nb::class_<FlowEdge>(m, "FlowEdge")
-        .def(nb::init<LEMON_INT, const FlowNode&, const FlowNode&, FlowEdgeType>())
+        .def(nb::init<LEMON_INDEX, const FlowNode&, const FlowNode&, FlowEdgeType>())
         .def("get_id", &FlowEdge::get_id)
         .def("get_start_node", &FlowEdge::get_start_node)
         .def("get_end_node", &FlowEdge::get_end_node)
@@ -40,47 +40,47 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_type", &FlowEdge::get_type)
         .def("to_string", &FlowEdge::to_string);
 
-    nb::class_<WassersteinNetworkSubgraph>(m, "WassersteinNetworkSubgraph")
-        .def(nb::init<const std::vector<size_t>&, const std::vector<FlowNode>&, const std::vector<FlowEdge>&, size_t>())
-        .def("add_simple_trash", &WassersteinNetworkSubgraph::add_simple_trash)
-        .def("build", &WassersteinNetworkSubgraph::build)
-        .def("set_point", &WassersteinNetworkSubgraph::set_point)
-        .def("total_cost", &WassersteinNetworkSubgraph::total_cost)
-        .def("to_string", &WassersteinNetworkSubgraph::to_string)
-        .def("lemon_to_string", &WassersteinNetworkSubgraph::lemon_to_string)
-        .def("no_nodes", &WassersteinNetworkSubgraph::no_nodes)
-        .def("no_edges", &WassersteinNetworkSubgraph::no_edges)
-        .def("get_nodes", &WassersteinNetworkSubgraph::get_nodes)
-        .def("get_edges", &WassersteinNetworkSubgraph::get_edges);
+    nb::class_<WassersteinNetworkSubgraph<int64_t>>(m, "WassersteinNetworkSubgraph")
+        .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode>&, const std::vector<FlowEdge>&, size_t>())
+        .def("add_simple_trash", &WassersteinNetworkSubgraph<int64_t>::add_simple_trash)
+        .def("build", &WassersteinNetworkSubgraph<int64_t>::build)
+        .def("set_point", &WassersteinNetworkSubgraph<int64_t>::set_point)
+        .def("total_cost", &WassersteinNetworkSubgraph<int64_t>::total_cost)
+        .def("to_string", &WassersteinNetworkSubgraph<int64_t>::to_string)
+        .def("lemon_to_string", &WassersteinNetworkSubgraph<int64_t>::lemon_to_string)
+        .def("no_nodes", &WassersteinNetworkSubgraph<int64_t>::no_nodes)
+        .def("no_edges", &WassersteinNetworkSubgraph<int64_t>::no_edges)
+        .def("get_nodes", &WassersteinNetworkSubgraph<int64_t>::get_nodes)
+        .def("get_edges", &WassersteinNetworkSubgraph<int64_t>::get_edges);
 
-    nb::class_<WassersteinNetwork>(m, "WassersteinNetwork")
+    nb::class_<WassersteinNetwork<int64_t>>(m, "CWassersteinNetwork")
         .def(nb::init<const Distribution*, const std::vector<Distribution*>&, const nb::callable*, LEMON_INT>())
-        .def("add_simple_trash", &WassersteinNetwork::add_simple_trash)
-        .def("build", &WassersteinNetwork::build)
-        .def("set_point", &WassersteinNetwork::set_point)
-        .def("total_cost", &WassersteinNetwork::total_cost)
-        .def("no_subgraphs", &WassersteinNetwork::no_subgraphs)
-        .def("get_subgraph", &WassersteinNetwork::get_subgraph, nb::rv_policy::reference)
-        .def("__str__", &WassersteinNetwork::to_string)
-        .def("lemon_to_string", &WassersteinNetwork::lemon_to_string)
-        .def("no_subgraphs", &WassersteinNetwork::no_subgraphs)
-        .def("get_subgraph", &WassersteinNetwork::get_subgraph, nb::rv_policy::reference)
-        .def("lemon_to_string", &WassersteinNetwork::lemon_to_string)
-        .def("flows_for_spectrum", [](WassersteinNetwork& self, size_t spectrum_id) {
+        .def("add_simple_trash", &WassersteinNetwork<int64_t>::add_simple_trash)
+        .def("build", &WassersteinNetwork<int64_t>::build)
+        .def("set_point", &WassersteinNetwork<int64_t>::set_point)
+        .def("total_cost", &WassersteinNetwork<int64_t>::total_cost)
+        .def("no_subgraphs", &WassersteinNetwork<int64_t>::no_subgraphs)
+        .def("get_subgraph", &WassersteinNetwork<int64_t>::get_subgraph, nb::rv_policy::reference)
+        .def("__str__", &WassersteinNetwork<int64_t>::to_string)
+        .def("lemon_to_string", &WassersteinNetwork<int64_t>::lemon_to_string)
+        .def("no_subgraphs", &WassersteinNetwork<int64_t>::no_subgraphs)
+        .def("get_subgraph", &WassersteinNetwork<int64_t>::get_subgraph, nb::rv_policy::reference)
+        .def("lemon_to_string", &WassersteinNetwork<int64_t>::lemon_to_string)
+        .def("flows_for_spectrum", [](WassersteinNetwork<int64_t>& self, size_t spectrum_id) {
             auto [empirical_peak_indices, theoretical_peak_indices, flows] = self.flows_for_spectrum(spectrum_id);
-            return std::make_tuple(vector_to_numpy<size_t>(empirical_peak_indices),
-                                   vector_to_numpy<size_t>(theoretical_peak_indices),
-                                   vector_to_numpy<LEMON_INT>(flows));
+            return std::make_tuple(vector_to_numpy<LEMON_INDEX>(empirical_peak_indices),
+                                   vector_to_numpy<LEMON_INDEX>(theoretical_peak_indices),
+                                   vector_to_numpy<int64_t>(flows));
         }, nb::rv_policy::move)
-        .def("count_empirical_nodes", &WassersteinNetwork::count_nodes_of_type<EmpiricalNode>)
-        .def("count_theoretical_nodes", &WassersteinNetwork::count_nodes_of_type<TheoreticalNode>)
-        .def("count_matching_edges", &WassersteinNetwork::count_edges_of_type<MatchingEdge>)
-        .def("count_theoretical_to_sink_edges", &WassersteinNetwork::count_edges_of_type<TheoreticalToSinkEdge>)
-        .def("count_src_to_empirical_edges", &WassersteinNetwork::count_edges_of_type<SrcToEmpiricalEdge>)
-        .def("count_simple_trash_edges", &WassersteinNetwork::count_edges_of_type<SimpleTrashEdge>)
-        .def("matching_density", &WassersteinNetwork::matching_density);
+        .def("count_empirical_nodes", &WassersteinNetwork<int64_t>::count_nodes_of_type<EmpiricalNode>)
+        .def("count_theoretical_nodes", &WassersteinNetwork<int64_t>::count_nodes_of_type<TheoreticalNode>)
+        .def("count_matching_edges", &WassersteinNetwork<int64_t>::count_edges_of_type<MatchingEdge>)
+        .def("count_theoretical_to_sink_edges", &WassersteinNetwork<int64_t>::count_edges_of_type<TheoreticalToSinkEdge>)
+        .def("count_src_to_empirical_edges", &WassersteinNetwork<int64_t>::count_edges_of_type<SrcToEmpiricalEdge>)
+        .def("count_simple_trash_edges", &WassersteinNetwork<int64_t>::count_edges_of_type<SimpleTrashEdge>)
+        .def("matching_density", &WassersteinNetwork<int64_t>::matching_density);
 
-    nb::class_<Distribution>(m, "Distribution")
+    nb::class_<Distribution>(m, "CDistribution")
         .def(nb::init<nb::ndarray<>, nb::ndarray<LEMON_INT, nb::shape<-1>>>())
         .def("size", &Distribution::size)
         .def("get_positions", &Distribution::get_positions)

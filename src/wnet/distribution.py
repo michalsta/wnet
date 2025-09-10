@@ -1,8 +1,8 @@
 import numpy as np
 from functools import cached_property
-from wnet.wnet_cpp import Distribution as CPPDistribution
+from wnet.wnet_cpp import CDistribution
 
-class Distribution(CPPDistribution):
+class Distribution(CDistribution):
     def __init__(self, positions, intensities):
         super().__init__(positions, intensities)
 
