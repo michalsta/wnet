@@ -59,12 +59,10 @@ NB_MODULE(wnet_cpp, m) {
         .def("build", &WassersteinNetwork<int64_t>::build)
         .def("set_point", &WassersteinNetwork<int64_t>::set_point)
         .def("total_cost", &WassersteinNetwork<int64_t>::total_cost)
-        .def("no_subgraphs", &WassersteinNetwork<int64_t>::no_subgraphs)
         .def("get_subgraph", &WassersteinNetwork<int64_t>::get_subgraph, nb::rv_policy::reference)
         .def("__str__", &WassersteinNetwork<int64_t>::to_string)
         .def("lemon_to_string", &WassersteinNetwork<int64_t>::lemon_to_string)
         .def("no_subgraphs", &WassersteinNetwork<int64_t>::no_subgraphs)
-        .def("get_subgraph", &WassersteinNetwork<int64_t>::get_subgraph, nb::rv_policy::reference)
         .def("lemon_to_string", &WassersteinNetwork<int64_t>::lemon_to_string)
         .def("flows_for_spectrum", [](WassersteinNetwork<int64_t>& self, size_t spectrum_id) {
             auto [empirical_peak_indices, theoretical_peak_indices, flows] = self.flows_for_spectrum(spectrum_id);
