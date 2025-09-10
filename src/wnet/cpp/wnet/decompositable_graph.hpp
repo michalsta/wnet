@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 
+#define LEMON_ONLY_TEMPLATES
 #include <lemon/static_graph.h>
 #include <lemon/network_simplex.h>
 
