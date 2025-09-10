@@ -24,4 +24,4 @@ target_include_directories(wnet_cpp PRIVATE ${PYLMCF_INCLUDE_DIRS})
 install(TARGETS wnet_cpp LIBRARY DESTINATION wnet)
 
 # Uncomment the following line to enable detailed debug prints in the C++ code
-target_compile_definitions(wnet_cpp PRIVATE DO_TONS_OF_PRINTS)
+# target_compile_definitions(wnet_cpp PRIVATE DO_TONS_OF_PRINTS)
