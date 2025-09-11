@@ -28,7 +28,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_type", &FlowNode::get_type)
         .def("layer", &FlowNode::layer)
         .def("type_str", &FlowNode::type_str)
-        .def("to_string", &FlowNode::to_string);
+        .def("__str__", &FlowNode::to_string);
 
     nb::class_<FlowEdge>(m, "FlowEdge")
         .def(nb::init<LEMON_INDEX, const FlowNode&, const FlowNode&, FlowEdgeType>())
