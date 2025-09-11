@@ -135,6 +135,40 @@ public:
         std::string result = "FlowEdge(" + std::to_string(id) + ", " + start_node.to_string() + ", " + end_node.to_string() + ")";
         return result;
     };
+
+    LEMON_INT get_cost() const {
+        return std::visit([](const auto& arg) -> LEMON_INT {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, MatchingEdge>) {
+                return arg.get_cost();
+            } else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {
+                return 0;
+            } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
+                return 0;
+            } else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {
+                return arg.get_cost();
+            } else {
+                throw std::runtime_error("Invalid FlowEdge type");
+            }
+        }, type);
+    };
+
+    std::optional<LEMON_INT> get_base_capacity() const {
+        return std::visit([&](const auto& arg) -> std::optional<LEMON_INT> {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, MatchingEdge>) {
+                return std::nullopt; // Unlimited capacity
+            } else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {
+                return std::get<EmpiricalNode>(this->get_end_node().get_type()).get_intensity();
+            } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
+                return std::get<TheoreticalNode>(this->get_start_node().get_type()).get_intensity();
+            } else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {
+                return std::nullopt; // Unlimited capacity
+            } else {
+                throw std::runtime_error("Invalid FlowEdge type");
+            }
+        }, type);
+    };
 };
 
 #endif // wNET_GRAPH_ELEMENTS_HPP

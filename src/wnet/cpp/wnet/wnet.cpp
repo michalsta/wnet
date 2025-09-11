@@ -38,6 +38,8 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_start_node_id", &FlowEdge::get_start_node_id)
         .def("get_end_node_id", &FlowEdge::get_end_node_id)
         .def("get_type", &FlowEdge::get_type)
+        .def("get_cost", &FlowEdge::get_cost)
+        .def("get_base_capacity", &FlowEdge::get_base_capacity)
         .def("to_string", &FlowEdge::to_string);
 
     nb::class_<WassersteinNetworkSubgraph<int64_t>>(m, "WassersteinNetworkSubgraph")

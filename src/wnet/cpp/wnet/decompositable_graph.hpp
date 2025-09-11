@@ -8,6 +8,8 @@
 #include <optional>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/optional.h>
 
 #define LEMON_ONLY_TEMPLATES
 #include <lemon/static_graph.h>
