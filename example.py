@@ -11,7 +11,7 @@ intensities2 = np.array([20, 5])
 S1 = Distribution(positions1, intensities1)
 S2 = Distribution(positions2, intensities2)
 
-W = WassersteinNetwork(S1, [S2], L1Distance(), None)
+W = WassersteinNetwork(S1, [S2], L1Distance())
 W.add_simple_trash(5)
 W.build()
 W.solve()

@@ -1,8 +1,10 @@
 from wnet.wnet_cpp import CWassersteinNetwork
 
 class WassersteinNetwork(CWassersteinNetwork):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, base_distribution, target_distributions, distance, max_distance=None):
+        if max_distance is None:
+            max_distance = CWassersteinNetwork.max_value()
+        super().__init__(base_distribution, target_distributions, distance, max_distance)
 
     def subgraphs(self):
         return [SubgraphWrapper(self.get_subgraph(i)) for i in range(self.no_subgraphs())]
@@ -45,13 +47,3 @@ class SubgraphWrapper:
         nx.draw(G, pos, with_labels=True, node_color=node_colors, arrows=True)
         nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
         plt.show()
-
-def monkeypatch_subgraph(subgraph):
-    def as_netowkrx(self):
-        import networkx as nx
-        G = nx.DiGraph()
-        for u, v, cap, cost in self.edges():
-            G.add_edge(u, v, capacity=cap, weight=cost)
-        return G
-    subgraph.as_netowkrx = as_netowkrx
-    return subgraph
