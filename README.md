@@ -17,21 +17,32 @@ pip install .
 
 ## Usage
 
-Import the library in Python:
-
+Simple usage:
 ```python
-import wnet
+import numpy as np
+from wnet import WassersteinDistance, Distribution
+from wnet.distances import L1Distance
+
+positions1 = np.array(
+    [[0, 1, 5, 10],
+     [0, 0, 0, 3]]
+)
+intensities1 = np.array([10, 5, 5, 5])
+
+positions2 = np.array(
+    [[1,10],
+    [0, 0]])
+intensities2 = np.array([20, 5])
+
+S1 = Distribution(positions1, intensities1)
+S2 = Distribution(positions2, intensities2)
+
+print(WassersteinDistance(S1, S2, L1Distance()))
+# 45
 ```
 
-Example usage:
-```python
-from wnet import distances, distribution
-# Compute Wasserstein distance between distributions
-dist = distances.wasserstein_distance(a, b)
-```
-
-## License
-MIT License
+## Licence
+MIT Licence
 
 ## Related Projects
 
