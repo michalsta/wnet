@@ -43,7 +43,7 @@ class SubgraphWrapper:
                 node_colors.append("lightgray")
             else:
                 node_colors.append("lightblue")
-        edge_labels = {(u, v): f"{d['weight']}/{d['capacity']}" for u, v, d in G.edges(data=True)}
+        edge_labels = {(u, v): f"cost: {d['weight']}\n capacity: {d['capacity']}" for u, v, d in G.edges(data=True)}
         nx.draw(G, pos, with_labels=True, node_color=node_colors, arrows=True)
         nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
         plt.show()
