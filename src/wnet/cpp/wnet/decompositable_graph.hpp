@@ -333,7 +333,6 @@ public:
                 result.push_back(ii);
         return result;
     }
-
 };
 
 template <typename VALUE_TYPE>
@@ -608,6 +607,22 @@ public:
         for (const auto& flow_subgraph : flow_subgraphs)
             denominator += flow_subgraph->template count_nodes_of_type<EmpiricalNode>() * flow_subgraph->template count_nodes_of_type<TheoreticalNode>();
         return nominator / denominator;
+    }
+
+    size_t value_type_size() const {
+        return sizeof(VALUE_TYPE);
+    }
+
+    size_t index_type_size() const {
+        return sizeof(LEMON_INDEX);
+    }
+
+    size_t max_value() const {
+        return std::numeric_limits<VALUE_TYPE>::max();
+    }
+
+    size_t max_index() const {
+        return std::numeric_limits<LEMON_INDEX>::max();
     }
 };
 
