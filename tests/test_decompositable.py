@@ -16,7 +16,7 @@ def test_simple():
     G.add_simple_trash(10)
     G.build()
     # G.show()
-    print(G.set_point([1, 1]))
+    print(G.solve())
 
     # for subgr in G.subgraphs:
     #    subgr.show()

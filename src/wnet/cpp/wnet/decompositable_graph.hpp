@@ -522,7 +522,13 @@ public:
             flow_subgraph->build();
     };
 
-    void set_point(const std::vector<double>& point) {
+    void solve()
+    {
+        std::vector<double> point(_no_theoretical_spectra, 1.0);
+        solve(point);
+    };
+
+    void solve(const std::vector<double>& point) {
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->set_point(point);
     };

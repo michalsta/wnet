@@ -18,7 +18,7 @@ def compare(E, T, trash_cost, fractions=None):
     # decomp_solver.show_cgraph()
     decomp_solver.add_simple_trash(trash_cost)
     decomp_solver.build()
-    val4 = decomp_solver.set_point(fractions)
+    val4 = decomp_solver.solve(fractions)
     #print(
     #    f"Solver: {val1}, Wasserstein: {val2}, Wasserstein_compat: {val3}, DecompositableFlowGraph: {val4}"
     #)

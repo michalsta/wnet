@@ -21,7 +21,7 @@ def test_scale():
         )
         DG.add_simple_trash(10)
         DG.build()
-        DG.set_point([1.0])
+        DG.solve()
         #print(DG.total_cost())
         assert DG.total_cost() == scale_factor
 
