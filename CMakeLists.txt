@@ -16,7 +16,7 @@ find_package(nanobind REQUIRED CONFIG)
 set(CMAKE_CXX_STANDARD 20)
 
 nanobind_add_module(wnet_cpp
-    NB_STATIC NB_NOMINSIZE
+    NB_STATIC NOMINSIZE
     src/wnet/cpp/wnet/wnet.cpp)
 
 target_include_directories(wnet_cpp PRIVATE ${PYLMCF_INCLUDE_DIRS})
