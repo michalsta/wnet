@@ -7,7 +7,7 @@ execute_process(
 )
 
 
-project(wnet)
+project(wnet LANGUAGES CXX)
 find_package(Python 3.8
   REQUIRED COMPONENTS Interpreter Development.Module
   OPTIONAL_COMPONENTS Development.SABIModule)
@@ -16,7 +16,7 @@ find_package(nanobind REQUIRED CONFIG)
 set(CMAKE_CXX_STANDARD 20)
 
 nanobind_add_module(wnet_cpp
-    NB_STATIC
+    NB_STATIC NB_NOMINSIZE
     src/wnet/cpp/wnet/wnet.cpp)
 
 target_include_directories(wnet_cpp PRIVATE ${PYLMCF_INCLUDE_DIRS})
