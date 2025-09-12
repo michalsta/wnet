@@ -120,11 +120,11 @@ public:
     }
 
     void build() {
-        edges = sorted_copy(edges, [](const FlowEdge& a, const FlowEdge& b) {
+        edges = std::move(sorted_copy(edges, [](const FlowEdge& a, const FlowEdge& b) {
             if(a.get_start_node_id() != b.get_start_node_id())
                 return a.get_start_node_id() < b.get_start_node_id();
             return a.get_end_node_id() < b.get_end_node_id();
-        });
+        }));
         std::vector<std::pair<LEMON_INDEX, LEMON_INDEX>> arcs;
         arcs.reserve(edges.size());
         for (const FlowEdge& edge : edges)
