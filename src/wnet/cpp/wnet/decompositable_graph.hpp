@@ -34,14 +34,14 @@ class WassersteinNetworkSubgraph {
     LEMON_INDEX simple_trash_idx;
     VALUE_TYPE empirical_intensity;
     VALUE_TYPE theoretical_intensity;
-    const size_t no_theoretical_spectra;
+    const size_t no_target_distributions;
 
 public:
     WassersteinNetworkSubgraph(
         const std::vector<LEMON_INDEX>& subgraph_node_ids,
         const std::vector<FlowNode>& all_nodes,
         const std::vector<FlowEdge>& all_edges,
-        size_t no_theoretical_spectra
+        size_t no_target_distributions_
     ) :
         lemon_graph(),
         node_supply_map(lemon_graph),
@@ -51,7 +51,7 @@ public:
         simple_trash_idx(std::numeric_limits<LEMON_INDEX>::max()),
         empirical_intensity(0),
         theoretical_intensity(0),
-        no_theoretical_spectra(no_theoretical_spectra)
+        no_target_distributions(no_target_distributions_)
     {
         nodes.reserve(subgraph_node_ids.size()+2);
         nodes.push_back(FlowNode(0, SourceNode()));
@@ -263,7 +263,7 @@ public:
         return edges;
     };
 
-    void flows_for_spectrum(size_t spectrum_id,
+    void flows_for_target(size_t spectrum_id,
                             std::vector<LEMON_INDEX>& empirical_peak_indices,
                             std::vector<LEMON_INDEX>& theoretical_peak_indices,
                             std::vector<VALUE_TYPE>& flows) const
@@ -317,8 +317,8 @@ public:
     }
 
     std::vector<size_t> theoretical_spectra_involved() const {
-        std::unique_ptr<bool[]> involved = std::make_unique<bool[]>(no_theoretical_spectra);
-        std::fill(involved.get(), involved.get() + no_theoretical_spectra, false);
+        std::unique_ptr<bool[]> involved = std::make_unique<bool[]>(no_target_distributions);
+        std::fill(involved.get(), involved.get() + no_target_distributions, false);
         for (const auto& node : nodes)
         {
             if (auto node_type = std::get_if<TheoreticalNode>(&node.get_type()))
@@ -328,7 +328,7 @@ public:
             }
         }
         std::vector<size_t> result;
-        for (size_t ii = 0; ii < no_theoretical_spectra; ++ii)
+        for (size_t ii = 0; ii < no_target_distributions; ++ii)
             if(involved[ii])
                 result.push_back(ii);
         return result;
@@ -563,12 +563,12 @@ public:
         return result;
     };
 
-    std::tuple<std::vector<LEMON_INDEX>, std::vector<LEMON_INDEX>, std::vector<VALUE_TYPE>> flows_for_spectrum(size_t spectrum_id) const {
+    std::tuple<std::vector<LEMON_INDEX>, std::vector<LEMON_INDEX>, std::vector<VALUE_TYPE>> flows_for_target(size_t target_id) const {
         std::vector<LEMON_INDEX> empirical_peak_indices;
         std::vector<LEMON_INDEX> theoretical_peak_indices;
         std::vector<VALUE_TYPE> flows;
         for (const auto& flow_subgraph : flow_subgraphs)
-            flow_subgraph->flows_for_spectrum(spectrum_id, empirical_peak_indices, theoretical_peak_indices, flows);
+            flow_subgraph->flows_for_target(target_id, empirical_peak_indices, theoretical_peak_indices, flows);
         return {empirical_peak_indices, theoretical_peak_indices, flows};
     };
 

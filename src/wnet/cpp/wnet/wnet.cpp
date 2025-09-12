@@ -67,8 +67,8 @@ NB_MODULE(wnet_cpp, m) {
         .def("lemon_to_string", &WassersteinNetwork<int64_t>::lemon_to_string)
         .def("no_subgraphs", &WassersteinNetwork<int64_t>::no_subgraphs)
         .def("lemon_to_string", &WassersteinNetwork<int64_t>::lemon_to_string)
-        .def("flows_for_spectrum", [](WassersteinNetwork<int64_t>& self, size_t spectrum_id) {
-            auto [empirical_peak_indices, theoretical_peak_indices, flows] = self.flows_for_spectrum(spectrum_id);
+        .def("flows_for_target", [](WassersteinNetwork<int64_t>& self, size_t target_id) {
+            auto [empirical_peak_indices, theoretical_peak_indices, flows] = self.flows_for_target(target_id);
             return std::make_tuple(vector_to_numpy<LEMON_INDEX>(empirical_peak_indices),
                                    vector_to_numpy<LEMON_INDEX>(theoretical_peak_indices),
                                    vector_to_numpy<int64_t>(flows));
