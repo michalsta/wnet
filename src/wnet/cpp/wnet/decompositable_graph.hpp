@@ -350,7 +350,7 @@ public:
     const Distribution* empirical_spectrum,
     const std::vector<Distribution*>& theoretical_spectra,
     const nb::callable* dist_fun,
-    VALUE_TYPE max_dist
+    VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
     ) :
     _no_theoretical_spectra(theoretical_spectra.size())
     {
