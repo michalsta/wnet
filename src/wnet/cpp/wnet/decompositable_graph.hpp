@@ -609,19 +609,19 @@ public:
         return nominator / denominator;
     }
 
-    size_t value_type_size() const {
+    static constexpr size_t value_type_size() {
         return sizeof(VALUE_TYPE);
     }
 
-    size_t index_type_size() const {
+    static constexpr size_t index_type_size() {
         return sizeof(LEMON_INDEX);
     }
 
-    size_t max_value() const {
+    static constexpr size_t max_value() {
         return std::numeric_limits<VALUE_TYPE>::max();
     }
 
-    size_t max_index() const {
+    static constexpr size_t max_index() {
         return std::numeric_limits<LEMON_INDEX>::max();
     }
 };

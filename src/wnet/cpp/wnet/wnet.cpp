@@ -80,10 +80,10 @@ NB_MODULE(wnet_cpp, m) {
         .def("count_src_to_empirical_edges", &WassersteinNetwork<int64_t>::count_edges_of_type<SrcToEmpiricalEdge>)
         .def("count_simple_trash_edges", &WassersteinNetwork<int64_t>::count_edges_of_type<SimpleTrashEdge>)
         .def("matching_density", &WassersteinNetwork<int64_t>::matching_density)
-        .def("value_type_size", &WassersteinNetwork<int64_t>::value_type_size)
-        .def("index_type_size", &WassersteinNetwork<int64_t>::index_type_size)
-        .def("max_value", &WassersteinNetwork<int64_t>::max_value)
-        .def("max_index", &WassersteinNetwork<int64_t>::max_index);
+        .def_static("value_type_size", &WassersteinNetwork<int64_t>::value_type_size)
+        .def_static("index_type_size", &WassersteinNetwork<int64_t>::index_type_size)
+        .def_static("max_value", &WassersteinNetwork<int64_t>::max_value)
+        .def_static("max_index", &WassersteinNetwork<int64_t>::max_index);
 
     nb::class_<Distribution>(m, "CDistribution")
         .def(nb::init<nb::ndarray<>, nb::ndarray<LEMON_INT, nb::shape<-1>>>())
