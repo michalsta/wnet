@@ -12,7 +12,6 @@ dependencies = ["pylmcf", "numpy"]
 license = "MIT"
 license-files = ["LICENCE"]
 readme = "README.md"
-requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Mathematics",
