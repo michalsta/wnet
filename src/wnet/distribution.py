@@ -5,28 +5,82 @@ from wnet.wnet_cpp import CDistribution
 
 
 class Distribution(CDistribution):
-    def __init__(self, positions, intensities):
+    """
+    Distribution represents a collection of points and their associated intensities.
+    Inherits from:
+        CDistribution (wnet.wnet_cpp): A C++ extension class that provides core functionality for handling distributions.
+    Args:
+        positions (array-like): The spatial positions of the distribution.
+        intensities (array-like): The intensity values corresponding to each position.
+    Methods:
+        scaled(scale_factor):
+            Returns a new Distribution instance with intensities scaled by the given factor.
+    Properties:
+        positions:
+            Returns the positions of the distribution.
+        intensities:
+            Returns the intensities of the distribution.
+        sum_intensities:
+            Returns the sum of all intensities in the distribution (cached).
+    """
+
+    def __init__(self, positions: np.ndarray, intensities: np.ndarray) -> None:
+        """
+        Initialize the distribution with given positions and intensities.
+
+        Args:
+            positions (np.ndarray): Array of positions.
+            intensities (np.ndarray): Array of intensities corresponding to each position.
+        """
         super().__init__(positions, intensities)
 
-    def scaled(self, scale_factor):
+    def scaled(self, scale_factor: float) -> "Distribution":
+        """
+        Creates a new Distribution instance with intensities scaled by the given factor.
+
+        Args:
+            scale_factor (float): The factor by which to scale the intensities.
+
+        Returns:
+            Distribution: A new Distribution instance with scaled intensities and unchanged positions.
+        """
         new_positions = self.positions
         new_intensities = self.intensities * scale_factor
         return Distribution(new_positions, new_intensities)
 
     @property
-    def positions(self):
+    def positions(self) -> np.ndarray:
         return self.get_positions()
 
     @property
-    def intensities(self):
+    def intensities(self) -> np.ndarray:
         return self.get_intensities()
 
     @cached_property
-    def sum_intensities(self):
+    def sum_intensities(self) -> float:
         return np.sum(self.intensities)
 
+def Distribution_1D(positions: np.ndarray, intensities: np.ndarray) -> Distribution:
+    """
+    Creates a 1D distribution from given positions and intensities.
 
-def Distribution_1D(positions, intensities):
+    Parameters
+    ----------
+    positions : np.ndarray or array-like
+        1D array of position values.
+    intensities : np.ndarray or array-like
+        1D array of intensity values corresponding to each position.
+
+    Returns
+    -------
+    Distribution
+        A Distribution object representing the 1D distribution.
+
+    Raises
+    ------
+    AssertionError
+        If positions or intensities are not 1D arrays, or their lengths do not match.
+    """
     if not isinstance(positions, np.ndarray):
         positions = np.array(positions)
     if not isinstance(intensities, np.ndarray):
