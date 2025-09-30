@@ -9,8 +9,8 @@ def compare(E, T, trash_cost, fractions=None):
         fractions = [1.0] * len(T)
 
     # val1 = solver.run(fractions)
-    positions = np.concatenate([s.positions for s in T], axis=1)
-    intensities = np.concatenate([s.intensities * f for s, f in zip(T, fractions)])
+    # positions = np.concatenate([s.positions for s in T], axis=1)
+    # intensities = np.concatenate([s.intensities * f for s, f in zip(T, fractions)])
 
     decomp_solver = WassersteinNetwork(
         E,
