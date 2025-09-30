@@ -6,6 +6,7 @@ Wasserstein Network (wnet) is a Python/C++ library for working with Wasserstein 
 - Wasserstein and Truncated Wasserstein distance calculations between multidimensional distributions
 - Calculation of derivatives with respect to deltas in flow or position (in progress)
 - Python and C++ integration
+- Support for distribution mixtures, and efficient recalculation of distance with changed mixture proportions
 
 ## Installation
 
