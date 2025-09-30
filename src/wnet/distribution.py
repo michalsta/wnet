@@ -60,6 +60,7 @@ class Distribution(CDistribution):
     def sum_intensities(self) -> float:
         return np.sum(self.intensities)
 
+
 def Distribution_1D(positions: np.ndarray, intensities: np.ndarray) -> Distribution:
     """
     Creates a 1D distribution from given positions and intensities.
