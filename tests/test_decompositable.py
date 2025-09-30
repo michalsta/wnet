@@ -1,6 +1,7 @@
+import numpy as np
+
 from wnet import WassersteinNetwork, Distribution
 from wnet.distances import wrap_distance_function
-import numpy as np
 
 
 def test_simple():

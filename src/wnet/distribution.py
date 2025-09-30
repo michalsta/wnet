@@ -1,5 +1,6 @@
-import numpy as np
 from functools import cached_property
+import numpy as np
+
 from wnet.wnet_cpp import CDistribution
 
 

@@ -1,5 +1,5 @@
 from wnet import Distribution, WassersteinNetwork
-from wnet.distances import L1Distance, wrap_distance_function
+from wnet.distances import L1Distance
 import numpy as np
 
 positions1 = np.array([[0, 1, 5, 10], [0, 0, 0, 3]])

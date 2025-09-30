@@ -1,5 +1,6 @@
-from wnet import WassersteinNetwork, Distribution_1D
 import numpy as np
+
+from wnet import WassersteinNetwork, Distribution_1D
 
 
 def test_scale():

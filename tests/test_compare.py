@@ -1,6 +1,7 @@
+import numpy as np
+
 from wnet import Distribution, WassersteinNetwork
 from wnet.distances import wrap_distance_function
-import numpy as np
 
 
 def compare(E, T, trash_cost, fractions=None):
