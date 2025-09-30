@@ -7,26 +7,30 @@ def compare(E, T, trash_cost, fractions=None):
     if fractions is None:
         fractions = [1.0] * len(T)
 
-    #val1 = solver.run(fractions)
+    # val1 = solver.run(fractions)
     positions = np.concatenate([s.positions for s in T], axis=1)
     intensities = np.concatenate([s.intensities * f for s, f in zip(T, fractions)])
 
     decomp_solver = WassersteinNetwork(
-        E, T, wrap_distance_function(lambda x, y: np.linalg.norm(x - y, axis=0)), trash_cost
+        E,
+        T,
+        wrap_distance_function(lambda x, y: np.linalg.norm(x - y, axis=0)),
+        trash_cost,
     )
     # decomp_solver.show()
     # decomp_solver.show_cgraph()
     decomp_solver.add_simple_trash(trash_cost)
     decomp_solver.build()
     val4 = decomp_solver.solve(fractions)
-    #print(
+    # print(
     #    f"Solver: {val1}, Wasserstein: {val2}, Wasserstein_compat: {val3}, DecompositableFlowGraph: {val4}"
-    #)
+    # )
     # assert val1 == val2 # 2 uses diffrent trash so not really the same
-    #assert val1 == val3
-    #assert val1 == val4
-    #return val1, val2, val3, val4
+    # assert val1 == val3
+    # assert val1 == val4
+    # return val1, val2, val3, val4
     return val4
+
 
 def test_compare_1():
     S1 = Distribution(np.array([[0], [0]]), np.array([1]))

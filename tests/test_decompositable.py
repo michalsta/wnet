@@ -9,7 +9,10 @@ def test_simple():
     S3 = Distribution(np.array([[3, 4, 32]]), np.array([1, 1, 3]))
 
     G = WassersteinNetwork(
-        S1, [S2, S3], wrap_distance_function(lambda x, y: np.linalg.norm(x - y, axis=0)), 5
+        S1,
+        [S2, S3],
+        wrap_distance_function(lambda x, y: np.linalg.norm(x - y, axis=0)),
+        5,
     )
     # G.show()
     # G.show_cgraph()

@@ -6,6 +6,7 @@ def wrap_distance_function(dist_func):
         i = p.index
         x = p.positions[:, i : i + 1]
         return dist_func(x[: np.newaxis], y)
+
     return wrapped_dist
 
 
