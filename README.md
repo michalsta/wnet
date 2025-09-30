@@ -46,5 +46,6 @@ MIT Licence
 
 ## Related Projects
 
-- [pylmcf](https://github.com/cheind/pylmcf) - Python bindings for Min Cost Flow algorithms from LEMON library.
+- [pylmcf](https://github.com/michalsta/pylmcf) - Python bindings for Min Cost Flow algorithms from LEMON library.
+- [wnetalign] - (https://github.com/michalsta/wnetalign) - Alignment of MS/NMR spectra using Truncated Wasserstein Distance
 - [LEMON Graph Library](https://lemon.cs.elte.hu/trac/lemon) - C++ library for efficient graph algorithms.
