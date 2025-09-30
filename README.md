@@ -12,7 +12,7 @@ Wasserstein Network (wnet) is a Python/C++ library for working with Wasserstein 
 You can install the Python package using pip:
 
 ```bash
-pip install .
+pip install wnet
 ```
 
 ## Usage
