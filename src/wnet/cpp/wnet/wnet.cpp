@@ -91,7 +91,8 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_positions", &Distribution::get_positions)
         .def("get_intensities", &Distribution::get_intensities)
         .def("get_point", &Distribution::get_point)
-        .def("closer_than", &Distribution::closer_than);
+        .def("closer_than", &Distribution::closer_than)
+        .def("__len__", &Distribution::size);
 
     nb::class_<Distribution::Point_t>(m, "DistributionPoint")
         .def_ro("positions", &Distribution::Point_t::first)
