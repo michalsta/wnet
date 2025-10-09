@@ -48,6 +48,20 @@ class Distribution(CDistribution):
         new_intensities = self.intensities * scale_factor
         return Distribution(new_positions, new_intensities)
 
+    def normalized(self) -> "Distribution":
+        """
+        Creates a new Distribution instance with intensities normalized to sum to 1.
+
+        Returns:
+            Distribution: A new Distribution instance with normalized intensities and unchanged positions.
+        """
+        total_intensity = self.sum_intensities
+        if total_intensity == 0:
+            raise ValueError("Cannot normalize a distribution with zero total intensity.")
+        new_positions = self.positions
+        new_intensities = self.intensities / total_intensity
+        return Distribution(new_positions, new_intensities)
+
     @property
     def positions(self) -> np.ndarray:
         return self.get_positions()
