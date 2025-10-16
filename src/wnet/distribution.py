@@ -1,4 +1,5 @@
 from functools import cached_property
+from typing import Optional
 import numpy as np
 
 from wnet.wnet_cpp import CDistribution
@@ -24,7 +25,9 @@ class Distribution(CDistribution):
             Returns the sum of all intensities in the distribution (cached).
     """
 
-    def __init__(self, positions: np.ndarray, intensities: np.ndarray, label: str | None = None) -> None:
+    def __init__(
+        self, positions: np.ndarray, intensities: np.ndarray, label: Optional[str] = None
+    ) -> None:
         """
         Initialize the distribution with given positions and intensities.
 
@@ -59,7 +62,9 @@ class Distribution(CDistribution):
         """
         total_intensity = self.sum_intensities
         if total_intensity == 0:
-            raise ValueError("Cannot normalize a distribution with zero total intensity.")
+            raise ValueError(
+                "Cannot normalize a distribution with zero total intensity."
+            )
         new_positions = self.positions
         new_intensities = self.intensities / total_intensity
         return Distribution(new_positions, new_intensities, label=self.label)
@@ -77,7 +82,9 @@ class Distribution(CDistribution):
         return np.sum(self.intensities)
 
 
-def Distribution_1D(positions: np.ndarray, intensities: np.ndarray, label: str | None = None) -> Distribution:
+def Distribution_1D(
+    positions: np.ndarray, intensities: np.ndarray, label: Optional[str] = None
+) -> Distribution:
     """
     Creates a 1D distribution from given positions and intensities.
 
