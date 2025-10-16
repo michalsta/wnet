@@ -20,6 +20,7 @@ classifiers = [
 
 ]
 keywords = ["Wasserstein", "Optimal Transport", "Network Flow", "Earth Mover's Distance"]
+requires-python = ">=3.9"
 
 [project.urls]
 "Homepage" = "https://github.com/michalsta/wnet"
