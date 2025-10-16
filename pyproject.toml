@@ -27,6 +27,7 @@ keywords = ["Wasserstein", "Optimal Transport", "Network Flow", "Earth Mover's D
 
 [project.optional-dependencies]
 extras = ["networkx", "matplotlib"]
+pytest = ["pytest"]
 
 [tool.scikit-build.sdist]
 exclude = ["**/*"]
