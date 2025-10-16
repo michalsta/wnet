@@ -31,5 +31,5 @@ jobs:
           python -m pip install .[pytest]
       - name: Test with pytest
         run: |
-          pytest .
+          python -m pytest .
 
