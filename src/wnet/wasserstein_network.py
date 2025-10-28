@@ -1,3 +1,4 @@
+from typing import Optional
 from collections.abc import Sequence
 
 from wnet.wnet_cpp import CWassersteinNetwork, CWassersteinNetworkSubgraph
@@ -23,7 +24,7 @@ class WassersteinNetwork(CWassersteinNetwork):
         base_distribution: Distribution,
         target_distributions: Sequence[Distribution],
         distance: Distance,
-        max_distance: float | None = None,
+        max_distance: Optional[float] = None,
     ) -> None:
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()

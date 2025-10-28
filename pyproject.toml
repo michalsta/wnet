@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "wnet"
-version = "0.9.1"
+version = "0.9.3"
 description = "Tools for calculation of Wasserstein metric between distributions based on Network Flow algorithm"
 authors = [{ name="Michał Startek", email="michal.startek@mimuw.edu.pl" }]
 maintainers = [{ name="Michał Startek", email="michal.startek@mimuw.edu.pl" }]
@@ -20,6 +20,7 @@ classifiers = [
 
 ]
 keywords = ["Wasserstein", "Optimal Transport", "Network Flow", "Earth Mover's Distance"]
+requires-python = ">=3.9"
 
 [project.urls]
 "Homepage" = "https://github.com/michalsta/wnet"
@@ -27,6 +28,7 @@ keywords = ["Wasserstein", "Optimal Transport", "Network Flow", "Earth Mover's D
 
 [project.optional-dependencies]
 extras = ["networkx", "matplotlib"]
+pytest = ["pytest"]
 
 [tool.scikit-build.sdist]
 exclude = ["**/*"]
