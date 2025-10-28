@@ -14,8 +14,7 @@ jobs:
     strategy:
       matrix:
         # macos-13 is an intel runner, macos-14 is apple silicon
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-13, macos-latest]#, windows-11-arm]
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-13, macos-latest, windows-11-arm]
 
     steps:
       - uses: actions/checkout@v5
@@ -38,6 +37,8 @@ jobs:
           GITHUB_BUILDING_WHEELS: 1
           VERBOSE: 1
           MACOSX_DEPLOYMENT_TARGET: "10.13"
+          CIBW_BUILD: "cp* pp*"
+          CIBW_SKIP: "cp39-win_arm64 cp310-win_arm64"
 
       - uses: actions/upload-artifact@v4
         with:
