@@ -37,6 +37,7 @@ jobs:
           GITHUB_BUILDING_WHEELS: 1
           VERBOSE: 1
           MACOSX_DEPLOYMENT_TARGET: "10.13"
+          CIBW_ENABLE: "pypy"
           CIBW_BUILD: "cp* pp*"
           CIBW_SKIP: "cp39-win_arm64 cp310-win_arm64"
 
