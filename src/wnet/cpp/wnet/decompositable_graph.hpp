@@ -131,10 +131,10 @@ public:
             arcs.emplace_back(edge.get_start_node_id(), edge.get_end_node_id());
         lemon_graph.build(nodes.size(), arcs.begin(), arcs.end());
 
-        for (LEMON_INDEX ii = 0; ii < nodes.size(); ++ii)
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(nodes.size()); ++ii)
             node_supply_map[lemon_graph.nodeFromId(ii)] = 0;
 
-        for (LEMON_INDEX ii = 0; ii < edges.size(); ++ii)
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
             costs_map[lemon_graph.arcFromId(ii)] = std::visit([&](const auto& arg) {
                     using T = std::decay_t<decltype(arg)>;
                     if constexpr (std::is_same_v<T, MatchingEdge>) return arg.get_cost();
@@ -144,7 +144,7 @@ public:
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
 
-        for (LEMON_INDEX ii = 0; ii < edges.size(); ++ii)
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
         {
             capacities_map[lemon_graph.arcFromId(ii)] = std::visit([&](const auto& arg) {
                     using T = std::decay_t<decltype(arg)>;
@@ -165,7 +165,7 @@ public:
 
     void set_point(const std::vector<double>& point) {
         theoretical_intensity = 0;
-        for (LEMON_INDEX ii = 0; ii < edges.size(); ++ii)
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
         {
             const FlowEdge& edge = edges[ii];
             std::visit([&](const auto& arg) {
@@ -268,7 +268,7 @@ public:
                             std::vector<LEMON_INDEX>& theoretical_peak_indices,
                             std::vector<VALUE_TYPE>& flows) const
     {
-        for (LEMON_INDEX ii = 0; ii < edges.size(); ++ii)
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
         {
             const FlowEdge& edge = edges[ii];
             const VALUE_TYPE flow = solver->flow(lemon_graph.arcFromId(ii));
@@ -365,7 +365,7 @@ public:
         nodes.emplace_back(FlowNode(0, SourceNode()));
         nodes.emplace_back(FlowNode(1, SinkNode()));
 
-        for (LEMON_INDEX empirical_idx = 0; empirical_idx < empirical_spectrum->size(); ++empirical_idx) {
+        for (LEMON_INDEX empirical_idx = 0; empirical_idx < static_cast<LEMON_INT>(empirical_spectrum->size()); ++empirical_idx) {
             nodes.emplace_back(FlowNode(
                                     nodes.size(),
                                     EmpiricalNode(
@@ -382,7 +382,7 @@ public:
             #endif
             const auto& theoretical_spectrum = theoretical_spectra[theoretical_spectrum_idx];
 
-            for (LEMON_INDEX theoretical_peak_idx = 0; theoretical_peak_idx < theoretical_spectrum->size(); ++theoretical_peak_idx) {
+            for (LEMON_INDEX theoretical_peak_idx = 0; theoretical_peak_idx < static_cast<LEMON_INT>(theoretical_spectrum->size()); ++theoretical_peak_idx) {
                 nodes.emplace_back(FlowNode(
                                         nodes.size(),
                                             TheoreticalNode(
@@ -403,7 +403,7 @@ public:
                 std::cout << no_included << " / " << no_processed << " = " << static_cast<float>(no_included) / static_cast<float>(no_processed) << std::endl;
                 #endif
 
-                for (LEMON_INDEX ii = 0; ii < indices.size(); ++ii)
+                for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(indices.size()); ++ii)
                     edges.emplace_back(FlowEdge(
                         edges.size(),
                         nodes[indices[ii] + 2], // +2 to skip the source and sink nodes
@@ -459,7 +459,7 @@ public:
         std::vector<LEMON_INDEX> stack;
         std::vector<std::vector<LEMON_INDEX>> neighbourhood_lists = this->neighbourhood_lists();
 
-        for (LEMON_INDEX node_id = 0; node_id < nodes.size(); ++node_id) {
+        for (LEMON_INDEX node_id = 0; node_id < static_cast<LEMON_INT>(nodes.size()); ++node_id) {
             if (!visited[node_id]) {
                 std::vector<LEMON_INDEX>& neighbours = neighbourhood_lists[node_id];
                 if(neighbours.size() == 0) {
