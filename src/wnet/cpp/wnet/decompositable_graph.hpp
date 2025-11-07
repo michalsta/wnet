@@ -164,6 +164,8 @@ public:
     }
 
     void set_point(const std::vector<double>& point) {
+        if(point.size() != no_target_distributions)
+            throw std::runtime_error("Point dimension: " + std::to_string(point.size()) + " does not match number of target distributions: " + std::to_string(no_target_distributions));
         theoretical_intensity = 0;
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
         {
