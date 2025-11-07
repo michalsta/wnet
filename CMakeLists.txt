@@ -28,7 +28,7 @@ endif()
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_definitions(wnet_cpp PRIVATE DEBUG_MODE)
-    target_compile_options(wnet_cpp PRIVATE -g -Og -fsanitize=address -D_GLIBCXX_ASSERTIONS -D_LIBCPP_ENABLE_ASSERTIONS=1)
+    target_compile_options(wnet_cpp PRIVATE -g -Og -fsanitize=address -D_GLIBCXX_ASSERTIONS -D_GLIBCXX_SANITIZE_VECTOR -DGLIBCXX_DEBUG -D_LIBCPP_ENABLE_ASSERTIONS=1)
     #target_compile_options(wnet_cpp PRIVATE -g Og -D_GLIBCXX_ASSERTIONS -D_LIBCPP_ENABLE_ASSERTIONS=1)
 endif()
 
