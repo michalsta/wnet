@@ -9,7 +9,7 @@ parameter_set = [
         "int_range": 10,
         "size": 1000,
         "no_theoretical_distributions": 5,
-        "point": (0.3, 0.4, 10.5),
+        "point": (0.3, 0.4, 10.5, 0.2, 0.6),
     },
     {
         "seed": 7,
@@ -18,7 +18,7 @@ parameter_set = [
         "int_range": 5,
         "size": 2000,
         "no_theoretical_distributions": 3,
-        "point": (0.1, 0.9),
+        "point": (0.1, 0.9, 0.5),
     },
     {
         "seed": 123,
@@ -37,7 +37,7 @@ parameter_set = [
         "int_range": 15,
         "size": 5000,
         "no_theoretical_distributions": 6,
-        "point": (0.5, 0.5, 0.5, 0.5, 0.5),
+        "point": (0.5, 0.5, 0.5, 0.5, 0.5, 0.5),
     },
     {
         "seed": 2024,
@@ -46,7 +46,7 @@ parameter_set = [
         "int_range": 30,
         "size": 10000,
         "no_theoretical_distributions": 8,
-        "point": None
+        "point": None,
     },
 ]
 
@@ -54,19 +54,18 @@ parameter_set = [
 #     create_large_wsdflow_instance(**params) for params in parameter_set
 # ]
 
-expected_results = [21182, 730, 132388, 561612, 5134997]
+expected_results = [18662, 2070, 132388, 535936, 5134997]
 
 try:
     import pytest
-    @pytest.mark.parametrize("params, expected", zip(
-        parameter_set,
-        expected_results
-    ))
+
+    @pytest.mark.parametrize("params, expected", zip(parameter_set, expected_results))
     def test_large_wsdflow_instances(params, expected):
         wsd_instance = create_large_wsdflow_instance(**params)
         cost = solve_large_wsdflow_instance(wsd_instance)
         print(f"Computed cost: {cost}, Expected cost: {expected}")
         assert cost == expected
+
 except ImportError:
     pass
 
