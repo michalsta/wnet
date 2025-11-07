@@ -337,7 +337,7 @@ public:
     }
 };
 
-template <typename VALUE_TYPE>
+template <typename VALUE_TYPE, typename Distribution_t>
 class WassersteinNetwork {
     std::vector<FlowNode> nodes;
     std::vector<FlowEdge> edges;
@@ -349,9 +349,9 @@ class WassersteinNetwork {
 
 public:
     WassersteinNetwork(
-    const Distribution* empirical_spectrum,
-    const std::vector<Distribution*>& theoretical_spectra,
-    const nb::callable* dist_fun,
+    const Distribution_t* empirical_spectrum,
+    const std::vector<Distribution_t*>& theoretical_spectra,
+    const Distribution_t::distance_fun_t* dist_fun,
     VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
     ) :
     _no_theoretical_spectra(theoretical_spectra.size())

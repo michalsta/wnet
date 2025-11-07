@@ -25,6 +25,7 @@ class Distribution {
     const nb::ndarray<LEMON_INT, nb::shape<-1>> py_intensities;
 public:
     using Point_t = std::pair<const nb::ndarray<>*, size_t>;
+    using distance_fun_t = nb::callable;
     const std::span<const LEMON_INT> intensities;
 
     Distribution(nb::ndarray<> positions, nb::ndarray<LEMON_INT, nb::shape<-1>> intensities)
@@ -55,7 +56,7 @@ public:
 
     std::pair<std::vector<size_t>, std::vector<LEMON_INT>> closer_than(
         const Point_t point,
-        const nb::callable* wrapped_dist_fun,
+        const distance_fun_t* wrapped_dist_fun,
         LEMON_INT max_dist
     ) const
     {
