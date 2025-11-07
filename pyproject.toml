@@ -44,3 +44,6 @@ include = [
     "/pyproject.toml",
     "/CMakeLists.txt"
 ]
+
+# [tool.scikit-build]
+# cmake.build-type = "Debug"

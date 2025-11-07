@@ -21,6 +21,17 @@ nanobind_add_module(wnet_cpp
 
 target_include_directories(wnet_cpp PRIVATE ${PYLMCF_INCLUDE_DIRS})
 
+# Add -Wall -Wextra for Unix-style compilers (GCC/Clang)
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    target_compile_options(wnet_cpp PRIVATE -Wall -Wextra)
+endif()
+
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_definitions(wnet_cpp PRIVATE DEBUG_MODE)
+    target_compile_options(wnet_cpp PRIVATE -fsanitize=address )
+endif()
+
+
 install(TARGETS wnet_cpp LIBRARY DESTINATION wnet)
 
 # Uncomment the following line to enable detailed debug prints in the C++ code
