@@ -26,7 +26,10 @@ class Distribution(CDistribution):
     """
 
     def __init__(
-        self, positions: np.ndarray, intensities: np.ndarray, label: Optional[str] = None
+        self,
+        positions: np.ndarray,
+        intensities: np.ndarray,
+        label: Optional[str] = None,
     ) -> None:
         """
         Initialize the distribution with given positions and intensities.
