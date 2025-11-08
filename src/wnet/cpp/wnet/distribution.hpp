@@ -87,4 +87,72 @@ public:
     }
 };
 
+
+
+template<size_t DIM, typename position_type = double, typename intensity_type = LEMON_INT>
+class VectorDistribution {
+    std::vector<std::array<position_type, DIM>> positions;
+    std::vector<intensity_type> intensities;
+public:
+    using Point_t = std::array<position_type, DIM>;
+    using distance_fun_t = std::function<intensity_type(const Point_t&, const Point_t&)>;
+
+    VectorDistribution(
+        const std::vector<std::array<position_type, DIM>>& positions_,
+        const std::vector<intensity_type>& intensities_
+    ) : positions(positions_), intensities(intensities_) {
+        if (positions.size() != intensities.size()) {
+            throw std::invalid_argument("Positions and intensities must have the same size");
+        }
+    }
+
+    VectorDistribution(
+        std::vector<std::array<position_type, DIM>>&& positions_,
+        std::vector<intensity_type>&& intensities_
+    ) : positions(std::move(positions_)), intensities(std::move(intensities_)) {
+        if (positions.size() != intensities.size()) {
+            throw std::invalid_argument("Positions and intensities must have the same size");
+        }
+    }
+
+    size_t size() const {
+        return intensities.size();
+    }
+
+    const Point_t& get_point(size_t idx) const {
+        return positions[idx];
+    }
+
+    std::pair<std::vector<size_t>, std::vector<intensity_type>> closer_than(
+        const Point_t& point,
+        const std::function<intensity_type(const Point_t&, const Point_t&)>& dist_fun,
+        intensity_type max_dist
+    ) const
+    {
+        std::vector<size_t> indices;
+        std::vector<intensity_type> distances;
+
+        for (size_t ii = 0; ii < size(); ++ii) {
+            intensity_type dist = dist_fun(point, positions[ii]);
+            if(dist <= max_dist) {
+                indices.push_back(ii);
+                distances.push_back(dist);
+            }
+        }
+        return {indices, distances};
+    }
+};
+
+template<size_t DIM, typename position_type = double>
+inline LEMON_INT l1_distance(
+    const std::array<position_type, DIM>& p1,
+    const std::array<position_type, DIM>& p2
+) {
+    if constexpr (DIM == 1)
+        return std::abs(p1[0] - p2[0]);
+    else
+        return std::abs(p1[0] - p2[0]) + l1_distance<DIM - 1>(p1+1, p2+1);
+}
+
+
 #endif // WNET_DISTRIBUTION_HPP
