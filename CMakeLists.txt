@@ -20,6 +20,7 @@ nanobind_add_module(wnet_cpp
     src/wnet/cpp/wnet/wnet.cpp)
 
 target_include_directories(wnet_cpp PRIVATE ${PYLMCF_INCLUDE_DIRS})
+target_compile_definitions(wnet_cpp PRIVATE INCLUDE_NANOBIND_STUFF)
 
 # Add -Wall -Wextra for Unix-style compilers (GCC/Clang)
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")

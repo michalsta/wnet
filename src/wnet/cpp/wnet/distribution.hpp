@@ -2,10 +2,15 @@
 #define WNET_DISTRIBUTION_HPP
 
 #include <array>
+#include <functional>
+#include <vector>
+#include <stdexcept>
 
 #include "pylmcf/basics.hpp"
 //#include "py_support.h"
 
+
+#ifdef INCLUDE_NANOBIND_STUFF
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/string.h>
@@ -87,7 +92,7 @@ public:
     }
 };
 
-
+#endif // INCLUDE_NANOBIND_STUFF
 
 template<size_t DIM, typename position_type = double, typename intensity_type = LEMON_INT>
 class VectorDistribution {
