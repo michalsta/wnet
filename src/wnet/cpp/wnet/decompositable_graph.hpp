@@ -344,6 +344,8 @@ class WassersteinNetwork {
     std::vector<LEMON_INDEX> dead_end_node_ids;
     std::vector<std::unique_ptr<WassersteinNetworkSubgraph<VALUE_TYPE>>> flow_subgraphs;
 
+    bool built = false;
+
 public:
     WassersteinNetwork(
     const Distribution_t* empirical_spectrum,
@@ -518,6 +520,7 @@ public:
     void build() {
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->build();
+        built = true;
     };
 
     void solve()
@@ -527,6 +530,9 @@ public:
     };
 
     void solve(const std::vector<double>& point) {
+        if(!built)
+            throw std::runtime_error("You must call build() before calling solve().");
+
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->set_point(point);
     };
