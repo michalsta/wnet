@@ -149,7 +149,7 @@ public:
 };
 
 template<size_t DIM, typename position_type = double>
-inline LEMON_INT l1_distance(
+inline double l1_distance(
     const std::array<position_type, DIM>& p1,
     const std::array<position_type, DIM>& p2
 ) {
