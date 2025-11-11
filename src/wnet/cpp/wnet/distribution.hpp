@@ -63,14 +63,14 @@ public:
 
     std::pair<std::vector<size_t>, std::vector<LEMON_INT>> closer_than(
         const Point_t point,
-        const distance_fun_t* wrapped_dist_fun,
+        const distance_fun_t wrapped_dist_fun,
         LEMON_INT max_dist
     ) const
     {
         std::vector<size_t> indices;
         std::vector<LEMON_INT> distances;
 
-        nb::object distances_obj = (*wrapped_dist_fun)(point, py_positions);
+        nb::object distances_obj = (wrapped_dist_fun)(point, py_positions);
         nb::ndarray<LEMON_INT, nb::shape<-1>> distances_array = nb::cast<nb::ndarray<LEMON_INT, nb::shape<-1>>>(distances_obj);
         LEMON_INT* distances_ptr = static_cast<LEMON_INT*>(distances_array.data());
         // if (distances_info.ndim != 1) {

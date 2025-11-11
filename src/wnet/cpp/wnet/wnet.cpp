@@ -56,7 +56,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_edges", &WassersteinNetworkSubgraph<int64_t>::get_edges);
 
     nb::class_<WassersteinNetwork<int64_t, Distribution>>(m, "CWassersteinNetwork")
-        .def(nb::init<const Distribution*, const std::vector<Distribution*>&, const nb::callable*, LEMON_INT>())
+        .def(nb::init<const Distribution*, const std::vector<Distribution*>&, const nb::callable, LEMON_INT>())
         .def("add_simple_trash", &WassersteinNetwork<int64_t, Distribution>::add_simple_trash)
         .def("build", &WassersteinNetwork<int64_t, Distribution>::build)
         .def("solve", nb::overload_cast<>(&WassersteinNetwork<int64_t, Distribution>::solve))
