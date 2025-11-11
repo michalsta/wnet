@@ -5,6 +5,8 @@
 #include <functional>
 #include <vector>
 #include <stdexcept>
+#include <random>
+
 
 #include "pylmcf/basics.hpp"
 //#include "py_support.h"
@@ -94,18 +96,22 @@ public:
 
 #endif // INCLUDE_NANOBIND_STUFF
 
-template<size_t DIM, typename position_type = double, typename intensity_type = LEMON_INT>
+template<size_t DIM, typename position_type_ = double, typename intensity_type_ = LEMON_INT>
 class VectorDistribution {
-    std::vector<std::array<position_type, DIM>> positions;
-    std::vector<intensity_type> intensities;
+    std::vector<std::array<position_type_, DIM>> positions;
+    std::vector<intensity_type_> intensities_vector;
 public:
+    using intensity_type = intensity_type_;
+    using position_type = position_type_;
     using Point_t = std::array<position_type, DIM>;
     using distance_fun_t = std::function<intensity_type(const Point_t&, const Point_t&)>;
+
+    const std::span<const intensity_type> intensities;
 
     VectorDistribution(
         const std::vector<std::array<position_type, DIM>>& positions_,
         const std::vector<intensity_type>& intensities_
-    ) : positions(positions_), intensities(intensities_) {
+    ) : positions(positions_), intensities_vector(intensities_), intensities(intensities_vector) {
         if (positions.size() != intensities.size()) {
             throw std::invalid_argument("Positions and intensities must have the same size");
         }
@@ -114,7 +120,7 @@ public:
     VectorDistribution(
         std::vector<std::array<position_type, DIM>>&& positions_,
         std::vector<intensity_type>&& intensities_
-    ) : positions(std::move(positions_)), intensities(std::move(intensities_)) {
+    ) : positions(std::move(positions_)), intensities_vector(std::move(intensities_)), intensities(intensities_vector) {
         if (positions.size() != intensities.size()) {
             throw std::invalid_argument("Positions and intensities must have the same size");
         }
@@ -128,9 +134,17 @@ public:
         return positions[idx];
     }
 
+    const std::vector<std::array<position_type, DIM>>& get_positions() const {
+        return positions;
+    }
+
+    const std::vector<intensity_type>& get_intensities() const {
+        return intensities;
+    }
+
     std::pair<std::vector<size_t>, std::vector<intensity_type>> closer_than(
         const Point_t& point,
-        const std::function<intensity_type(const Point_t&, const Point_t&)>& dist_fun,
+        const distance_fun_t dist_fun,
         intensity_type max_dist
     ) const
     {
@@ -146,6 +160,29 @@ public:
         }
         return {indices, distances};
     }
+
+    static VectorDistribution CreateRandom(size_t no_points,
+                                           position_type position_range,
+                                           intensity_type intensity_range,
+                                           std::mt19937& rng) {
+        std::uniform_real_distribution<position_type> pos_dist(0, position_range);
+        std::uniform_int_distribution<intensity_type> int_dist(1, intensity_range);
+
+        std::vector<std::array<position_type, DIM>> positions;
+        std::vector<intensity_type> intensities;
+        positions.reserve(no_points);
+        intensities.reserve(no_points);
+
+        for (size_t i = 0; i < no_points; ++i) {
+            std::array<position_type, DIM> pos;
+            for (size_t d = 0; d < DIM; ++d) {
+                pos[d] = pos_dist(rng);
+            }
+            positions.push_back(pos);
+            intensities.push_back(int_dist(rng));
+        }
+        return VectorDistribution(std::move(positions), std::move(intensities));
+    }
 };
 
 template<size_t DIM, typename position_type = double>
@@ -153,11 +190,16 @@ inline double l1_distance(
     const std::array<position_type, DIM>& p1,
     const std::array<position_type, DIM>& p2
 ) {
-    if constexpr (DIM == 1)
+    if constexpr (DIM == 0) {
+        return 0.0;
+    } else if constexpr (DIM == 1) {
         return std::abs(p1[0] - p2[0]);
-    else
-        return std::abs(p1[0] - p2[0]) + l1_distance<DIM - 1>(p1+1, p2+1);
+    } else {
+        // Use fold expression to unroll the loop at compile time
+        return [&]<size_t... Is>(std::index_sequence<Is...>) {
+            return (std::abs(p1[Is] - p2[Is]) + ...);
+        }(std::make_index_sequence<DIM>{});
+    }
 }
-
 
 #endif // WNET_DISTRIBUTION_HPP

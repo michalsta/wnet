@@ -84,6 +84,12 @@ class Distribution(CDistribution):
     def sum_intensities(self) -> float:
         return np.sum(self.intensities)
 
+    @property
+    def dimension(self) -> int:
+        return self.positions.shape[0]
+
+    def cpp_repr(self) -> str:
+        return f"VectorDistribution<{self.dimension}> distribution(\n{{{self.positions.tolist()}}},\n{{{self.intensities.tolist()}}}\n);"
 
 def Distribution_1D(
     positions: np.ndarray, intensities: np.ndarray, label: Optional[str] = None
