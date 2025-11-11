@@ -39,5 +39,14 @@ int main()
         10
     );
 
-    // wnet.solve
+    std::cout << "WassersteinNetwork created with "
+              << wnet.no_nodes() << " nodes and "
+              << wnet.no_edges() << " edges."
+              << std::endl;
+
+    std::vector<double> point = {0.5, 0.5};
+    for (size_t iter = 0; iter < 5; ++iter) {
+        wnet.solve(point);
+        std::cout << "Iteration " << iter << ", total cost: " << wnet.total_cost() << std::endl;
+    }
 }
