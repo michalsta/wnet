@@ -37,7 +37,7 @@ public:
     WassersteinNetworkSubgraph(
         const std::vector<LEMON_INDEX>& subgraph_node_ids,
         const std::vector<FlowNode>& all_nodes,
-        const std::vector<FlowEdge>& all_edges,
+        const std::vector<FlowEdge*>& my_edges,
         size_t no_target_distributions_
     ) :
         lemon_graph(),
@@ -85,19 +85,19 @@ public:
             else throw std::runtime_error("Invalid FlowNode type. This shouldn't happen.");
         }
 
-        for (const FlowEdge& edge : all_edges)
+        for (const FlowEdge* edge : my_edges)
         {
-            const FlowNode& start_node = edge.get_start_node();
+            const FlowNode& start_node = edge->get_start_node();
             const auto start_node_it = node_id_map.find(start_node.get_id());
-            if (start_node_it == node_id_map.end()) continue;
-            const FlowNode& end_node = edge.get_end_node();
+            if (start_node_it == node_id_map.end()) throw std::runtime_error("Start node of edge not found in subgraph nodes.");
+            const FlowNode& end_node = edge->get_end_node();
             const auto end_node_it = node_id_map.find(end_node.get_id());
-            if (end_node_it == node_id_map.end()) continue;
+            if (end_node_it == node_id_map.end()) throw std::runtime_error("End node of edge not found in subgraph nodes.");
             edges.emplace_back(
                     edges.size(),
                     nodes[start_node_it->second],
                     nodes[end_node_it->second],
-                    edge.get_type()
+                    edge->get_type()
             );
         }
     }
@@ -495,18 +495,53 @@ public:
 
         dead_end_node_ids = std::move(_dead_end_nodes);
 
+        std::unique_ptr<LEMON_INDEX[]> node_in_subgraph = std::make_unique<LEMON_INDEX[]>(nodes.size());
+
+        #ifdef LEMON_DO_ASSERTS
+        for (size_t ii = 0; ii < nodes.size(); ++ii)
+            node_in_subgraph[ii] = -10;
+        #endif
+
+        for (LEMON_INDEX subgraph_idx = 0; subgraph_idx < static_cast<LEMON_INT>(_subgraphs.size()); ++subgraph_idx)
+            for (const auto& node_id : _subgraphs[subgraph_idx])
+                node_in_subgraph[node_id] = subgraph_idx;
+
+        #ifdef WNET_DO_ASSERTS
+        for(auto dead_end_node_id : dead_end_node_ids)
+            node_in_subgraph[dead_end_node_id] = -1;
+        for(size_t node_id = 0; node_id < nodes.size(); ++node_id)
+            if(node_in_subgraph[node_id] == -10)
+                throw std::runtime_error("Node not assigned to any subgraph");
+        #endif
+
+        std::vector<std::vector<FlowEdge*>> subgraph_edges(_subgraphs.size());
+        for (auto& edge : edges)
+        {
+            const LEMON_INDEX start_node_id = edge.get_start_node_id();
+            const LEMON_INDEX start_subgraph_idx = node_in_subgraph[start_node_id];
+            subgraph_edges[start_subgraph_idx].push_back(&edge);
+
+            #ifdef WNET_DO_ASSERTS
+            const LEMON_INDEX end_node_id = edge.get_end_node_id();
+            const LEMON_INDEX end_subgraph_idx = node_in_subgraph[end_node_id];
+            if(start_subgraph_idx != end_subgraph_idx || start_subgraph_idx == -1)
+                throw std::runtime_error("Edge connects nodes from different subgraphs or dead end nodes.");
+            #endif
+        }
+
+
         // TODO: optimize, right now this is needlessly O(subgraphs.size() * edges.size()),
         // can be O(subgraphs.size() + edges.size())
         flow_subgraphs.reserve(_subgraphs.size());
-        for (const auto& subgraph_node_ids : _subgraphs)
+        for (size_t subgraph_idx = 0; subgraph_idx < _subgraphs.size(); ++subgraph_idx)
         {
             #ifdef DO_TONS_OF_PRINTS
             std::cout << "Subgraph" << std::endl;
             #endif
             flow_subgraphs.emplace_back(std::make_unique<WassersteinNetworkSubgraph<VALUE_TYPE>>(
-                    subgraph_node_ids,
+                    _subgraphs[subgraph_idx],
                     nodes,
-                    edges,
+                    subgraph_edges[subgraph_idx],
                     _no_theoretical_spectra
             ));
         }
