@@ -38,7 +38,8 @@ public:
         const std::vector<LEMON_INDEX>& subgraph_node_ids,
         const std::vector<FlowNode>& all_nodes,
         const std::vector<FlowEdge*>& my_edges,
-        size_t no_target_distributions_
+        size_t no_target_distributions_,
+        LEMON_INDEX* node_id_map_space
     ) :
         lemon_graph(),
         node_supply_map(lemon_graph),
@@ -56,11 +57,11 @@ public:
         auto& source_node = nodes[0];
         auto& sink_node = nodes[1];
 
-        std::unordered_map<LEMON_INDEX, LEMON_INDEX> node_id_map;
+        //std::unordered_map<LEMON_INDEX, LEMON_INDEX> node_id_map;
 
         for (const auto& node_id : subgraph_node_ids)
         {
-            node_id_map[node_id] = nodes.size();
+            node_id_map_space[node_id] = nodes.size();
             const FlowNodeType& node_type = all_nodes[node_id].get_type();
             nodes.push_back(FlowNode(nodes.size(), node_type));
             auto& new_node = nodes.back();
@@ -88,15 +89,13 @@ public:
         for (const FlowEdge* edge : my_edges)
         {
             const FlowNode& start_node = edge->get_start_node();
-            const auto start_node_it = node_id_map.find(start_node.get_id());
-            if (start_node_it == node_id_map.end()) throw std::runtime_error("Start node of edge not found in subgraph nodes.");
+            const auto start_node_reindexed = node_id_map_space[start_node.get_id()];
             const FlowNode& end_node = edge->get_end_node();
-            const auto end_node_it = node_id_map.find(end_node.get_id());
-            if (end_node_it == node_id_map.end()) throw std::runtime_error("End node of edge not found in subgraph nodes.");
+            const auto end_node_reindexed = node_id_map_space[end_node.get_id()];
             edges.emplace_back(
                     edges.size(),
-                    nodes[start_node_it->second],
-                    nodes[end_node_it->second],
+                    nodes[start_node_reindexed],
+                    nodes[end_node_reindexed],
                     edge->get_type()
             );
         }
@@ -542,7 +541,8 @@ public:
                     _subgraphs[subgraph_idx],
                     nodes,
                     subgraph_edges[subgraph_idx],
-                    _no_theoretical_spectra
+                    _no_theoretical_spectra,
+                    node_in_subgraph.get()
             ));
         }
     }
