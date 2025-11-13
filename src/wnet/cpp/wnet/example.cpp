@@ -44,8 +44,9 @@ int main()
               << wnet.no_edges() << " edges."
               << std::endl;
 
+    wnet.build();
     std::vector<double> point = {0.5, 0.5};
-    for (size_t iter = 0; iter < 5; ++iter) {
+    for (size_t iter = 0; iter < 20; ++iter) {
         wnet.solve(point);
         std::cout << "Iteration " << iter << ", total cost: " << wnet.total_cost() << std::endl;
     }
