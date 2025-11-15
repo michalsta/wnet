@@ -192,15 +192,16 @@ std::span<const T> numpy_to_span(const nb::ndarray<T, nb::shape<-1>>& array) {
     return std::span<const T>(static_cast<T*>(array.data()), array.shape(0));
 }
 
+template<typename intensity_type_>
 class Distribution {
     const nb::ndarray<nb::shape<-1, -1>> py_positions;
-    const nb::ndarray<LEMON_INT, nb::shape<-1>> py_intensities;
+    const nb::ndarray<intensity_type_, nb::shape<-1>> py_intensities;
 public:
     using Point_t = std::pair<const nb::ndarray<nb::shape<-1, -1>>*, size_t>;
     using distance_fun_t = nb::callable;
-    const std::span<const LEMON_INT> intensities;
+    const std::span<const intensity_type_> intensities;
 
-    Distribution(nb::ndarray<nb::shape<-1, -1>> positions, nb::ndarray<LEMON_INT, nb::shape<-1>> intensities)
+    Distribution(nb::ndarray<nb::shape<-1, -1>> positions, nb::ndarray<intensity_type_, nb::shape<-1>> intensities)
         : py_positions(positions), py_intensities(intensities), intensities(numpy_to_span(intensities)) {
         if (positions.shape(1) != intensities.shape(0)) {
             throw std::invalid_argument("Positions and intensities must have the same size");
@@ -226,7 +227,7 @@ public:
         return py_positions;
     }
 
-    const nb::ndarray<LEMON_INT, nb::shape<-1>> get_intensities() const {
+    const nb::ndarray<intensity_type_, nb::shape<-1>> get_intensities() const {
         return py_intensities;
     }
 
@@ -310,13 +311,13 @@ public:
         return py_positions;
     }
 
-    const nb::ndarray<LEMON_INT, nb::shape<-1>>& py_get_intensities() const {
+    const nb::ndarray<intensity_type_, nb::shape<-1>>& py_get_intensities() const {
         return py_intensities;
     }
 
     template<size_t DIM>
-    VectorDistribution<DIM, double, LEMON_INT> to_vector_distribution() const {
-        return VectorDistribution<DIM, double, LEMON_INT>(
+    VectorDistribution<DIM, double, intensity_type_> to_vector_distribution() const {
+        return VectorDistribution<DIM, double, intensity_type_>(
             py_positions, py_intensities
         );
     }

@@ -68,7 +68,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_edges", &WassersteinNetworkSubgraph<int64_t>::get_edges);
 
     nb::class_<WassersteinNetwork<int64_t>>(m, "CWassersteinNetwork")
-        .def(nb::init<const Distribution*, const std::vector<Distribution*>&, const nb::callable, LEMON_INT>())
+        .def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
         .def("add_simple_trash", &WassersteinNetwork<int64_t>::add_simple_trash)
         .def("build", &WassersteinNetwork<int64_t>::build)
         .def("solve", nb::overload_cast<>(&WassersteinNetwork<int64_t>::solve))
@@ -97,18 +97,18 @@ NB_MODULE(wnet_cpp, m) {
         .def_static("max_value", &WassersteinNetwork<int64_t>::max_value)
         .def_static("max_index", &WassersteinNetwork<int64_t>::max_index);
 
-    nb::class_<Distribution>(m, "CDistribution")
+    nb::class_<Distribution<LEMON_INT>>(m, "CDistribution")
         .def(nb::init<nb::ndarray<nb::shape<-1, -1>>, nb::ndarray<LEMON_INT, nb::shape<-1>>>(), nb::arg().noconvert(), nb::arg().noconvert())
-        .def("size", &Distribution::size)
-        .def("get_positions", &Distribution::get_positions)
-        .def("get_intensities", &Distribution::get_intensities)
-        .def("get_point", &Distribution::get_point)
-        .def("closer_than", &Distribution::closer_than)
-        .def("__len__", &Distribution::size);
+        .def("size", &Distribution<LEMON_INT>::size)
+        .def("get_positions", &Distribution<LEMON_INT>::get_positions)
+        .def("get_intensities", &Distribution<LEMON_INT>::get_intensities)
+        .def("get_point", &Distribution<LEMON_INT>::get_point)
+        .def("closer_than", &Distribution<LEMON_INT>::closer_than)
+        .def("__len__", &Distribution<LEMON_INT>::size);
 
-    nb::class_<Distribution::Point_t>(m, "DistributionPoint")
-        .def_ro("positions", &Distribution::Point_t::first)
-        .def_ro("index", &Distribution::Point_t::second);
+    nb::class_<Distribution<LEMON_INT>::Point_t>(m, "DistributionPoint")
+        .def_ro("positions", &Distribution<LEMON_INT>::Point_t::first)
+        .def_ro("index", &Distribution<LEMON_INT>::Point_t::second);
 
 
     EXPOSE_VECTOR_DISTRIBUTION(1)
