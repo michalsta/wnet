@@ -2,7 +2,7 @@ from functools import cached_property
 from typing import Optional
 import numpy as np
 
-from wnet.wnet_cpp import CDistribution
+from wnet.wnet_cpp import *
 
 
 class Distribution(CDistribution):
@@ -39,7 +39,7 @@ class Distribution(CDistribution):
             intensities (np.ndarray): Array of intensities corresponding to each position.
             label (str | None): Optional label for the distribution.
         """
-        super().__init__(positions, intensities)
+        super().__init__(positions, intensities.astype(np.int64, copy=False))
         self.label = label
 
     def scaled(self, scale_factor: float) -> "Distribution":

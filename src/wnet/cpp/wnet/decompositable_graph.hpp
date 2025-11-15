@@ -394,24 +394,20 @@ public:
                 const auto& theoretical_node = nodes.back();
 
                 // Calculate the distance between the empirical and theoretical peaks
-                auto [indices, distances] = empirical_spectrum->closer_than(
+                auto it = empirical_spectrum->closer_than_iter(
                     theoretical_spectrum->get_point(theoretical_peak_idx),
                     dist_fun,
                     max_dist
                 );
-                #ifdef DO_TONS_OF_PRINTS
-                no_processed += theoretical_spectrum->size();
-                no_included += indices.size();
-                std::cout << no_included << " / " << no_processed << " = " << static_cast<float>(no_included) / static_cast<float>(no_processed) << std::endl;
-                #endif
-
-                for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(indices.size()); ++ii)
+                while(it.advance())
+                {
                     edges.emplace_back(FlowEdge(
                         edges.size(),
-                        nodes[indices[ii] + 2], // +2 to skip the source and sink nodes
+                        nodes[it.get_index() + 2], // +2 to skip the source and sink nodes
                         theoretical_node,
-                        MatchingEdge(distances[ii])
+                        MatchingEdge(static_cast<VALUE_TYPE>(it.get_distance()))
                     ));
+                }
             }
         }
         build_subgraphs();

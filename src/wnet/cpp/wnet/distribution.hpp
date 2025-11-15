@@ -109,6 +109,58 @@ public:
         return {indices, distances};
     }
 
+    class CloserThanIterator {
+        const VectorDistribution<DIM, position_type, intensity_type>& distribution;
+        const Point_t& point;
+        const distance_fun_t& dist_fun;
+        intensity_type max_dist;
+        size_t current_index;
+        intensity_type current_distance;
+
+    public:
+        CloserThanIterator(
+            const VectorDistribution<DIM, position_type, intensity_type>& distribution_,
+            const Point_t& point_,
+            const distance_fun_t& dist_fun_,
+            intensity_type max_dist_
+        ) : distribution(distribution_),
+            point(point_),
+            dist_fun(dist_fun_),
+            max_dist(max_dist_),
+            current_index(-1)
+        {}
+        inline bool advance() {
+            current_index++;
+            while (current_index < distribution.size()) {
+                current_distance = dist_fun(point, distribution.get_point(current_index));
+                if (current_distance <= max_dist) {
+                    return true;
+                }
+                ++current_index;
+            }
+            return false;
+        }
+        inline size_t get_index() const {
+            return current_index;
+        }
+        inline intensity_type get_distance() const {
+            return current_distance;
+        }
+    };
+
+    CloserThanIterator closer_than_iter(
+        const Point_t& point,
+        const distance_fun_t& dist_fun,
+        intensity_type max_dist
+    ) const {
+        return CloserThanIterator(
+            *this,
+            point,
+            dist_fun,
+            max_dist
+        );
+    };
+
     static VectorDistribution CreateRandom(size_t no_points,
                                            position_type position_range,
                                            intensity_type intensity_range,
@@ -141,14 +193,14 @@ std::span<const T> numpy_to_span(const nb::ndarray<T, nb::shape<-1>>& array) {
 }
 
 class Distribution {
-    const nb::ndarray<> py_positions;
+    const nb::ndarray<nb::shape<-1, -1>> py_positions;
     const nb::ndarray<LEMON_INT, nb::shape<-1>> py_intensities;
 public:
-    using Point_t = std::pair<const nb::ndarray<>*, size_t>;
+    using Point_t = std::pair<const nb::ndarray<nb::shape<-1, -1>>*, size_t>;
     using distance_fun_t = nb::callable;
     const std::span<const LEMON_INT> intensities;
 
-    Distribution(nb::ndarray<> positions, nb::ndarray<LEMON_INT, nb::shape<-1>> intensities)
+    Distribution(nb::ndarray<nb::shape<-1, -1>> positions, nb::ndarray<LEMON_INT, nb::shape<-1>> intensities)
         : py_positions(positions), py_intensities(intensities), intensities(numpy_to_span(intensities)) {
         if (positions.shape(1) != intensities.shape(0)) {
             throw std::invalid_argument("Positions and intensities must have the same size");
@@ -159,6 +211,10 @@ public:
         return intensities.size();
     }
 
+    size_t dimension() const {
+        return py_positions.shape(0);
+    }
+
     Point_t get_point(size_t idx) const {
         if (idx >= size()) {
             throw std::out_of_range("Index out of range");
@@ -166,7 +222,7 @@ public:
         return {&py_positions, idx};
     }
 
-    const nb::ndarray<> get_positions() const {
+    const nb::ndarray<nb::shape<-1, -1>> get_positions() const {
         return py_positions;
     }
 
@@ -198,7 +254,59 @@ public:
         return {indices, distances};
     }
 
-    const nb::ndarray<>& py_get_positions() const {
+    class CloserThanIterator {
+        size_t current_index;
+        nb::ndarray<LEMON_INT, nb::shape<-1>> distances_array;
+        LEMON_INT* distances_ptr;
+        LEMON_INT max_dist;
+        size_t distribution_size;
+    public:
+        CloserThanIterator(
+            const nb::ndarray<nb::shape<-1, -1>> py_positions_,
+            const Point_t point_,
+            const distance_fun_t& dist_fun_,
+            LEMON_INT max_dist_
+        ) : current_index(-1),
+            max_dist(max_dist_)
+        {
+            nb::object distances_obj = (dist_fun_)(point_, py_positions_);
+            distances_array = nb::cast<nb::ndarray<LEMON_INT, nb::shape<-1>>>(distances_obj);
+            distances_ptr = static_cast<LEMON_INT*>(distances_array.data());
+            distribution_size = distances_array.shape(0);
+        }
+
+        bool advance() {
+            current_index++;
+            while (current_index < distribution_size) {
+                if (distances_ptr[current_index] <= max_dist) {
+                    return true;
+                }
+                ++current_index;
+            }
+            return false;
+        }
+        size_t get_index() const {
+            return current_index;
+        }
+        LEMON_INT get_distance() const {
+            return distances_ptr[current_index];
+        }
+    };
+
+    CloserThanIterator closer_than_iter(
+        const Point_t point,
+        const distance_fun_t& dist_fun,
+        LEMON_INT max_dist
+    ) const {
+        return CloserThanIterator(
+            py_positions,
+            point,
+            dist_fun,
+            max_dist
+        );
+    };
+
+    const nb::ndarray<nb::shape<-1, -1>>& py_get_positions() const {
         return py_positions;
     }
 
