@@ -1,6 +1,7 @@
 #include "distribution.hpp"
 #include "decompositable_graph.hpp"
 #include "graph_elements.hpp"
+#include "distances.hpp"
 
 
 int main()
@@ -25,17 +26,10 @@ int main()
         rng
     );
 
-    std::function<LEMON_INT(const VectorDistribution<2>::Point_t&,
-                            const VectorDistribution<2>::Point_t&)> dist_func =
-        [](const VectorDistribution<2>::Point_t& p1,
-           const VectorDistribution<2>::Point_t& p2) -> VectorDistribution<2>::intensity_type {
-            return static_cast<VectorDistribution<2>::intensity_type>(l1_distance<2, double>(p1, p2));
-        };
-
-    WassersteinNetwork<LEMON_INT, VectorDistribution<2>> wnet(
+    WassersteinNetwork<LEMON_INT> wnet(
         &dist,
         {&dist2, &dist3},
-        dist_func,
+        l1_distance<2, double>,
         10
     );
 
