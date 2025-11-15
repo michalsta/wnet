@@ -334,7 +334,7 @@ public:
     }
 };
 
-template <typename VALUE_TYPE, typename Distribution_t>
+template <typename VALUE_TYPE>
 class WassersteinNetwork {
     std::vector<FlowNode> nodes;
     std::vector<FlowEdge> edges;
@@ -347,6 +347,7 @@ class WassersteinNetwork {
     bool built = false;
 
 public:
+    template<typename Distribution_t>
     WassersteinNetwork(
     const Distribution_t* empirical_spectrum,
     const std::vector<Distribution_t*>& theoretical_spectra,
