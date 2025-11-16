@@ -164,9 +164,9 @@ public:
             if constexpr (std::is_same_v<T, MatchingEdge>) {
                 return std::nullopt; // Unlimited capacity
             } else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {
-                return std::get<EmpiricalNode>(this->get_end_node().get_type()).get_intensity();
+                return std::get<EmpiricalNode<intensity_type>>(this->get_end_node().get_type()).get_intensity();
             } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
-                return std::get<TheoreticalNode>(this->get_start_node().get_type()).get_intensity();
+                return std::get<TheoreticalNode<intensity_type>>(this->get_start_node().get_type()).get_intensity();
             } else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {
                 return std::nullopt; // Unlimited capacity
             } else {

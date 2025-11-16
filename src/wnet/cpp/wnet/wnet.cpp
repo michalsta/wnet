@@ -31,31 +31,31 @@ NB_MODULE(wnet_cpp, m) {
     }, "A simple hello world function for the WNet (C++) extension");
     // Bind the classes to the module
 
-    nb::class_<FlowNode>(m, "FlowNode")
+    nb::class_<FlowNode<int64_t>>(m, "FlowNode")
         .def(nb::init<LEMON_INDEX, SourceNode>())
         .def(nb::init<LEMON_INDEX, SinkNode>())
-        .def(nb::init<LEMON_INDEX, EmpiricalNode>())
-        .def(nb::init<LEMON_INDEX, TheoreticalNode>())
-        .def("get_id", &FlowNode::get_id)
-        .def("get_type", &FlowNode::get_type)
-        .def("layer", &FlowNode::layer)
-        .def("type_str", &FlowNode::type_str)
-        .def("__str__", &FlowNode::to_string);
+        .def(nb::init<LEMON_INDEX, EmpiricalNode<int64_t>>())
+        .def(nb::init<LEMON_INDEX, TheoreticalNode<int64_t>>())
+        .def("get_id", &FlowNode<int64_t>::get_id)
+        .def("get_type", &FlowNode<int64_t>::get_type)
+        .def("layer", &FlowNode<int64_t>::layer)
+        .def("type_str", &FlowNode<int64_t>::type_str)
+        .def("__str__", &FlowNode<int64_t>::to_string);
 
-    nb::class_<FlowEdge>(m, "FlowEdge")
-        .def(nb::init<LEMON_INDEX, const FlowNode&, const FlowNode&, FlowEdgeType>())
-        .def("get_id", &FlowEdge::get_id)
-        .def("get_start_node", &FlowEdge::get_start_node)
-        .def("get_end_node", &FlowEdge::get_end_node)
-        .def("get_start_node_id", &FlowEdge::get_start_node_id)
-        .def("get_end_node_id", &FlowEdge::get_end_node_id)
-        .def("get_type", &FlowEdge::get_type)
-        .def("get_cost", &FlowEdge::get_cost)
-        .def("get_base_capacity", &FlowEdge::get_base_capacity)
-        .def("to_string", &FlowEdge::to_string);
+    nb::class_<FlowEdge<int64_t>>(m, "FlowEdge")
+        .def(nb::init<LEMON_INDEX, const FlowNode<int64_t>&, const FlowNode<int64_t>&, FlowEdgeType>())
+        .def("get_id", &FlowEdge<int64_t>::get_id)
+        .def("get_start_node", &FlowEdge<int64_t>::get_start_node)
+        .def("get_end_node", &FlowEdge<int64_t>::get_end_node)
+        .def("get_start_node_id", &FlowEdge<int64_t>::get_start_node_id)
+        .def("get_end_node_id", &FlowEdge<int64_t>::get_end_node_id)
+        .def("get_type", &FlowEdge<int64_t>::get_type)
+        .def("get_cost", &FlowEdge<int64_t>::get_cost)
+        .def("get_base_capacity", &FlowEdge<int64_t>::get_base_capacity)
+        .def("to_string", &FlowEdge<int64_t>::to_string);
 
     nb::class_<WassersteinNetworkSubgraph<int64_t, int64_t>>(m, "CWassersteinNetworkSubgraph")
-        .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode>&, const std::vector<FlowEdge*>&, size_t>())
+        .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode<int64_t>>&, const std::vector<FlowEdge<int64_t>*>&, size_t>())
         .def("add_simple_trash", &WassersteinNetworkSubgraph<int64_t, int64_t>::add_simple_trash)
         .def("build", &WassersteinNetworkSubgraph<int64_t, int64_t>::build)
         .def("set_point", &WassersteinNetworkSubgraph<int64_t, int64_t>::set_point)
@@ -85,8 +85,8 @@ NB_MODULE(wnet_cpp, m) {
                                    vector_to_numpy<LEMON_INDEX>(theoretical_peak_indices),
                                    vector_to_numpy<int64_t>(flows));
         }, nb::rv_policy::move)
-        .def("count_empirical_nodes", &WassersteinNetwork<int64_t, int64_t>::count_nodes_of_type<EmpiricalNode>)
-        .def("count_theoretical_nodes", &WassersteinNetwork<int64_t, int64_t>::count_nodes_of_type<TheoreticalNode>)
+        .def("count_empirical_nodes", &WassersteinNetwork<int64_t, int64_t>::count_nodes_of_type<EmpiricalNode<int64_t>>)
+        .def("count_theoretical_nodes", &WassersteinNetwork<int64_t, int64_t>::count_nodes_of_type<TheoreticalNode<int64_t>>)
         .def("count_matching_edges", &WassersteinNetwork<int64_t, int64_t>::count_edges_of_type<MatchingEdge>)
         .def("count_theoretical_to_sink_edges", &WassersteinNetwork<int64_t,  int64_t>::count_edges_of_type<TheoreticalToSinkEdge>)
         .def("count_src_to_empirical_edges", &WassersteinNetwork<int64_t, int64_t>::count_edges_of_type<SrcToEmpiricalEdge>)

@@ -275,10 +275,10 @@ public:
             std::visit([&](const auto& arg) {
                 using T = std::decay_t<decltype(arg)>;
                 if constexpr (std::is_same_v<T, MatchingEdge>) {
-                    const auto& theoretical_node_type = std::get<TheoreticalNode>(edge.get_end_node().get_type());
+                    const auto& theoretical_node_type = std::get<TheoreticalNode<intensity_type>>(edge.get_end_node().get_type());
                     if(theoretical_node_type.get_spectrum_id() == spectrum_id)
                     {
-                        empirical_peak_indices.push_back(std::get<EmpiricalNode>(edge.get_start_node().get_type()).get_peak_index());
+                        empirical_peak_indices.push_back(std::get<EmpiricalNode<intensity_type>>(edge.get_start_node().get_type()).get_peak_index());
                         theoretical_peak_indices.push_back(theoretical_node_type.get_peak_index());
                         flows.push_back(flow);
                     }
@@ -644,7 +644,7 @@ public:
         const double nominator = count_edges_of_type<MatchingEdge>();
         double denominator = 0;
         for (const auto& flow_subgraph : flow_subgraphs)
-            denominator += flow_subgraph->template count_nodes_of_type<EmpiricalNode>() * flow_subgraph->template count_nodes_of_type<TheoreticalNode>();
+            denominator += flow_subgraph->template count_nodes_of_type<EmpiricalNode<intensity_type>>() * flow_subgraph->template count_nodes_of_type<TheoreticalNode<intensity_type>>();
         return nominator / denominator;
     }
 
