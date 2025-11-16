@@ -26,7 +26,7 @@ int main()
         rng
     );
 
-    WassersteinNetwork<LEMON_INT> wnet(
+    WassersteinNetwork<LEMON_INT, LEMON_INT> wnet(
         &dist,
         {&dist2, &dist3},
         l1_distance<2, double>,

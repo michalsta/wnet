@@ -38,6 +38,7 @@ public:
 
 using FlowNodeType = std::variant<SourceNode, SinkNode, EmpiricalNode, TheoreticalNode>;
 
+template<typename intensity_type>
 class FlowNode {
     const LEMON_INDEX id;
     const FlowNodeType type;
@@ -115,18 +116,19 @@ public:
 
 using FlowEdgeType = std::variant<MatchingEdge, SrcToEmpiricalEdge, TheoreticalToSinkEdge, SimpleTrashEdge>;
 
+template<typename intensity_type>
 class FlowEdge {
     const LEMON_INDEX id;
-    const FlowNode& start_node;
-    const FlowNode& end_node;
+    const FlowNode<intensity_type>& start_node;
+    const FlowNode<intensity_type>& end_node;
     const FlowEdgeType type;
 public:
     FlowEdge() = delete;
-    FlowEdge(LEMON_INDEX id, const FlowNode& start_node, const FlowNode& end_node, FlowEdgeType type)
+    FlowEdge(LEMON_INDEX id, const FlowNode<intensity_type>& start_node, const FlowNode<intensity_type>& end_node, FlowEdgeType type)
         : id(id), start_node(start_node), end_node(end_node), type(type) {}
     LEMON_INDEX get_id() const { return id; }
-    const FlowNode& get_start_node() const { return start_node; }
-    const FlowNode& get_end_node() const { return end_node; }
+    const FlowNode<intensity_type>& get_start_node() const { return start_node; }
+    const FlowNode<intensity_type>& get_end_node() const { return end_node; }
     LEMON_INDEX get_start_node_id() const { return start_node.get_id(); }
     LEMON_INDEX get_end_node_id() const { return end_node.get_id(); }
     const FlowEdgeType& get_type() const { return type; }
