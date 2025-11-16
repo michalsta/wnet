@@ -12,50 +12,54 @@
 
 class SourceNode {};
 class SinkNode {};
+
+template<typename intensity_type>
 class EmpiricalNode {
     const LEMON_INDEX peak_index;
-    const LEMON_INT intensity;
+    const intensity_type intensity;
 public:
     EmpiricalNode() = delete;
-    EmpiricalNode(LEMON_INDEX peak_index, LEMON_INT intensity)
+    EmpiricalNode(LEMON_INDEX peak_index, intensity_type intensity)
         : peak_index(peak_index), intensity(intensity) {}
     LEMON_INDEX get_peak_index() const { return peak_index; }
-    LEMON_INT get_intensity() const { return intensity; }
+    intensity_type get_intensity() const { return intensity; }
 };
 
+template<typename intensity_type>
 class TheoreticalNode {
     const size_t spectrum_id;
     const LEMON_INDEX peak_index;
-    const LEMON_INT intensity;
+    const intensity_type intensity;
 public:
     TheoreticalNode() = delete;
-    TheoreticalNode(size_t spectrum_id, LEMON_INDEX peak_index, LEMON_INT intensity)
+    TheoreticalNode(size_t spectrum_id, LEMON_INDEX peak_index, intensity_type intensity)
         : spectrum_id(spectrum_id), peak_index(peak_index), intensity(intensity) {}
     size_t get_spectrum_id() const { return spectrum_id; }
     LEMON_INDEX get_peak_index() const { return peak_index; }
-    LEMON_INT get_intensity() const { return intensity; }
+    intensity_type get_intensity() const { return intensity; }
 };
 
-using FlowNodeType = std::variant<SourceNode, SinkNode, EmpiricalNode, TheoreticalNode>;
+template<typename intensity_type>
+using FlowNodeType = std::variant<SourceNode, SinkNode, EmpiricalNode<intensity_type>, TheoreticalNode<intensity_type>>;
 
 template<typename intensity_type>
 class FlowNode {
     const LEMON_INDEX id;
-    const FlowNodeType type;
+    const FlowNodeType<intensity_type> type;
 public:
     FlowNode() = delete;
     FlowNode(LEMON_INDEX id, SourceNode n) : id(id), type(n) {};
     FlowNode(LEMON_INDEX id, SinkNode n) : id(id), type(n) {};
-    FlowNode(LEMON_INDEX id, EmpiricalNode n) : id(id), type(n) {};
-    FlowNode(LEMON_INDEX id, TheoreticalNode n) : id(id), type(n) {};
-    FlowNode(LEMON_INDEX id, FlowNodeType n) : id(id), type(n) {};
+    FlowNode(LEMON_INDEX id, EmpiricalNode<intensity_type> n) : id(id), type(n) {};
+    FlowNode(LEMON_INDEX id, TheoreticalNode<intensity_type> n) : id(id), type(n) {};
+    FlowNode(LEMON_INDEX id, FlowNodeType<intensity_type> n) : id(id), type(n) {};
     LEMON_INDEX get_id() const { return id; };
-    const FlowNodeType& get_type() const { return type; };
+    const FlowNodeType<intensity_type>& get_type() const { return type; };
     size_t layer() const {
         if (std::holds_alternative<SourceNode>(type)) return 0;
         if (std::holds_alternative<SinkNode>(type)) return 3;
-        if (std::holds_alternative<EmpiricalNode>(type)) return 1;
-        if (std::holds_alternative<TheoreticalNode>(type)) return 2;
+        if (std::holds_alternative<EmpiricalNode<intensity_type>>(type)) return 1;
+        if (std::holds_alternative<TheoreticalNode<intensity_type>>(type)) return 2;
         throw std::runtime_error("Invalid FlowNode type");
     };
 
@@ -66,9 +70,9 @@ public:
                 return "SourceNode";
             } else if constexpr (std::is_same_v<T, SinkNode>) {
                 return "SinkNode";
-            } else if constexpr (std::is_same_v<T, EmpiricalNode>) {
+            } else if constexpr (std::is_same_v<T, EmpiricalNode<intensity_type>>) {
                 return "EmpiricalNode";
-            } else if constexpr (std::is_same_v<T, TheoreticalNode>) {
+            } else if constexpr (std::is_same_v<T, TheoreticalNode<intensity_type>>) {
                 return "TheoreticalNode";
             }
         }, type);
@@ -80,9 +84,9 @@ public:
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, SourceNode>) { }
             else if constexpr (std::is_same_v<T, SinkNode>) { }
-            else if constexpr (std::is_same_v<T, EmpiricalNode>) {
+            else if constexpr (std::is_same_v<T, EmpiricalNode<intensity_type>>) {
                 result += ", peak_idx: " + std::to_string(arg.get_peak_index()) + ", intensity: " + std::to_string(arg.get_intensity());
-            } else if constexpr (std::is_same_v<T, TheoreticalNode>) {
+            } else if constexpr (std::is_same_v<T, TheoreticalNode<intensity_type>>) {
                 result += ", spectrum_id: " + std::to_string(arg.get_spectrum_id()) + ", peak_idx: " + std::to_string(arg.get_peak_index()) + ", intensity: " + std::to_string(arg.get_intensity());
             }
         }, type);
@@ -90,7 +94,6 @@ public:
         return result;
     };
 };
-
 
 
 class MatchingEdge
@@ -155,8 +158,8 @@ public:
         }, type);
     };
 
-    std::optional<LEMON_INT> get_base_capacity() const {
-        return std::visit([&](const auto& arg) -> std::optional<LEMON_INT> {
+    std::optional<intensity_type> get_base_capacity() const {
+        return std::visit([&](const auto& arg) -> std::optional<intensity_type> {
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, MatchingEdge>) {
                 return std::nullopt; // Unlimited capacity

@@ -29,8 +29,8 @@ class WassersteinNetworkSubgraph {
     lemon::StaticDigraph::ArcMap<VALUE_TYPE> costs_map;
     std::optional<lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> solver;
     LEMON_INDEX simple_trash_idx;
-    intensity_type empirical_intensity;
-    intensity_type theoretical_intensity;
+    VALUE_TYPE lemon_empirical_intensity;
+    VALUE_TYPE lemon_theoretical_intensity;
     const size_t no_target_distributions;
 
 public:
@@ -46,8 +46,8 @@ public:
         costs_map(lemon_graph),
         solver(),
         simple_trash_idx(std::numeric_limits<LEMON_INDEX>::max()),
-        empirical_intensity(0),
-        theoretical_intensity(0),
+        lemon_empirical_intensity(0),
+        lemon_theoretical_intensity(0),
         no_target_distributions(no_target_distributions_)
     {
         nodes.reserve(subgraph_node_ids.size()+2);
@@ -61,10 +61,10 @@ public:
         for (const auto& node_id : subgraph_node_ids)
         {
             node_id_map[node_id] = nodes.size();
-            const FlowNodeType& node_type = all_nodes[node_id].get_type();
+            const FlowNodeType<intensity_type>& node_type = all_nodes[node_id].get_type();
             nodes.push_back(FlowNode<intensity_type>(nodes.size(), node_type));
             auto& new_node = nodes.back();
-            if(std::holds_alternative<EmpiricalNode>(node_type))
+            if(std::holds_alternative<EmpiricalNode<intensity_type>>(node_type))
             {
                 edges.emplace_back(
                     edges.size(),
@@ -73,7 +73,7 @@ public:
                     SrcToEmpiricalEdge()
                 );
             }
-            else if(std::holds_alternative<TheoreticalNode>(node_type))
+            else if(std::holds_alternative<TheoreticalNode<intensity_type>>(node_type))
             {
                 edges.emplace_back(
                     edges.size(),
@@ -147,9 +147,9 @@ public:
                     using T = std::decay_t<decltype(arg)>;
                     if constexpr (std::is_same_v<T, MatchingEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {
-                        VALUE_TYPE intensity = (VALUE_TYPE) std::get<EmpiricalNode>(edges[ii].get_end_node().get_type()).get_intensity();
-                        empirical_intensity += intensity;
-                        return intensity;
+                        VALUE_TYPE lemon_intensity = std::get<EmpiricalNode<intensity_type>>(edges[ii].get_end_node().get_type()).get_intensity();
+                        lemon_empirical_intensity += lemon_intensity;
+                        return lemon_intensity;
                     }
                     else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SimpleTrashEdge>) return (VALUE_TYPE) 0;
@@ -163,38 +163,38 @@ public:
     void set_point(const std::vector<double>& point) {
         if(point.size() != no_target_distributions)
             throw std::runtime_error("Point dimension: " + std::to_string(point.size()) + " does not match number of target distributions: " + std::to_string(no_target_distributions));
-        theoretical_intensity = 0;
+        lemon_theoretical_intensity = 0;
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
         {
             const FlowEdge<intensity_type>& edge = edges[ii];
             std::visit([&](const auto& arg) {
                 using T = std::decay_t<decltype(arg)>;
                 if constexpr (std::is_same_v<T, MatchingEdge>) {
-                    const auto& theoretical_node_type = std::get<TheoreticalNode>(edge.get_end_node().get_type());
+                    const auto& theoretical_node_type = std::get<TheoreticalNode<intensity_type>>(edge.get_end_node().get_type());
                     capacities_map[lemon_graph.arcFromId(ii)] = (VALUE_TYPE) std::min<double>(
                         theoretical_node_type.get_intensity() * point[theoretical_node_type.get_spectrum_id()],
-                        std::get<EmpiricalNode>(edge.get_start_node().get_type()).get_intensity());
+                        std::get<EmpiricalNode<intensity_type>>(edge.get_start_node().get_type()).get_intensity());
                     }
                 else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
-                    const auto& theoretical_node_type = std::get<TheoreticalNode>(edge.get_start_node().get_type());
-                    VALUE_TYPE intensity = (VALUE_TYPE) (theoretical_node_type.get_intensity() * point[theoretical_node_type.get_spectrum_id()]);
+                    const auto& theoretical_node_type = std::get<TheoreticalNode<intensity_type>>(edge.get_start_node().get_type());
+                    VALUE_TYPE lemon_intensity = (VALUE_TYPE) (theoretical_node_type.get_intensity() * point[theoretical_node_type.get_spectrum_id()]);
                     lemon_graph.arcFromId(ii);
-                    capacities_map[lemon_graph.arcFromId(ii)] = intensity;
-                    theoretical_intensity += intensity;
+                    capacities_map[lemon_graph.arcFromId(ii)] = lemon_intensity;
+                    lemon_theoretical_intensity += lemon_intensity;
                 }
                 else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {}
                 else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {}
                 else { throw std::runtime_error("Invalid FlowEdgeType"); };
             }, edge.get_type());
         }
-        const VALUE_TYPE total_flow = std::max<VALUE_TYPE>(empirical_intensity, theoretical_intensity);
+        const VALUE_TYPE lemon_total_flow = std::max<VALUE_TYPE>(lemon_empirical_intensity, lemon_theoretical_intensity);
         if(simple_trash_idx != std::numeric_limits<LEMON_INDEX>::max())
         {
-            capacities_map[lemon_graph.arcFromId(simple_trash_idx)] = total_flow;
+            capacities_map[lemon_graph.arcFromId(simple_trash_idx)] = lemon_total_flow;
             costs_map[lemon_graph.arcFromId(simple_trash_idx)] = std::get<SimpleTrashEdge>(edges[simple_trash_idx].get_type()).get_cost();
         }
-        node_supply_map[lemon_graph.nodeFromId(0)] = total_flow;
-        node_supply_map[lemon_graph.nodeFromId(1)] = -total_flow;
+        node_supply_map[lemon_graph.nodeFromId(0)] = lemon_total_flow;
+        node_supply_map[lemon_graph.nodeFromId(1)] = -lemon_total_flow;
         solver.emplace(lemon_graph);
         solver->upperMap(capacities_map);
         solver->costMap(costs_map);
