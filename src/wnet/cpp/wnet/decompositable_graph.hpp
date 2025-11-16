@@ -19,7 +19,7 @@
 #include <iostream>
 
 
-template <typename VALUE_TYPE>
+template <typename VALUE_TYPE, typename intensity_type>
 class WassersteinNetworkSubgraph {
     std::vector<FlowNode> nodes;
     std::vector<FlowEdge> edges;
@@ -29,8 +29,8 @@ class WassersteinNetworkSubgraph {
     lemon::StaticDigraph::ArcMap<VALUE_TYPE> costs_map;
     std::optional<lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> solver;
     LEMON_INDEX simple_trash_idx;
-    VALUE_TYPE empirical_intensity;
-    VALUE_TYPE theoretical_intensity;
+    intensity_type empirical_intensity;
+    intensity_type theoretical_intensity;
     const size_t no_target_distributions;
 
 public:
@@ -334,7 +334,7 @@ public:
     }
 };
 
-template <typename VALUE_TYPE>
+template <typename VALUE_TYPE, typename intensity_type>
 class WassersteinNetwork {
     std::vector<FlowNode> nodes;
     std::vector<FlowEdge> edges;
@@ -342,7 +342,7 @@ class WassersteinNetwork {
     const size_t _no_theoretical_spectra;
 
     std::vector<LEMON_INDEX> dead_end_node_ids;
-    std::vector<std::unique_ptr<WassersteinNetworkSubgraph<VALUE_TYPE>>> flow_subgraphs;
+    std::vector<std::unique_ptr<WassersteinNetworkSubgraph<VALUE_TYPE, intensity_type>>> flow_subgraphs;
 
     bool built = false;
 
@@ -356,6 +356,8 @@ public:
     ) :
     _no_theoretical_spectra(theoretical_spectra.size())
     {
+        static_assert(std::is_same_v<typename Distribution_t::intensity_type, intensity_type>,
+                      "intensity_type does not match the intensity_type of the provided Distribution_t");
         {
             size_t no_nodes = 2 + empirical_spectrum->size();
             for (auto& ts : theoretical_spectra)
@@ -535,7 +537,7 @@ public:
             #ifdef DO_TONS_OF_PRINTS
             std::cout << "Subgraph" << std::endl;
             #endif
-            flow_subgraphs.emplace_back(std::make_unique<WassersteinNetworkSubgraph<VALUE_TYPE>>(
+            flow_subgraphs.emplace_back(std::make_unique<WassersteinNetworkSubgraph<VALUE_TYPE, intensity_type>>(
                     _subgraphs[subgraph_idx],
                     nodes,
                     subgraph_edges[subgraph_idx],
@@ -580,7 +582,7 @@ public:
         return flow_subgraphs.size();
     };
 
-    const WassersteinNetworkSubgraph<VALUE_TYPE>& get_subgraph(size_t idx) const {
+    const WassersteinNetworkSubgraph<VALUE_TYPE, intensity_type>& get_subgraph(size_t idx) const {
         if (idx >= flow_subgraphs.size())
             throw std::out_of_range("Subgraph index out of range");
         return *flow_subgraphs[idx];

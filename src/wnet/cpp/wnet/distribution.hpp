@@ -197,6 +197,7 @@ class Distribution {
     const nb::ndarray<nb::shape<-1, -1>> py_positions;
     const nb::ndarray<intensity_type_, nb::shape<-1>> py_intensities;
 public:
+    using intensity_type = intensity_type_;
     using Point_t = std::pair<const nb::ndarray<nb::shape<-1, -1>>*, size_t>;
     using distance_fun_t = nb::callable;
     const std::span<const intensity_type_> intensities;
