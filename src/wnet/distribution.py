@@ -40,6 +40,12 @@ class Distribution(CDistribution):
             label (str | None): Optional label for the distribution.
         """
         super().__init__(positions, intensities.astype(np.int64, copy=False))
+        dimension = positions.shape[0]
+        if dimension < 1 or dimension > 20:
+            raise ValueError(f"Unsupported dimension: {dimension}. Must be between 1 and 20.")
+        cfun = globals()[f"CVectorDistribution{dimension}"]
+
+        self.vecdist = cfun(positions.astype(np.float64), intensities.astype(np.int64))
         self.label = label
 
     def scaled(self, scale_factor: float) -> "Distribution":

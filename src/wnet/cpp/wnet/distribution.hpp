@@ -14,11 +14,16 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/tuple.h>
+#include "misc.hpp"
 namespace nb = nanobind;
 #endif // INCLUDE_NANOBIND_STUFF
 
 #include "pylmcf/basics.hpp"
-//#include "py_support.h"
+#include "py_support.hpp"
+
+template<typename intensity_type_>
+class Distribution;
+
 
 template<size_t DIM, typename position_type_ = double, typename intensity_type_ = LEMON_INT>
 class VectorDistribution {
@@ -51,25 +56,40 @@ public:
     }
 
     #if defined(INCLUDE_NANOBIND_STUFF)
-    VectorDistribution(const nb::ndarray<double, nb::shape<DIM, -1>>& positions_arg, const nb::ndarray<LEMON_INT, nb::shape<-1>>& intensities_arg)
+    VectorDistribution(const nb::ndarray<position_type_, nb::shape<DIM, -1>>& positions_arg, const nb::ndarray<intensity_type_, nb::shape<-1>>& intensities_arg) :
+        positions(numpy_to_vector_of_arrays<position_type_ , DIM>(positions_arg)),
+        intensities_vector(numpy_to_vector<intensity_type_>(intensities_arg)),
+        intensities(intensities_vector)
     {
-        if (positions_arg.shape(1) != intensities_arg.shape(0)) {
+        if (positions.size() != intensities_vector.size()) {
             throw std::invalid_argument("Positions and intensities must have the same size");
         }
-        if (positions_arg.shape(0) != DIM) {
-            throw std::invalid_argument("Positions dimension does not match template parameter DIM");
-        }
-        const size_t no_points = intensities_arg.shape(0);
-        this->positions.reserve(no_points);
-        this->intensities_vector.reserve(no_points);
-        for (size_t ii = 0; ii < no_points; ++ii) {
-            positions.emplace_back();
-            for (size_t d = 0; d < DIM; ++d) {
-                this->positions.back()[d] = positions_arg(ii, d);
-            }
-            this->intensities_vector.push_back(intensities_arg(ii));
+    }
+
+    VectorDistribution(const nb::ndarray<position_type_, nb::shape<-1, -1>>& positions_arg, const nb::ndarray<intensity_type_, nb::shape<-1>>& intensities_arg) :
+        positions(numpy_to_vector_of_arrays<position_type_ , DIM>(positions_arg)),
+        intensities_vector(numpy_to_vector<intensity_type_>(intensities_arg)),
+        intensities(intensities_vector)
+    {
+        if (positions.size() != intensities_vector.size()) {
+            throw std::invalid_argument("Positions and intensities must have the same size");
         }
     }
+
+
+    VectorDistribution(const Distribution<intensity_type_>& dist)
+    : VectorDistribution(
+        dist.get_positions(),
+        dist.get_intensities()
+    ) {};
+
+    nb::ndarray<nb::numpy, position_type_, nb::shape<DIM, -1>> py_get_positions() const {
+        return vector_of_arrays_to_numpy<position_type_, DIM>(positions);
+    }
+    nb::ndarray<nb::numpy, intensity_type_, nb::shape<-1>> py_get_intensities() const {
+        return span_to_numpy<intensity_type_>(intensities);
+    }
+
     #endif // INCLUDE_NANOBIND_STUFF
 
 

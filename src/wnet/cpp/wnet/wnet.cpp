@@ -15,11 +15,12 @@
 #define EXPOSE_VECTOR_DISTRIBUTION(DIM) \
     using VectorDistribution_##DIM = VectorDistribution<DIM, double, LEMON_INT>; \
     nb::class_<VectorDistribution_##DIM>(m, "CVectorDistribution" #DIM) \
-        .def(nb::init<const std::vector<std::array<double, DIM>>&, const std::vector<LEMON_INT>&>()) \
-        .def(nb::init<std::vector<std::array<double, DIM>>&&,  std::vector<LEMON_INT>&&>()) \
+        /*.def(nb::init<const std::vector<std::array<double, DIM>>&, const std::vector<LEMON_INT>&>()) \
+        .def(nb::init<std::vector<std::array<double, DIM>>&&,  std::vector<LEMON_INT>&&>()) */ \
+        .def(nb::init<const nb::ndarray<double, nb::shape<DIM, -1>>&, const nb::ndarray<LEMON_INT, nb::shape<-1>>&>()) \
         .def("size", &VectorDistribution_##DIM::size) \
-        .def("get_positions", &VectorDistribution_##DIM::get_positions) \
-        .def("get_intensities", &VectorDistribution_##DIM::get_intensities) \
+        .def("py_get_positions", &VectorDistribution_##DIM::py_get_positions) \
+        .def("py_get_intensities", &VectorDistribution_##DIM::py_get_intensities) \
         .def("get_point", &VectorDistribution_##DIM::get_point) \
         .def("closer_than", &VectorDistribution_##DIM::closer_than) \
         .def("__len__", &VectorDistribution_##DIM::size);
@@ -67,8 +68,31 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_nodes", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_nodes)
         .def("get_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_edges);
 
+        #define FROM_VECTOR_DISTRIBUTION(DIM) \
+            .def(nb::init<const VectorDistribution<DIM, double, LEMON_INT>*, const std::vector<VectorDistribution<DIM, double, LEMON_INT>*>&, LEMON_INT>())
+
     nb::class_<WassersteinNetwork<int64_t, int64_t>>(m, "CWassersteinNetwork")
         .def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
+        FROM_VECTOR_DISTRIBUTION(1)
+        FROM_VECTOR_DISTRIBUTION(2)
+        FROM_VECTOR_DISTRIBUTION(3)
+        FROM_VECTOR_DISTRIBUTION(4)
+        FROM_VECTOR_DISTRIBUTION(5)
+        FROM_VECTOR_DISTRIBUTION(6)
+        FROM_VECTOR_DISTRIBUTION(7)
+        FROM_VECTOR_DISTRIBUTION(8)
+        FROM_VECTOR_DISTRIBUTION(9)
+        FROM_VECTOR_DISTRIBUTION(10)
+        FROM_VECTOR_DISTRIBUTION(11)
+        FROM_VECTOR_DISTRIBUTION(12)
+        FROM_VECTOR_DISTRIBUTION(13)
+        FROM_VECTOR_DISTRIBUTION(14)
+        FROM_VECTOR_DISTRIBUTION(15)
+        FROM_VECTOR_DISTRIBUTION(16)
+        FROM_VECTOR_DISTRIBUTION(17)
+        FROM_VECTOR_DISTRIBUTION(18)
+        FROM_VECTOR_DISTRIBUTION(19)
+        FROM_VECTOR_DISTRIBUTION(20)
         .def("add_simple_trash", &WassersteinNetwork<int64_t, int64_t>::add_simple_trash)
         .def("build", &WassersteinNetwork<int64_t, int64_t>::build)
         .def("solve", nb::overload_cast<>(&WassersteinNetwork<int64_t, int64_t>::solve))
@@ -131,5 +155,13 @@ NB_MODULE(wnet_cpp, m) {
     EXPOSE_VECTOR_DISTRIBUTION(18)
     EXPOSE_VECTOR_DISTRIBUTION(19)
     EXPOSE_VECTOR_DISTRIBUTION(20)
-
+/*
+    m.def("WnetViaVectorDistribution", [](
+        const Distribution<LEMON_INT>* empirical_dist,
+        const std::vector<Distribution<LEMON_INT>*>& theoretical_dists,
+        LEMON_INT max_distance)
+    {
+        VectorDistribution<2, double, LEMON_INT> empirical_vec_dist(*empirical_dist);
+    }
+);*/
 }

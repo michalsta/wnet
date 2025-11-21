@@ -31,4 +31,34 @@ nb::ndarray<nb::numpy, T, nb::ndim<1>> vector_to_numpy(const std::vector<T>& vec
     );
 }
 
+template<typename T, size_t DIM>
+nb::ndarray<nb::numpy, T, nb::shape<DIM, -1>> vector_of_arrays_to_numpy(const std::vector<std::array<T, DIM>>& vec) {
+    // Create a 2D NumPy array from the vector of arrays
+    T* data = new T[vec.size() * DIM];
+    for (size_t i = 0; i < vec.size(); ++i) {
+        std::memcpy(data + i * DIM, vec[i].data(), DIM * sizeof(T));
+    }
+    nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+    return nb::ndarray<nb::numpy, T, nb::shape<DIM, -1>>(
+        data,
+        { DIM, vec.size() },
+        owner
+    );
+}
+
+template<typename T>
+nb::ndarray<nb::numpy, T, nb::shape<-1>> span_to_numpy(const std::span<const T>& span)
+{
+    // Create a 1D NumPy array from the span
+    T* data = new T[span.size()];
+    std::memcpy(data, span.data(), span.size() * sizeof(T));
+    nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+    return nb::ndarray<nb::numpy, T, nb::shape<-1>>(
+        data,
+        { span.size() },
+        owner
+    );
+}
+
+
 #endif // WNET_MISC_HPP

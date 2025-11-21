@@ -29,7 +29,7 @@ class WassersteinNetwork(CWassersteinNetwork):
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
         super().__init__(
-            base_distribution, target_distributions, distance, max_distance
+            base_distribution.vecdist, [t.vecdist for t in target_distributions], max_distance
         )
 
     def subgraphs(self) -> list["SubgraphWrapper"]:

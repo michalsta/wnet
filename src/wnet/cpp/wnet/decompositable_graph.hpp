@@ -15,6 +15,7 @@
 //#include "pylmcf/py_support.h"
 #include "graph_elements.hpp"
 #include "distribution.hpp"
+#include "distances.hpp"
 
 #include <iostream>
 
@@ -414,6 +415,16 @@ public:
         }
         build_subgraphs();
     };
+
+    template<size_t DIM>
+    WassersteinNetwork(
+        const VectorDistribution<DIM, double, intensity_type>* empirical_spectrum,
+        const std::vector<VectorDistribution<DIM, double, intensity_type>*>& theoretical_spectra,
+        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
+    ) :
+    WassersteinNetwork(empirical_spectrum, theoretical_spectra, l2_distance<DIM, double>, max_dist)
+    {}
+
 
     WassersteinNetwork(const WassersteinNetwork&) = delete;
     WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
