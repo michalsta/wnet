@@ -118,8 +118,6 @@ class Distribution:
         """
         min_coords = np.min(self.positions, axis=1)
         max_coords = np.max(self.positions, axis=1)
-        print("Bounding box min:", min_coords)
-        print("Bounding box max:", max_coords)
         return min_coords, max_coords
 
 def Distribution_1D(
