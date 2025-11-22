@@ -5,7 +5,7 @@ import numpy as np
 from wnet.wnet_cpp import *
 
 
-class Distribution(CDistribution):
+class Distribution:
     """
     Distribution represents a collection of points and their associated intensities. Meant to be immutable.
     Inherits from:
@@ -39,7 +39,9 @@ class Distribution(CDistribution):
             intensities (np.ndarray): Array of intensities corresponding to each position.
             label (str | None): Optional label for the distribution.
         """
-        super().__init__(positions, intensities.astype(np.int64, copy=False))
+        #super().__init__(positions, intensities.astype(np.int64, copy=False))
+        self.positions = positions
+        self.intensities = intensities
         dimension = positions.shape[0]
         if dimension < 1 or dimension > 20:
             raise ValueError(f"Unsupported dimension: {dimension}. Must be between 1 and 20.")
@@ -74,8 +76,8 @@ class Distribution(CDistribution):
         Returns:
             Distribution: A new Distribution instance with scaled positions and intensities.
         """
-        new_positions = self.positions * scale_factor
-        new_intensities = self.intensities * scale_factor
+        new_positions = self.positions.astype(np.float64, copy=False) * scale_factor
+        new_intensities = self.intensities.astype(np.float64, copy=False) * scale_factor
         return Distribution(new_positions, new_intensities, label=self.label)
 
     def normalized(self) -> "Distribution":
@@ -93,14 +95,6 @@ class Distribution(CDistribution):
         new_positions = self.positions
         new_intensities = self.intensities / total_intensity
         return Distribution(new_positions, new_intensities, label=self.label)
-
-    @property
-    def positions(self) -> np.ndarray:
-        return self.get_positions()
-
-    @property
-    def intensities(self) -> np.ndarray:
-        return self.get_intensities()
 
     @cached_property
     def sum_intensities(self) -> float:
