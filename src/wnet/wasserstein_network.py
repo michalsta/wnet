@@ -37,6 +37,7 @@ class WassersteinNetwork:
         self.total_cost = self.wnet.total_cost
         self.get_subgraph = self.wnet.get_subgraph
         self.no_subgraphs = self.wnet.no_subgraphs
+        self.flows_for_target = self.wnet.flows_for_target
 
     def subgraphs(self) -> list["SubgraphWrapper"]:
         """
