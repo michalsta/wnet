@@ -222,7 +222,8 @@ public:
                       std::to_string(lemon_graph.id(lemon_graph.target(lemon_graph.arcFromId(ii)))) + " cost: " +
                       std::to_string(costs_map[lemon_graph.arcFromId(ii)]) + " capacity: " +
                       std::to_string(capacities_map[lemon_graph.arcFromId(ii)]) + " flow: " +
-                      std::to_string(solver->flow(lemon_graph.arcFromId(ii))) + "\n";
+                      (solver.has_value() ?
+                      std::to_string(solver->flow(lemon_graph.arcFromId(ii))) + "\n" :  "not yet computed\n");
         }
         return result;
     };
