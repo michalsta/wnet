@@ -22,8 +22,8 @@
         .def("py_get_positions", &VectorDistribution_##DIM::py_get_positions) \
         .def("py_get_intensities", &VectorDistribution_##DIM::py_get_intensities) \
         .def("get_point", &VectorDistribution_##DIM::get_point) \
-        .def("closer_than", &VectorDistribution_##DIM::closer_than) \
         .def("__len__", &VectorDistribution_##DIM::size);
+        //.def("closer_than", &VectorDistribution_##DIM::closer_than)
 
 NB_MODULE(wnet_cpp, m) {
     m.doc() = "WNet C++ imlementation module";
@@ -73,7 +73,7 @@ NB_MODULE(wnet_cpp, m) {
             //.def_static("from_vector_distribution_" #DIM, &WassersteinNetwork<int64_t, int64_t>::from_vector_distribution<DIM>)
 
     nb::class_<WassersteinNetwork<int64_t, int64_t>>(m, "CWassersteinNetwork")
-        .def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
+        //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
         FROM_VECTOR_DISTRIBUTION(1)
         FROM_VECTOR_DISTRIBUTION(2)
         FROM_VECTOR_DISTRIBUTION(3)
@@ -128,7 +128,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_positions", &Distribution<LEMON_INT>::get_positions)
         .def("get_intensities", &Distribution<LEMON_INT>::get_intensities)
         .def("get_point", &Distribution<LEMON_INT>::get_point)
-        .def("closer_than", &Distribution<LEMON_INT>::closer_than)
+        //.def("closer_than", &Distribution<LEMON_INT>::closer_than)
         .def("__len__", &Distribution<LEMON_INT>::size);
 
     nb::class_<Distribution<LEMON_INT>::Point_t>(m, "DistributionPoint")

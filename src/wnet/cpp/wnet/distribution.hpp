@@ -20,6 +20,7 @@ namespace nb = nanobind;
 
 #include "pylmcf/basics.hpp"
 #include "py_support.hpp"
+#include "distances.hpp"
 
 template<typename intensity_type_>
 class Distribution;
@@ -33,7 +34,7 @@ public:
     using intensity_type = intensity_type_;
     using position_type = position_type_;
     using Point_t = std::array<position_type, DIM>;
-    using distance_fun_t = std::function<intensity_type(const Point_t&, const Point_t&)>;
+    // using distance_fun_t = std::function<intensity_type(const Point_t&, const Point_t&)>;
 
     const std::span<const intensity_type> intensities;
 
@@ -110,9 +111,9 @@ public:
         return intensities_vector;
     }
 
-    std::pair<std::vector<size_t>, std::vector<intensity_type>> closer_than(
+    /* std::pair<std::vector<size_t>, std::vector<intensity_type>> closer_than(
         const Point_t& point,
-        const distance_fun_t dist_fun,
+        const DistanceMetric dist_fun,
         intensity_type max_dist
     ) const
     {
@@ -127,12 +128,12 @@ public:
             }
         }
         return {indices, distances};
-    }
+    }*/
 
     class CloserThanIterator {
         const VectorDistribution<DIM, position_type, intensity_type>& distribution;
         const Point_t& point;
-        const distance_fun_t& dist_fun;
+        const DistanceMetric dist_fun;
         intensity_type max_dist;
         size_t current_index;
         intensity_type current_distance;
@@ -141,7 +142,7 @@ public:
         CloserThanIterator(
             const VectorDistribution<DIM, position_type, intensity_type>& distribution_,
             const Point_t& point_,
-            const distance_fun_t& dist_fun_,
+            const DistanceMetric dist_fun_,
             intensity_type max_dist_
         ) : distribution(distribution_),
             point(point_),
@@ -152,7 +153,15 @@ public:
         inline bool advance() {
             current_index++;
             while (current_index < distribution.size()) {
-                current_distance = dist_fun(point, distribution.get_point(current_index));
+                if(dist_fun == DistanceMetric::L1) {
+                    current_distance = l1_distance<DIM, position_type>(point, distribution.get_point(current_index));
+                } else if(dist_fun == DistanceMetric::L2) {
+                    current_distance = l2_distance<DIM, position_type>(point, distribution.get_point(current_index));
+                } else if(dist_fun == DistanceMetric::LINF) {
+                    current_distance = linf_distance<DIM, position_type>(point, distribution.get_point(current_index));
+                } else {
+                    throw std::runtime_error("Unsupported distance metric.");
+                }
                 if (current_distance <= max_dist) {
                     return true;
                 }
@@ -170,7 +179,7 @@ public:
 
     CloserThanIterator closer_than_iter(
         const Point_t& point,
-        const distance_fun_t& dist_fun,
+        const DistanceMetric dist_fun,
         intensity_type max_dist
     ) const {
         return CloserThanIterator(

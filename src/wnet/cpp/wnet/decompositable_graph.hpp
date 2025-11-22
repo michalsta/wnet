@@ -354,7 +354,7 @@ public:
     WassersteinNetwork(
     const Distribution_t* empirical_spectrum,
     const std::vector<Distribution_t*>& theoretical_spectra,
-    const Distribution_t::distance_fun_t dist_fun,
+    DistanceMetric dist_fun,
     VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
     ) :
     _no_theoretical_spectra(theoretical_spectra.size())
@@ -418,20 +418,20 @@ public:
         build_subgraphs();
     };
 
-    template<size_t DIM>
-    WassersteinNetwork(
-        const VectorDistribution<DIM, double, intensity_type>* empirical_spectrum,
-        const std::vector<VectorDistribution<DIM, double, intensity_type>*>& theoretical_spectra,
-        DistanceMetric distance_metric,
-        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
-    ) :
-    WassersteinNetwork(from_vector_distribution<DIM>(
-        empirical_spectrum,
-        theoretical_spectra,
-        distance_metric,
-        max_dist
-    ))
-    {}
+    // template<size_t DIM>
+    // WassersteinNetwork(
+    //     const VectorDistribution<DIM, double, intensity_type>* empirical_spectrum,
+    //     const std::vector<VectorDistribution<DIM, double, intensity_type>*>& theoretical_spectra,
+    //     DistanceMetric distance_metric,
+    //     VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
+    // ) :
+    // WassersteinNetwork(from_vector_distribution<DIM>(
+    //     empirical_spectrum,
+    //     theoretical_spectra,
+    //     distance_metric,
+    //     max_dist
+    // ))
+    // {}
 
     template<size_t DIM>
     static WassersteinNetwork from_vector_distribution(
@@ -440,16 +440,22 @@ public:
         DistanceMetric distance_metric,
         VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
     ) {
-        switch (distance_metric) {
-            case DistanceMetric::L1:
-                return WassersteinNetwork(empirical_spectrum, theoretical_spectra, l1_distance<DIM, double>, max_dist);
-            case DistanceMetric::L2:
-                return WassersteinNetwork(empirical_spectrum, theoretical_spectra, l2_distance<DIM, double>, max_dist);
-            case DistanceMetric::LINF:
-                return WassersteinNetwork(empirical_spectrum, theoretical_spectra, linf_distance<DIM, double>, max_dist);
-            default:
-                throw std::runtime_error("Unsupported distance metric.");
-        }
+        return WassersteinNetwork(
+            empirical_spectrum,
+            theoretical_spectra,
+            distance_metric,
+            max_dist
+        );
+        // switch (distance_metric) {
+        //     case DistanceMetric::L1:
+        //         return WassersteinNetwork<l1_distance<DIM, double>>(empirical_spectrum, theoretical_spectra, max_dist);
+        //     case DistanceMetric::L2:
+        //         return WassersteinNetwork<l2_distance<DIM, double>>(empirical_spectrum, theoretical_spectra, max_dist);
+        //     case DistanceMetric::LINF:
+        //         return WassersteinNetwork<linf_distance<DIM, double>>(empirical_spectrum, theoretical_spectra, max_dist);
+        //     default:
+        //         throw std::runtime_error("Unsupported distance metric.");
+        // }
     }
 
     WassersteinNetwork(const WassersteinNetwork&) = delete;
