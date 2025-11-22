@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 
+
 template<size_t DIM, typename position_type = double>
 inline double l1_distance(
     const std::array<position_type, DIM>& p1,
@@ -55,5 +56,11 @@ inline double linf_distance(
         }(std::make_index_sequence<DIM>{});
     }
 }
+
+enum class DistanceMetric {
+    L1,
+    L2,
+    LINF
+};
 
 #endif // WNET_DISTANCES_HPP

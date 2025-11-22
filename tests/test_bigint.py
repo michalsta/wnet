@@ -1,6 +1,7 @@
 import numpy as np
 
 from wnet import WassersteinNetwork, Distribution_1D
+from wnet.distances import DistanceMetric
 
 
 def test_scale():
@@ -13,17 +14,10 @@ def test_scale():
             scale_factor
         )
         print(empirical_spectrum)
-        dist_fun = lambda x, y: np.linalg.norm(x - y, axis=0)
         max_distance = 10
 
-        def wrapped_dist(p, y):
-            print(p, p.index, p.positions)
-            i = p.index
-            x = p.positions[:, i : i + 1]
-            return dist_fun(x[: np.newaxis], y)
-
         DG = WassersteinNetwork(
-            empirical_spectrum, [theoretical_spectrum], wrapped_dist, max_distance
+            empirical_spectrum, [theoretical_spectrum], DistanceMetric.L2, max_distance
         )
         DG.add_simple_trash(10)
         DG.build()

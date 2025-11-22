@@ -69,7 +69,8 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_edges);
 
         #define FROM_VECTOR_DISTRIBUTION(DIM) \
-            .def(nb::init<const VectorDistribution<DIM, double, LEMON_INT>*, const std::vector<VectorDistribution<DIM, double, LEMON_INT>*>&, LEMON_INT>())
+            .def(nb::init<const VectorDistribution<DIM, double, LEMON_INT>*, const std::vector<VectorDistribution<DIM, double, LEMON_INT>*>&, DistanceMetric, LEMON_INT>())
+            //.def_static("from_vector_distribution_" #DIM, &WassersteinNetwork<int64_t, int64_t>::from_vector_distribution<DIM>)
 
     nb::class_<WassersteinNetwork<int64_t, int64_t>>(m, "CWassersteinNetwork")
         .def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
@@ -164,4 +165,8 @@ NB_MODULE(wnet_cpp, m) {
         VectorDistribution<2, double, LEMON_INT> empirical_vec_dist(*empirical_dist);
     }
 );*/
+    nb::enum_<DistanceMetric>(m, "DistanceMetric")
+        .value("L1", DistanceMetric::L1)
+        .value("L2", DistanceMetric::L2)
+        .value("LINF", DistanceMetric::LINF);
 }

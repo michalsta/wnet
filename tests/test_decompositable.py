@@ -1,7 +1,7 @@
 import numpy as np
 
 from wnet import WassersteinNetwork, Distribution
-from wnet.distances import wrap_distance_function
+from wnet.distances import DistanceMetric
 
 
 def test_simple():
@@ -12,7 +12,7 @@ def test_simple():
     G = WassersteinNetwork(
         S1,
         [S2, S3],
-        wrap_distance_function(lambda x, y: np.linalg.norm(x - y, axis=0)),
+        DistanceMetric.L2,
         5,
     )
     # G.show()

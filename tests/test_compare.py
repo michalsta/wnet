@@ -1,7 +1,7 @@
 import numpy as np
 
 from wnet import Distribution, WassersteinNetwork
-from wnet.distances import wrap_distance_function
+from wnet.distances import DistanceMetric
 
 
 def compare(E, T, trash_cost, fractions=None):
@@ -15,7 +15,7 @@ def compare(E, T, trash_cost, fractions=None):
     decomp_solver = WassersteinNetwork(
         E,
         T,
-        wrap_distance_function(lambda x, y: np.linalg.norm(x - y, axis=0)),
+        DistanceMetric.L2,
         trash_cost,
     )
     # decomp_solver.show()

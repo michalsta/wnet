@@ -422,17 +422,48 @@ public:
     WassersteinNetwork(
         const VectorDistribution<DIM, double, intensity_type>* empirical_spectrum,
         const std::vector<VectorDistribution<DIM, double, intensity_type>*>& theoretical_spectra,
+        DistanceMetric distance_metric,
         VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
     ) :
-    WassersteinNetwork(empirical_spectrum, theoretical_spectra, l2_distance<DIM, double>, max_dist)
+    WassersteinNetwork(from_vector_distribution<DIM>(
+        empirical_spectrum,
+        theoretical_spectra,
+        distance_metric,
+        max_dist
+    ))
     {}
 
+    template<size_t DIM>
+    static WassersteinNetwork from_vector_distribution(
+        const VectorDistribution<DIM, double, intensity_type>* empirical_spectrum,
+        const std::vector<VectorDistribution<DIM, double, intensity_type>*>& theoretical_spectra,
+        DistanceMetric distance_metric,
+        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
+    ) {
+        switch (distance_metric) {
+            case DistanceMetric::L1:
+                return WassersteinNetwork(empirical_spectrum, theoretical_spectra, l1_distance<DIM, double>, max_dist);
+            case DistanceMetric::L2:
+                return WassersteinNetwork(empirical_spectrum, theoretical_spectra, l2_distance<DIM, double>, max_dist);
+            case DistanceMetric::LINF:
+                return WassersteinNetwork(empirical_spectrum, theoretical_spectra, linf_distance<DIM, double>, max_dist);
+            default:
+                throw std::runtime_error("Unsupported distance metric.");
+        }
+    }
 
     WassersteinNetwork(const WassersteinNetwork&) = delete;
     WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
-    WassersteinNetwork(WassersteinNetwork&&) = delete;
-    WassersteinNetwork& operator=(WassersteinNetwork&&) = delete;
-
+    WassersteinNetwork(WassersteinNetwork&& other) : _no_theoretical_spectra(other._no_theoretical_spectra),
+        nodes(std::move(other.nodes)),
+        edges(std::move(other.edges)),
+        dead_end_node_ids(std::move(other.dead_end_node_ids)),
+        flow_subgraphs(std::move(other.flow_subgraphs)),
+        built(other.built)
+    {
+        other.built = false;
+    }
+    WassersteinNetwork& operator=(WassersteinNetwork&& other) = delete;
     size_t no_nodes() const {
         return nodes.size();
     };

@@ -1,5 +1,5 @@
 import numpy as np
-
+from wnet.wnet_cpp import DistanceMetric
 
 def wrap_distance_function(dist_func):
     def wrapped_dist(p, y):
@@ -23,3 +23,5 @@ class Distance:
 class L1Distance(Distance):
     def dist_func(self, x, y):
         return np.linalg.norm(x - y, axis=0)
+
+

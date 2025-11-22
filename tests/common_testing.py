@@ -1,6 +1,6 @@
 import numpy as np
 from wnet import Distribution, WassersteinNetwork
-from wnet.distances import L1Distance
+from wnet.distances import DistanceMetric
 
 
 def create_large_distribution(seed, dimension, pos_range, int_range, size):
@@ -23,7 +23,7 @@ def create_large_wsdflow_instance(
     wsdflow_instance = WassersteinNetwork(
         experimental_distribution,
         theoretical_distributions,
-        distance=L1Distance(),
+        distance=DistanceMetric.L2,
         max_distance=int(pos_range * dimension / 10),
     )
     wsdflow_instance.build()
