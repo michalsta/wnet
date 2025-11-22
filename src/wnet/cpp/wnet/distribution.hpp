@@ -150,7 +150,7 @@ public:
         {}
         inline bool advance() {
             current_index++;
-            while (current_index < distribution.size()) {
+            while (current_index < distribution.size()) [[likely]] {
                 if constexpr(dist_fun == DistanceMetric::L1) {
                     current_distance = l1_distance<DIM, position_type>(point, distribution.get_point(current_index));
                 } else if constexpr(dist_fun == DistanceMetric::L2) {
@@ -160,7 +160,7 @@ public:
                 } else {
                     throw std::runtime_error("Unsupported distance metric.");
                 }
-                if (current_distance <= max_dist) {
+                if (current_distance <= max_dist) [[unlikely]] {
                     return true;
                 }
                 ++current_index;
