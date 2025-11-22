@@ -130,10 +130,10 @@ public:
         return {indices, distances};
     }*/
 
+    template<DistanceMetric dist_fun>
     class CloserThanIterator {
         const VectorDistribution<DIM, position_type, intensity_type>& distribution;
         const Point_t& point;
-        const DistanceMetric dist_fun;
         intensity_type max_dist;
         size_t current_index;
         intensity_type current_distance;
@@ -142,22 +142,20 @@ public:
         CloserThanIterator(
             const VectorDistribution<DIM, position_type, intensity_type>& distribution_,
             const Point_t& point_,
-            const DistanceMetric dist_fun_,
             intensity_type max_dist_
         ) : distribution(distribution_),
             point(point_),
-            dist_fun(dist_fun_),
             max_dist(max_dist_),
             current_index(-1)
         {}
         inline bool advance() {
             current_index++;
             while (current_index < distribution.size()) {
-                if(dist_fun == DistanceMetric::L1) {
+                if constexpr(dist_fun == DistanceMetric::L1) {
                     current_distance = l1_distance<DIM, position_type>(point, distribution.get_point(current_index));
-                } else if(dist_fun == DistanceMetric::L2) {
+                } else if constexpr(dist_fun == DistanceMetric::L2) {
                     current_distance = l2_distance<DIM, position_type>(point, distribution.get_point(current_index));
-                } else if(dist_fun == DistanceMetric::LINF) {
+                } else if constexpr(dist_fun == DistanceMetric::LINF) {
                     current_distance = linf_distance<DIM, position_type>(point, distribution.get_point(current_index));
                 } else {
                     throw std::runtime_error("Unsupported distance metric.");
@@ -177,15 +175,14 @@ public:
         }
     };
 
-    CloserThanIterator closer_than_iter(
+    template<DistanceMetric dist_fun>
+    CloserThanIterator<dist_fun> closer_than_iter(
         const Point_t& point,
-        const DistanceMetric dist_fun,
         intensity_type max_dist
     ) const {
-        return CloserThanIterator(
+        return CloserThanIterator<dist_fun>(
             *this,
             point,
-            dist_fun,
             max_dist
         );
     };

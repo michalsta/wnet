@@ -69,8 +69,9 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_edges);
 
         #define FROM_VECTOR_DISTRIBUTION(DIM) \
-            .def(nb::init<const VectorDistribution<DIM, double, LEMON_INT>*, const std::vector<VectorDistribution<DIM, double, LEMON_INT>*>&, DistanceMetric, LEMON_INT>())
-            //.def_static("from_vector_distribution_" #DIM, &WassersteinNetwork<int64_t, int64_t>::from_vector_distribution<DIM>)
+
+        //.def_static("from_vector_distribution_" #DIM, &WassersteinNetwork<int64_t, int64_t>::from_vector_distribution<DIM>)
+        //.def(nb::init<const VectorDistribution<DIM, double, LEMON_INT>*, const std::vector<VectorDistribution<DIM, double, LEMON_INT>*>&, DistanceMetric, LEMON_INT>())
 
     nb::class_<WassersteinNetwork<int64_t, int64_t>>(m, "CWassersteinNetwork")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
@@ -135,6 +136,27 @@ NB_MODULE(wnet_cpp, m) {
         .def_ro("positions", &Distribution<LEMON_INT>::Point_t::first)
         .def_ro("index", &Distribution<LEMON_INT>::Point_t::second);
 
+    nb::class_<WassersteinNetworkFactory<int64_t, int64_t>>(m, "CWassersteinNetworkFactory")
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<1, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<2, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<3, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<4, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<5, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<6, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<7, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<8, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<9, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<10, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<11, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<12, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<13, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<14, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<15, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<16, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<17, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<18, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<19, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t, int64_t>::create<VectorDistribution<20, double, LEMON_INT>>);
 
     EXPOSE_VECTOR_DISTRIBUTION(1)
     EXPOSE_VECTOR_DISTRIBUTION(2)

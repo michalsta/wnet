@@ -1,12 +1,12 @@
 from typing import Optional
 from collections.abc import Sequence
 
-from wnet.wnet_cpp import CWassersteinNetwork, CWassersteinNetworkSubgraph
+from wnet.wnet_cpp import CWassersteinNetwork, CWassersteinNetworkSubgraph, CWassersteinNetworkFactory
 from wnet.distribution import Distribution
 from wnet.distances import DistanceMetric, Distance
 
 
-class WassersteinNetwork(CWassersteinNetwork):
+class WassersteinNetwork:
     """
     A network class for computing Wasserstein distances between a base distribution and multiple target distributions.
 
@@ -28,9 +28,15 @@ class WassersteinNetwork(CWassersteinNetwork):
     ) -> None:
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
-        super().__init__(
+        self.wnet = CWassersteinNetworkFactory.create(
             base_distribution.vecdist(), [t.vecdist() for t in target_distributions], distance, max_distance
         )
+        self.add_simple_trash = self.wnet.add_simple_trash
+        self.build = self.wnet.build
+        self.solve = self.wnet.solve
+        self.total_cost = self.wnet.total_cost
+        self.get_subgraph = self.wnet.get_subgraph
+        self.no_subgraphs = self.wnet.no_subgraphs
 
     def subgraphs(self) -> list["SubgraphWrapper"]:
         """
@@ -40,8 +46,9 @@ class WassersteinNetwork(CWassersteinNetwork):
         """
 
         return [
-            SubgraphWrapper(self.get_subgraph(i)) for i in range(self.no_subgraphs())
+            SubgraphWrapper(self.wnet.get_subgraph(i)) for i in range(self.wnet.no_subgraphs())
         ]
+
 
 
 class SubgraphWrapper:

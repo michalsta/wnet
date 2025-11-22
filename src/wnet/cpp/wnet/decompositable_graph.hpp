@@ -350,11 +350,24 @@ class WassersteinNetwork {
     bool built = false;
 
 public:
-    template<typename Distribution_t>
+    WassersteinNetwork(std::vector<FlowNode<intensity_type>>&& nodes_,
+                       std::vector<FlowEdge<intensity_type>>&& edges_,
+                       size_t no_theoretical_spectra_,
+                       std::vector<LEMON_INDEX>&& dead_end_node_ids_
+    ) :
+    nodes(std::move(nodes_)),
+    edges(std::move(edges_)),
+    _no_theoretical_spectra(no_theoretical_spectra_),
+    dead_end_node_ids(std::move(dead_end_node_ids_))
+    {
+        build_subgraphs();
+    };
+
+    /*
+    template<typename Distribution_t, DistanceMetric dist_fun>
     WassersteinNetwork(
     const Distribution_t* empirical_spectrum,
     const std::vector<Distribution_t*>& theoretical_spectra,
-    DistanceMetric dist_fun,
     VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
     ) :
     _no_theoretical_spectra(theoretical_spectra.size())
@@ -417,7 +430,7 @@ public:
         }
         build_subgraphs();
     };
-
+*/
     // template<size_t DIM>
     // WassersteinNetwork(
     //     const VectorDistribution<DIM, double, intensity_type>* empirical_spectrum,
@@ -432,20 +445,33 @@ public:
     //     max_dist
     // ))
     // {}
-
+/*
     template<size_t DIM>
-    static WassersteinNetwork from_vector_distribution(
+    static WassersteinNetwork<VALUE_TYPE, intensity_type> from_vector_distribution(
         const VectorDistribution<DIM, double, intensity_type>* empirical_spectrum,
         const std::vector<VectorDistribution<DIM, double, intensity_type>*>& theoretical_spectra,
         DistanceMetric distance_metric,
         VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
     ) {
-        return WassersteinNetwork(
-            empirical_spectrum,
-            theoretical_spectra,
-            distance_metric,
-            max_dist
-        );
+        if (distance_metric == DistanceMetric::L1) {
+            return WassersteinNetwork<VALUE_TYPE, intensity_type>::template WassersteinNetwork<
+                VectorDistribution<DIM, double, intensity_type>,
+                DistanceMetric::L1
+            >(empirical_spectrum, theoretical_spectra, max_dist);
+        } else if (distance_metric == DistanceMetric::L2) {
+            return WassersteinNetwork<VALUE_TYPE, intensity_type>::template WassersteinNetwork<
+                VectorDistribution<DIM, double, intensity_type>,
+                DistanceMetric::L2
+            >(empirical_spectrum, theoretical_spectra, max_dist);
+        } else if (distance_metric == DistanceMetric::LINF) {
+            return WassersteinNetwork<VALUE_TYPE, intensity_type>::template WassersteinNetwork<
+                VectorDistribution<DIM, double, intensity_type>,
+                DistanceMetric::LINF
+            >(empirical_spectrum, theoretical_spectra, max_dist);
+        } else {
+            throw std::runtime_error("Unsupported distance metric.");
+        }
+    }*/
         // switch (distance_metric) {
         //     case DistanceMetric::L1:
         //         return WassersteinNetwork<l1_distance<DIM, double>>(empirical_spectrum, theoretical_spectra, max_dist);
@@ -456,7 +482,7 @@ public:
         //     default:
         //         throw std::runtime_error("Unsupported distance metric.");
         // }
-    }
+
 
     WassersteinNetwork(const WassersteinNetwork&) = delete;
     WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
@@ -716,4 +742,101 @@ public:
     }
 };
 
+
+
+template <typename VALUE_TYPE, typename intensity_type>
+class WassersteinNetworkFactory {
+public:
+    template<typename Distribution_t, DistanceMetric dist_fun>
+    static WassersteinNetwork<VALUE_TYPE, intensity_type> create(
+        const Distribution_t* empirical_spectrum,
+        const std::vector<Distribution_t*>& theoretical_spectra,
+        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
+    )
+    {
+        std::vector<FlowNode<intensity_type>> nodes;
+        std::vector<FlowEdge<intensity_type>> edges;
+        std::vector<LEMON_INDEX> dead_end_node_ids;
+
+        static_assert(std::is_same_v<typename Distribution_t::intensity_type, intensity_type>,
+                      "intensity_type does not match the intensity_type of the provided Distribution_t");
+        {
+            size_t no_nodes = 2 + empirical_spectrum->size();
+            for (auto& ts : theoretical_spectra)
+                no_nodes += ts->size();
+            nodes.reserve(no_nodes);
+        }
+
+        // Create placeholder source and sink nodes
+        nodes.emplace_back(FlowNode<intensity_type>(0, SourceNode()));
+        nodes.emplace_back(FlowNode<intensity_type>(1, SinkNode()));
+
+        for (LEMON_INDEX empirical_idx = 0; empirical_idx < static_cast<LEMON_INT>(empirical_spectrum->size()); ++empirical_idx) {
+            nodes.emplace_back(FlowNode<intensity_type>(
+                                    nodes.size(),
+                                    EmpiricalNode(
+                                        empirical_idx,
+                                        empirical_spectrum->intensities[empirical_idx])));
+        }
+
+        for (size_t theoretical_spectrum_idx = 0; theoretical_spectrum_idx < theoretical_spectra.size(); ++theoretical_spectrum_idx)
+        {
+            #ifdef DO_TONS_OF_PRINTS
+            size_t no_processed = 0;
+            size_t no_included = 0;
+            std::cout << "Processing theoretical spectrum " << theoretical_spectrum_idx << " / " << theoretical_spectra.size() << std::endl;
+            #endif
+            const auto& theoretical_spectrum = theoretical_spectra[theoretical_spectrum_idx];
+
+            for (LEMON_INDEX theoretical_peak_idx = 0; theoretical_peak_idx < static_cast<LEMON_INT>(theoretical_spectrum->size()); ++theoretical_peak_idx) {
+                nodes.emplace_back(FlowNode<intensity_type>(
+                                        nodes.size(),
+                                            TheoreticalNode(
+                                                theoretical_spectrum_idx,
+                                                theoretical_peak_idx,
+                                                theoretical_spectrum->intensities[theoretical_peak_idx])));
+                const auto& theoretical_node = nodes.back();
+
+                // Calculate the distance between the empirical and theoretical peaks
+                auto it = empirical_spectrum->template closer_than_iter<dist_fun>(
+                    theoretical_spectrum->get_point(theoretical_peak_idx),
+                    max_dist
+                );
+                while(it.advance())
+                {
+                    edges.emplace_back(FlowEdge<intensity_type>(
+                        edges.size(),
+                        nodes[it.get_index() + 2], // +2 to skip the source and sink nodes
+                        theoretical_node,
+                        MatchingEdge(static_cast<VALUE_TYPE>(it.get_distance()))
+                    ));
+                }
+            }
+        }
+        return WassersteinNetwork<VALUE_TYPE, intensity_type>(
+            std::move(nodes),
+            std::move(edges),
+            theoretical_spectra.size(),
+            std::move(dead_end_node_ids)
+        );
+    };
+
+    template<typename Distribution_t>
+    static WassersteinNetwork<VALUE_TYPE, intensity_type> create(
+        const Distribution_t* empirical_spectrum,
+        const std::vector<Distribution_t*>& theoretical_spectra,
+        DistanceMetric distance_metric,
+        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
+    ) {
+        if (distance_metric == DistanceMetric::L1) {
+            return create<Distribution_t, DistanceMetric::L1>(empirical_spectrum, theoretical_spectra, max_dist);
+        } else if (distance_metric == DistanceMetric::L2) {
+            return create<Distribution_t, DistanceMetric::L2>(empirical_spectrum, theoretical_spectra, max_dist);
+        } else if (distance_metric == DistanceMetric::LINF) {
+            return create<Distribution_t, DistanceMetric::LINF>(empirical_spectrum, theoretical_spectra, max_dist);
+        } else {
+            throw std::runtime_error("Unsupported distance metric.");
+        }
+    };
+};
 #endif // WNET_DECOMPOSITABLE_GRAPH_HPP
