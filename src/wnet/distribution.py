@@ -45,7 +45,7 @@ class Distribution(CDistribution):
             raise ValueError(f"Unsupported dimension: {dimension}. Must be between 1 and 20.")
         cfun = globals()[f"CVectorDistribution{dimension}"]
 
-        self.vecdist = cfun(positions.astype(np.float64), intensities.astype(np.int64))
+        self.vecdist = lambda: cfun(positions.astype(np.float64), intensities.astype(np.int64))
         self.label = label
 
     def scaled(self, scale_factor: float) -> "Distribution":
@@ -59,6 +59,22 @@ class Distribution(CDistribution):
             Distribution: A new Distribution instance with scaled intensities and unchanged positions.
         """
         new_positions = self.positions
+        new_intensities = self.intensities * scale_factor
+        return Distribution(new_positions, new_intensities, label=self.label)
+
+    def positions_intensities_scaled(
+        self, scale_factor: float
+    ) -> "Distribution":
+        """
+        Creates a new Distribution instance with both positions and intensities scaled by the given factor.
+
+        Args:
+            scale_factor (float): The factor by which to scale the positions and intensities.
+
+        Returns:
+            Distribution: A new Distribution instance with scaled positions and intensities.
+        """
+        new_positions = self.positions * scale_factor
         new_intensities = self.intensities * scale_factor
         return Distribution(new_positions, new_intensities, label=self.label)
 
@@ -96,6 +112,21 @@ class Distribution(CDistribution):
 
     def cpp_repr(self) -> str:
         return f"VectorDistribution<{self.dimension}> distribution(\n{{{self.positions.tolist()}}},\n{{{self.intensities.tolist()}}}\n);"
+
+    def bounding_box(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Computes the axis-aligned bounding box of the distribution.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: A tuple containing two numpy arrays:
+                - The first array represents the minimum coordinates of the bounding box.
+                - The second array represents the maximum coordinates of the bounding box.
+        """
+        min_coords = np.min(self.positions, axis=1)
+        max_coords = np.max(self.positions, axis=1)
+        print("Bounding box min:", min_coords)
+        print("Bounding box max:", max_coords)
+        return min_coords, max_coords
 
 def Distribution_1D(
     positions: np.ndarray, intensities: np.ndarray, label: Optional[str] = None
