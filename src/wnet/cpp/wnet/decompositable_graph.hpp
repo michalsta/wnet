@@ -454,9 +454,10 @@ public:
 
     WassersteinNetwork(const WassersteinNetwork&) = delete;
     WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
-    WassersteinNetwork(WassersteinNetwork&& other) : _no_theoretical_spectra(other._no_theoretical_spectra),
+    WassersteinNetwork(WassersteinNetwork&& other) : 
         nodes(std::move(other.nodes)),
         edges(std::move(other.edges)),
+        _no_theoretical_spectra(other._no_theoretical_spectra),
         dead_end_node_ids(std::move(other.dead_end_node_ids)),
         flow_subgraphs(std::move(other.flow_subgraphs)),
         built(other.built)
