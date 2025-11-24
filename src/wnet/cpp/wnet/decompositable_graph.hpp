@@ -486,7 +486,7 @@ public:
 
     WassersteinNetwork(const WassersteinNetwork&) = delete;
     WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
-    WassersteinNetwork(WassersteinNetwork&& other) : 
+    WassersteinNetwork(WassersteinNetwork&& other) :
         nodes(std::move(other.nodes)),
         edges(std::move(other.edges)),
         _no_theoretical_spectra(other._no_theoretical_spectra),
@@ -744,16 +744,17 @@ public:
 
 
 
-template <typename VALUE_TYPE, typename intensity_type>
+template <typename VALUE_TYPE>
 class WassersteinNetworkFactory {
 public:
     template<typename Distribution_t, DistanceMetric dist_fun>
-    static WassersteinNetwork<VALUE_TYPE, intensity_type> create(
+    static WassersteinNetwork<VALUE_TYPE, typename Distribution_t::intensity_type> create(
         const Distribution_t* empirical_spectrum,
         const std::vector<Distribution_t*>& theoretical_spectra,
         VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
     )
     {
+        using intensity_type = typename Distribution_t::intensity_type;
         std::vector<FlowNode<intensity_type>> nodes;
         std::vector<FlowEdge<intensity_type>> edges;
         std::vector<LEMON_INDEX> dead_end_node_ids;
@@ -822,7 +823,7 @@ public:
     };
 
     template<typename Distribution_t>
-    static WassersteinNetwork<VALUE_TYPE, intensity_type> create(
+    static WassersteinNetwork<VALUE_TYPE, typename Distribution_t::intensity_type> create(
         const Distribution_t* empirical_spectrum,
         const std::vector<Distribution_t*>& theoretical_spectra,
         DistanceMetric distance_metric,
