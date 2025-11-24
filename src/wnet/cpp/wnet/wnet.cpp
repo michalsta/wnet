@@ -22,8 +22,17 @@
         .def("py_get_positions", &VectorDistribution_##DIM::py_get_positions) \
         .def("py_get_intensities", &VectorDistribution_##DIM::py_get_intensities) \
         .def("get_point", &VectorDistribution_##DIM::get_point) \
-        .def("__len__", &VectorDistribution_##DIM::size);
-        //.def("closer_than", &VectorDistribution_##DIM::closer_than)
+        .def("__len__", &VectorDistribution_##DIM::size); \
+    using VectorDistributionFloat_##DIM = VectorDistribution<DIM, double, double>; \
+    nb::class_<VectorDistributionFloat_##DIM>(m, "CVectorDistributionFloat" #DIM) \
+        /*.def(nb::init<const std::vector<std::array<double, DIM>>&, const std::vector<double>&>()) \
+        .def(nb::init<std::vector<std::array<double, DIM>>&&,  std::vector<double>&&>()) */ \
+        .def(nb::init<const nb::ndarray<double, nb::shape<DIM, -1>>&, const nb::ndarray<double, nb::shape<-1>>&>()) \
+        .def("size", &VectorDistributionFloat_##DIM::size) \
+        .def("py_get_positions", &VectorDistributionFloat_##DIM::py_get_positions) \
+        .def("py_get_intensities", &VectorDistributionFloat_##DIM::py_get_intensities) \
+        .def("get_point", &VectorDistributionFloat_##DIM::get_point) \
+        .def("__len__", &VectorDistributionFloat_##DIM::size);
 
 NB_MODULE(wnet_cpp, m) {
     m.doc() = "WNet C++ imlementation module";
