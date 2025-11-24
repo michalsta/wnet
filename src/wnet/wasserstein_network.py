@@ -38,6 +38,19 @@ class WassersteinNetwork:
         self.get_subgraph = self.wnet.get_subgraph
         self.no_subgraphs = self.wnet.no_subgraphs
         self.flows_for_target = self.wnet.flows_for_target
+        self.count_empirical_nodes = self.wnet.count_empirical_nodes
+        self.count_theoretical_nodes = self.wnet.count_theoretical_nodes
+        self.matching_density = self.wnet.matching_density
+        self.lemon_to_string = self.wnet.lemon_to_string
+        self.count_matching_edges = self.wnet.count_matching_edges
+        self.count_theoretical_to_sink_edges = self.wnet.count_theoretical_to_sink_edges
+        self.count_src_to_empirical_edges = self.wnet.count_src_to_empirical_edges
+        self.count_simple_trash_edges = self.wnet.count_simple_trash_edges
+
+
+    def __str__(self) -> str:
+        """Returns a string representation of the Wasserstein network."""
+        return self.wnet.__str__()
 
     def subgraphs(self) -> list["SubgraphWrapper"]:
         """
