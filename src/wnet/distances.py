@@ -22,6 +22,4 @@ class Distance:
 
 class L1Distance(Distance):
     def dist_func(self, x, y):
-        return np.linalg.norm(x - y, axis=0)
-
-
+        return np.linalg.norm(x - y, ord=1, axis=0)
