@@ -6,7 +6,7 @@ def wrap_distance_function(dist_func):
     def wrapped_dist(p, y):
         i = p.index
         x = p.positions[:, i : i + 1]
-        return dist_func(x[: np.newaxis], y)
+        return dist_func(x, y)
 
     return wrapped_dist
 
@@ -15,7 +15,7 @@ class Distance:
     def __call__(self, p, y):
         i = p.index
         x = p.positions[:, i : i + 1]
-        return self.dist_func(x[: np.newaxis], y)
+        return self.dist_func(x, y)
 
     def dist_func(self, x, y):
         raise NotImplementedError("Subclasses should implement this method.")
