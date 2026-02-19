@@ -1,7 +1,11 @@
 from typing import Optional
 from collections.abc import Sequence
 
-from wnet.wnet_cpp import CWassersteinNetwork, CWassersteinNetworkSubgraph, CWassersteinNetworkFactory
+from wnet.wnet_cpp import (
+    CWassersteinNetwork,
+    CWassersteinNetworkSubgraph,
+    CWassersteinNetworkFactory,
+)
 from wnet.distribution import Distribution
 from wnet.distances import DistanceMetric, Distance
 
@@ -29,7 +33,10 @@ class WassersteinNetwork:
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
         self.wnet = CWassersteinNetworkFactory.create(
-            base_distribution.vecdist(), [t.vecdist() for t in target_distributions], distance, max_distance
+            base_distribution.vecdist(),
+            [t.vecdist() for t in target_distributions],
+            distance,
+            max_distance,
         )
         self.add_simple_trash = self.wnet.add_simple_trash
         self.build = self.wnet.build
@@ -47,7 +54,6 @@ class WassersteinNetwork:
         self.count_src_to_empirical_edges = self.wnet.count_src_to_empirical_edges
         self.count_simple_trash_edges = self.wnet.count_simple_trash_edges
 
-
     def __str__(self) -> str:
         """Returns a string representation of the Wasserstein network."""
         return self.wnet.__str__()
@@ -60,9 +66,9 @@ class WassersteinNetwork:
         """
 
         return [
-            SubgraphWrapper(self.wnet.get_subgraph(i)) for i in range(self.wnet.no_subgraphs())
+            SubgraphWrapper(self.wnet.get_subgraph(i))
+            for i in range(self.wnet.no_subgraphs())
         ]
-
 
 
 class SubgraphWrapper:

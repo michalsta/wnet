@@ -1,6 +1,7 @@
 import numpy as np
 from wnet.wnet_cpp import DistanceMetric
 
+
 def wrap_distance_function(dist_func):
     def wrapped_dist(p, y):
         i = p.index

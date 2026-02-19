@@ -39,15 +39,19 @@ class Distribution:
             intensities (np.ndarray): Array of intensities corresponding to each position.
             label (str | None): Optional label for the distribution.
         """
-        #super().__init__(positions, intensities.astype(np.int64, copy=False))
+        # super().__init__(positions, intensities.astype(np.int64, copy=False))
         self.positions = positions
         self.intensities = intensities
         dimension = positions.shape[0]
         if dimension < 1 or dimension > 20:
-            raise ValueError(f"Unsupported dimension: {dimension}. Must be between 1 and 20.")
+            raise ValueError(
+                f"Unsupported dimension: {dimension}. Must be between 1 and 20."
+            )
         cfun = globals()[f"CVectorDistribution{dimension}"]
 
-        self.vecdist = lambda: cfun(positions.astype(np.float64), intensities.astype(np.int64))
+        self.vecdist = lambda: cfun(
+            positions.astype(np.float64), intensities.astype(np.int64)
+        )
         self.label = label
 
     def scaled(self, scale_factor: float) -> "Distribution":
@@ -64,9 +68,7 @@ class Distribution:
         new_intensities = self.intensities * scale_factor
         return Distribution(new_positions, new_intensities, label=self.label)
 
-    def positions_intensities_scaled(
-        self, scale_factor: float
-    ) -> "Distribution":
+    def positions_intensities_scaled(self, scale_factor: float) -> "Distribution":
         """
         Creates a new Distribution instance with both positions and intensities scaled by the given factor.
 
@@ -119,6 +121,7 @@ class Distribution:
         min_coords = np.min(self.positions, axis=1)
         max_coords = np.max(self.positions, axis=1)
         return min_coords, max_coords
+
 
 def Distribution_1D(
     positions: np.ndarray, intensities: np.ndarray, label: Optional[str] = None
