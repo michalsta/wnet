@@ -33,10 +33,13 @@ nb::ndarray<nb::numpy, T, nb::ndim<1>> vector_to_numpy(const std::vector<T>& vec
 
 template<typename T, size_t DIM>
 nb::ndarray<nb::numpy, T, nb::shape<DIM, -1>> vector_of_arrays_to_numpy(const std::vector<std::array<T, DIM>>& vec) {
-    // Create a 2D NumPy array from the vector of arrays
+    // Create a 2D NumPy array from the vector of arrays, stored in dim-major
+    // order so that shape (DIM, n_points) with default C strides is correct.
     T* data = new T[vec.size() * DIM];
     for (size_t i = 0; i < vec.size(); ++i) {
-        std::memcpy(data + i * DIM, vec[i].data(), DIM * sizeof(T));
+        for (size_t d = 0; d < DIM; ++d) {
+            data[d * vec.size() + i] = vec[i][d];
+        }
     }
     nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
     return nb::ndarray<nb::numpy, T, nb::shape<DIM, -1>>(
