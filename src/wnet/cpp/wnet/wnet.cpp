@@ -78,7 +78,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_edges);
 
 
-        nb::class_<WassersteinNetworkSubgraph<int64_t, double>>(m, "CWassersteinNetworkSubgraph")
+        nb::class_<WassersteinNetworkSubgraph<int64_t, double>>(m, "CWassersteinNetworkSubgraphFloat")
         .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode<double>>&, const std::vector<FlowEdge<double>*>&, size_t>())
         .def("add_simple_trash", &WassersteinNetworkSubgraph<int64_t, double>::add_simple_trash)
         .def("build", &WassersteinNetworkSubgraph<int64_t, double>::build)
