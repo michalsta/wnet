@@ -79,7 +79,7 @@ class SubgraphWrapper:
         __getattr__(name):
             Delegates attribute access to the wrapped subgraph object.
 
-        as_netowkrx():
+        as_networkx():
             Converts the subgraph to a NetworkX directed graph (`DiGraph`), adding nodes and edges with relevant attributes.
             Node attributes: 'layer', 'type'.
             Edge attributes: 'capacity', 'weight'.
@@ -102,7 +102,7 @@ class SubgraphWrapper:
     def __getattr__(self, name):
         return getattr(self._obj, name)
 
-    def as_netowkrx(self) -> "networkx.DiGraph":
+    def as_networkx(self) -> "networkx.DiGraph":
         """Converts the subgraph to a NetworkX directed graph (DiGraph).
         Returns:
             networkx.DiGraph: A directed graph representation of the subgraph with nodes and edges.
@@ -128,7 +128,7 @@ class SubgraphWrapper:
         import matplotlib.pyplot as plt
         import networkx as nx
 
-        G = self.as_netowkrx()
+        G = self.as_networkx()
         pos = nx.multipartite_layout(G, subset_key="layer")
         node_colors = []
         for _, data in G.nodes(data=True):
