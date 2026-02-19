@@ -54,7 +54,7 @@ def TruncatedWassersteinDistance(
         distribution1.sum_intensities == distribution2.sum_intensities
     ), "Distributions must have the same total intensity"
     W = WassersteinNetwork(distribution1, [distribution2], distance, max_distance)
-    W.build()
     W.add_simple_trash(max_distance)
+    W.build()
     W.solve()
     return W.total_cost()

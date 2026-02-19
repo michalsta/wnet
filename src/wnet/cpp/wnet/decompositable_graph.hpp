@@ -33,6 +33,7 @@ class WassersteinNetworkSubgraph {
     VALUE_TYPE lemon_empirical_intensity;
     VALUE_TYPE lemon_theoretical_intensity;
     const size_t no_target_distributions;
+    bool built = false;
 
 public:
     WassersteinNetworkSubgraph(
@@ -109,6 +110,8 @@ public:
     WassersteinNetworkSubgraph& operator=(WassersteinNetworkSubgraph&&) = delete;
 
     void add_simple_trash(VALUE_TYPE cost) {
+        if (built)
+            throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
         edges.emplace_back(
             edges.size(),
             nodes[0],
@@ -159,6 +162,7 @@ public:
         }
         //solver.emplace(lemon_graph);//lemon::NetworkSimplex<lemon::StaticDigraph>(lemon_graph);
         //solver->upperMap(capacities_map);
+        built = true;
     }
 
     void set_point(const std::vector<double>& point) {
@@ -624,6 +628,8 @@ public:
     }
 
     void add_simple_trash(VALUE_TYPE cost) {
+        if (built)
+            throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_simple_trash(cost);
     };
