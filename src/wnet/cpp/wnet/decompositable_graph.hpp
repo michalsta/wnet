@@ -318,7 +318,7 @@ public:
 
     double matching_density() const {
         const double nominator = count_edges_of_type<MatchingEdge>();
-        const double denominator = count_nodes_of_type<EmpiricalNode>() * count_nodes_of_type<TheoreticalNode>();
+        const double denominator = count_nodes_of_type<EmpiricalNode<intensity_type>>() * count_nodes_of_type<TheoreticalNode<intensity_type>>();
         return nominator / denominator;
     }
 
@@ -327,7 +327,7 @@ public:
         std::fill(involved.get(), involved.get() + no_target_distributions, false);
         for (const auto& node : nodes)
         {
-            if (auto node_type = std::get_if<TheoreticalNode>(&node.get_type()))
+            if (auto node_type = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type()))
             {
                 const auto& theoretical_node = *node_type;
                 involved[theoretical_node.get_spectrum_id()] = true;
