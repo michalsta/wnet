@@ -110,6 +110,8 @@ class SubgraphWrapper:
 
     def as_networkx(self) -> "networkx.DiGraph":
         """Converts the subgraph to a NetworkX directed graph (DiGraph).
+        If the graph is solved, it also includes flow information on the edges.
+
         Returns:
             networkx.DiGraph: A directed graph representation of the subgraph with nodes and edges.
         """
@@ -118,12 +120,18 @@ class SubgraphWrapper:
         G = nx.DiGraph()
         for node in self.get_nodes():
             G.add_node(node.get_id(), layer=node.layer(), type=node.type_str())
+        if self.is_solved():
+            flows = self.get_flow_map()
         for edge in self.get_edges():
             start = edge.get_start_node_id()
             end = edge.get_end_node_id()
-            G.add_edge(
-                start, end, capacity=edge.get_base_capacity(), weight=edge.get_cost()
-            )
+            edge_data = {
+                "capacity": edge.get_base_capacity(),
+                "weight": edge.get_cost(),
+            }
+            if self.is_solved():
+                edge_data["flow"] = flows.get(edge.get_id(), 0)
+            G.add_edge(start, end, **edge_data)
         return G
 
     def show(self) -> None:
@@ -147,7 +155,7 @@ class SubgraphWrapper:
             else:
                 node_colors.append("lightblue")
         edge_labels = {
-            (u, v): f"cost: {d['weight']}\n capacity: {d['capacity']}"
+            (u, v): f"cost: {d['weight']}\n capacity: {d['capacity']}" + (f"\n flow: {d['flow']}" if "flow" in d else "")
             for u, v, d in G.edges(data=True)
         }
         nx.draw(G, pos, with_labels=True, node_color=node_colors, arrows=True)

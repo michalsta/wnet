@@ -162,6 +162,7 @@ public:
         }
         //solver.emplace(lemon_graph);//lemon::NetworkSimplex<lemon::StaticDigraph>(lemon_graph);
         //solver->upperMap(capacities_map);
+        solver.reset();
         built = true;
     }
 
@@ -298,6 +299,18 @@ public:
         }
     };
 
+    std::unordered_map<LEMON_INDEX, VALUE_TYPE> get_flow_map() const {
+        std::unordered_map<LEMON_INDEX, VALUE_TYPE> result;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
+        {
+            const FlowEdge<intensity_type>& edge = edges[ii];
+            const VALUE_TYPE flow = solver->flow(lemon_graph.arcFromId(ii));
+            if (flow == 0) continue;
+            result[edge.get_id()] = flow;
+        }
+        return result;
+    }
+
     template<typename T>
     size_t count_nodes_of_type() const {
         size_t result = 0;
@@ -338,6 +351,10 @@ public:
             if(involved[ii])
                 result.push_back(ii);
         return result;
+    }
+
+    bool is_solved() const {
+        return solver.has_value();
     }
 };
 

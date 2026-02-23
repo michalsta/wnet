@@ -5,6 +5,7 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/ndarray.h>
 
 #include "decompositable_graph.hpp"
@@ -76,8 +77,9 @@ NB_MODULE(wnet_cpp, m) {
         .def("no_nodes", &WassersteinNetworkSubgraph<int64_t, int64_t>::no_nodes)
         .def("no_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::no_edges)
         .def("get_nodes", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_nodes)
-        .def("get_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_edges);
-
+        .def("get_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_edges)
+        .def("get_flow_map", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_flow_map)
+        .def("is_solved", &WassersteinNetworkSubgraph<int64_t, int64_t>::is_solved);
 
         nb::class_<WassersteinNetworkSubgraph<int64_t, double>>(m, "CWassersteinNetworkSubgraphFloat")
         .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode<double>>&, const std::vector<FlowEdge<double>*>&, size_t>())
@@ -90,7 +92,9 @@ NB_MODULE(wnet_cpp, m) {
         .def("no_nodes", &WassersteinNetworkSubgraph<int64_t, double>::no_nodes)
         .def("no_edges", &WassersteinNetworkSubgraph<int64_t, double>::no_edges)
         .def("get_nodes", &WassersteinNetworkSubgraph<int64_t, double>::get_nodes)
-        .def("get_edges", &WassersteinNetworkSubgraph<int64_t, double>::get_edges);
+        .def("get_edges", &WassersteinNetworkSubgraph<int64_t, double>::get_edges)
+        .def("get_flow_map", &WassersteinNetworkSubgraph<int64_t, double>::get_flow_map)
+        .def("is_solved", &WassersteinNetworkSubgraph<int64_t, double>::is_solved);
 
     nb::class_<WassersteinNetwork<int64_t, int64_t>>(m, "CWassersteinNetwork")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
