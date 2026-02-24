@@ -110,6 +110,8 @@ public:
     WassersteinNetworkSubgraph& operator=(WassersteinNetworkSubgraph&&) = delete;
 
     void add_simple_trash(VALUE_TYPE cost) {
+        if (simple_trash_idx != std::numeric_limits<LEMON_INDEX>::max())
+            throw std::runtime_error("Simple trash edge already added.");
         if (built)
             throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
         edges.emplace_back(
@@ -118,6 +120,16 @@ public:
             nodes[1],
             SimpleTrashEdge(cost)
         );
+    }
+
+    VALUE_TYPE trash_cost() const {
+        if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max())
+            throw std::runtime_error("Simple trash edge not added.");
+        return std::visit([](const auto& arg) -> VALUE_TYPE {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, SimpleTrashEdge>) return arg.get_cost();
+            else { throw std::runtime_error("Invalid FlowEdgeType at simple_trash_idx"); };
+        }, edges[simple_trash_idx].get_type());
     }
 
     void build() {

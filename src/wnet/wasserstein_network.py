@@ -141,3 +141,29 @@ class SubgraphWrapper:
         Edge labels display cost and capacity.
         """
         show_graph(self.as_networkx())
+
+    def derivative_graph(self) -> "networkx.DiGraph":
+        import networkx as nx
+        G = self.as_networkx()
+        derivative_G = nx.DiGraph()
+        for node in G.nodes():
+            print(G.nodes[node]["type"])
+            if G.nodes[node]["type"] == "SinkNode":
+                continue
+            derivative_G.add_node(node, **G.nodes[node])
+        for u, v, data in G.edges(data=True):
+            if G.nodes[v]["type"] == "SinkNode":
+                continue
+            if data["capacity"] is None or data["flow"] < data["capacity"]:
+                print(f"Adding edge from {u} to {v} with weight {data['weight']} and capacity {data['capacity']}")
+                derivative_G.add_edge(u, v, **data)
+            if data["flow"] > 0:
+                print(f"Adding reverse edge from {v} to {u} with weight {-data['weight']} and capacity {data['flow']}")
+                derivative_G.add_edge(v, u, capacity=data["flow"], weight=-data["weight"])
+        return derivative_G
+
+    def signal_part_derivatives(self) -> dict[int, int]:
+        import networkx as nx
+        G = self.derivative_graph()
+        dist, _ = nx.single_source_bellman_ford(G, source=0, weight="weight")
+        return dist

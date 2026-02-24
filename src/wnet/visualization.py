@@ -21,3 +21,11 @@ def show_graph(G):
     nx.draw(G, pos, with_labels=True, node_color=node_colors, arrows=True)
     nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
     plt.show()
+
+
+def print_graph(G):
+    import networkx as nx
+    for node in G.nodes(data=True):
+        print(f"Node {node[0]}: {node[1]}")
+    for edge in G.edges(data=True):
+        print(f"Edge from {edge[0]} to {edge[1]}: {edge[2]}")
