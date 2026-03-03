@@ -1,10 +1,12 @@
 from typing import Optional
 from collections.abc import Sequence
+from collections import defaultdict
 
 from wnet.wnet_cpp import (
     CWassersteinNetwork,
     CWassersteinNetworkSubgraph,
     CWassersteinNetworkFactory,
+    TheoreticalNode,
 )
 from wnet.distribution import Distribution
 from wnet.distances import DistanceMetric, Distance
@@ -166,4 +168,9 @@ class SubgraphWrapper:
         import networkx as nx
         G = self.derivative_graph()
         dist, _ = nx.single_source_bellman_ford(G, source=0, weight="weight")
-        return dist
+        ret = defaultdict(dict)
+        for node in self.get_nodes():
+            nt = node.get_type()
+            if isinstance(nt, TheoreticalNode):
+                ret[nt.get_spectrum_id()][nt.get_peak_index()] = dist.get(node.get_id(), self.simple_trash_cost())
+        return ret

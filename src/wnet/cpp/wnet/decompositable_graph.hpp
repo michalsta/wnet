@@ -122,7 +122,7 @@ public:
         );
     }
 
-    VALUE_TYPE trash_cost() const {
+    VALUE_TYPE simple_trash_cost() const {
         if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max())
             throw std::runtime_error("Simple trash edge not added.");
         return std::visit([](const auto& arg) -> VALUE_TYPE {

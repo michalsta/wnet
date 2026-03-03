@@ -6,6 +6,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/ndarray.h>
 
 #include "decompositable_graph.hpp"
@@ -72,7 +73,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("build", &WassersteinNetworkSubgraph<int64_t, int64_t>::build)
         .def("set_point", &WassersteinNetworkSubgraph<int64_t, int64_t>::set_point)
         .def("total_cost", &WassersteinNetworkSubgraph<int64_t, int64_t>::total_cost)
-        .def("trash_cost", &WassersteinNetworkSubgraph<int64_t, int64_t>::trash_cost)
+        .def("simple_trash_cost", &WassersteinNetworkSubgraph<int64_t, int64_t>::simple_trash_cost)
         .def("to_string", &WassersteinNetworkSubgraph<int64_t, int64_t>::to_string)
         .def("lemon_to_string", &WassersteinNetworkSubgraph<int64_t, int64_t>::lemon_to_string)
         .def("no_nodes", &WassersteinNetworkSubgraph<int64_t, int64_t>::no_nodes)
@@ -88,7 +89,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("build", &WassersteinNetworkSubgraph<int64_t, double>::build)
         .def("set_point", &WassersteinNetworkSubgraph<int64_t, double>::set_point)
         .def("total_cost", &WassersteinNetworkSubgraph<int64_t, double>::total_cost)
-        .def("trash_cost", &WassersteinNetworkSubgraph<int64_t, double>::trash_cost)
+        .def("simple_trash_cost", &WassersteinNetworkSubgraph<int64_t, double>::simple_trash_cost)
         .def("to_string", &WassersteinNetworkSubgraph<int64_t, double>::to_string)
         .def("lemon_to_string", &WassersteinNetworkSubgraph<int64_t, double>::lemon_to_string)
         .def("no_nodes", &WassersteinNetworkSubgraph<int64_t, double>::no_nodes)
@@ -244,4 +245,39 @@ NB_MODULE(wnet_cpp, m) {
         .value("L1", DistanceMetric::L1)
         .value("L2", DistanceMetric::L2)
         .value("LINF", DistanceMetric::LINF);
+
+    // Export SourceNode
+    nb::class_<SourceNode>(m, "SourceNode");
+
+    // Export SinkNode
+    nb::class_<SinkNode>(m, "SinkNode");
+
+    // Export EmpiricalNode
+    nb::class_<EmpiricalNode<int64_t>>(m, "EmpiricalNode")
+        .def(nb::init<LEMON_INDEX, int64_t>())
+        .def("get_peak_index", &EmpiricalNode<int64_t>::get_peak_index)
+        .def("get_intensity", &EmpiricalNode<int64_t>::get_intensity);
+
+    // Export TheoreticalNode
+    nb::class_<TheoreticalNode<int64_t>>(m, "TheoreticalNode")
+        .def(nb::init<size_t, LEMON_INDEX, int64_t>())
+        .def("get_spectrum_id", &TheoreticalNode<int64_t>::get_spectrum_id)
+        .def("get_peak_index", &TheoreticalNode<int64_t>::get_peak_index)
+        .def("get_intensity", &TheoreticalNode<int64_t>::get_intensity);
+
+    // Export MatchingEdge
+    nb::class_<MatchingEdge>(m, "MatchingEdge")
+        .def(nb::init<LEMON_INT>())
+        .def("get_cost", &MatchingEdge::get_cost);
+
+    // Export SrcToEmpiricalEdge
+    nb::class_<SrcToEmpiricalEdge>(m, "SrcToEmpiricalEdge");
+
+    // Export TheoreticalToSinkEdge
+    nb::class_<TheoreticalToSinkEdge>(m, "TheoreticalToSinkEdge");
+
+    // Export SimpleTrashEdge
+    nb::class_<SimpleTrashEdge>(m, "SimpleTrashEdge")
+        .def(nb::init<LEMON_INT>())
+        .def("get_cost", &SimpleTrashEdge::get_cost);
 }
