@@ -109,6 +109,9 @@ class Distribution:
     def cpp_repr(self) -> str:
         return f"VectorDistribution<{self.dimension}> distribution(\n{{{self.positions.tolist()}}},\n{{{self.intensities.tolist()}}}\n);"
 
+    def __len__(self):
+        return self.intensities.shape[0]
+
     def bounding_box(self) -> tuple[np.ndarray, np.ndarray]:
         """
         Computes the axis-aligned bounding box of the distribution.
