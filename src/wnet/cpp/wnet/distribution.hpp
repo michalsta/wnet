@@ -92,8 +92,10 @@ public:
         if (positions.size() != intensities_vector.size()) {
             throw std::invalid_argument("Positions and intensities must have the same size");
         }
-        sorted_indices.resize(positions.size());
-        std::iota(sorted_indices.begin(), sorted_indices.end(), 0);
+        sorted_indices.reserve(positions.size());
+        for(size_t i = 0; i < positions.size(); ++i) {
+            sorted_indices.push_back(i);
+        }
         std::sort(sorted_indices.begin(), sorted_indices.end(),
                   [this](size_t i1, size_t i2) {
                       return positions[i1][0] < positions[i2][0];
