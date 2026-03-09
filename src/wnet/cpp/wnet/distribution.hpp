@@ -215,41 +215,44 @@ public:
             last_window_start_index(0)
         {}
         inline bool advance() {
-            other_current_index++;
-            if(other_current_index >= other_distribution.size())
-            {
-                current_index++;
-                if(current_index >= distribution.size())
-                    return false;
-                other_current_index = last_window_start_index - 1;
-                return advance();
+            while (true) {
+                other_current_index++;
+                if(other_current_index >= other_distribution.size())
+                {
+                    current_index++;
+                    if(current_index >= distribution.size())
+                        return false;
+                    other_current_index = last_window_start_index - 1;
+                    continue;
+                }
+                position_type other_pos0 = other_distribution.get_point(other_distribution.sorted_indices[other_current_index])[0];
+                position_type this_pos0 = distribution.get_point(distribution.sorted_indices[current_index])[0];
+                if(other_pos0 < this_pos0 - static_cast<position_type>(max_dist))
+                {
+                    last_window_start_index = other_current_index + 1;
+                    continue;
+                }
+                if(other_pos0 > this_pos0 + static_cast<position_type>(max_dist))
+                {
+                    current_index++;
+                    if(current_index >= distribution.size())
+                        return false;
+                    other_current_index = last_window_start_index - 1;
+                    continue;
+                }
+                if constexpr(dist_fun == DistanceMetric::L1) {
+                    current_distance = l1_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
+                } else if constexpr(dist_fun == DistanceMetric::L2) {
+                    current_distance = l2_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
+                } else if constexpr(dist_fun == DistanceMetric::LINF) {
+                    current_distance = linf_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
+                } else {
+                    throw std::runtime_error("Unsupported distance metric.");
+                }
+                if (current_distance <= max_dist) [[likely]] {
+                    return true;
+                }
             }
-            if(other_distribution.get_point(other_distribution.sorted_indices[other_current_index])[0] < distribution.get_point(distribution.sorted_indices[current_index])[0] - static_cast<position_type>(max_dist))
-            {
-                last_window_start_index = other_current_index + 1;
-                return advance();
-            }
-            if(other_distribution.get_point(other_distribution.sorted_indices[other_current_index])[0] > distribution.get_point(distribution.sorted_indices[current_index])[0] + static_cast<position_type>(max_dist))
-            {
-                current_index++;
-                if(current_index >= distribution.size())
-                    return false;
-                other_current_index = last_window_start_index - 1;
-                return advance();
-            }
-            if constexpr(dist_fun == DistanceMetric::L1) {
-                current_distance = l1_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
-            } else if constexpr(dist_fun == DistanceMetric::L2) {
-                current_distance = l2_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
-            } else if constexpr(dist_fun == DistanceMetric::LINF) {
-                current_distance = linf_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
-            } else {
-                throw std::runtime_error("Unsupported distance metric.");
-            }
-            if (current_distance <= max_dist) [[likely]] {
-                return true;
-            }
-            return advance();
         }
         std::pair<size_t, size_t> get_indices() const {
             return {distribution.sorted_indices[current_index], other_distribution.sorted_indices[other_current_index]};
