@@ -31,6 +31,7 @@ template<size_t DIM, typename position_type_ = double, typename intensity_type_ 
 class VectorDistribution {
     std::vector<std::array<position_type_, DIM>> positions;
     std::vector<intensity_type_> intensities_vector;
+    std::vector<size_t> sorted_indices; // indices of the peaks sorted by first dimension of the position, used for faster distance calculations
 public:
     using intensity_type = intensity_type_;
     using position_type = position_type_;
@@ -43,18 +44,14 @@ public:
         const std::vector<std::array<position_type, DIM>>& positions_,
         const std::vector<intensity_type>& intensities_
     ) : positions(positions_), intensities_vector(intensities_), intensities(intensities_vector) {
-        if (positions.size() != intensities.size()) {
-            throw std::invalid_argument("Positions and intensities must have the same size");
-        }
+        init();
     }
 
     VectorDistribution(
         std::vector<std::array<position_type, DIM>>&& positions_,
         std::vector<intensity_type>&& intensities_
     ) : positions(std::move(positions_)), intensities_vector(std::move(intensities_)), intensities(intensities_vector) {
-        if (positions.size() != intensities.size()) {
-            throw std::invalid_argument("Positions and intensities must have the same size");
-        }
+        init();
     }
 
     #if defined(INCLUDE_NANOBIND_STUFF)
@@ -63,9 +60,7 @@ public:
         intensities_vector(numpy_to_vector<intensity_type_>(intensities_arg)),
         intensities(intensities_vector)
     {
-        if (positions.size() != intensities_vector.size()) {
-            throw std::invalid_argument("Positions and intensities must have the same size");
-        }
+        init();
     }
 
     VectorDistribution(const nb::ndarray<position_type_, nb::shape<-1, -1>>& positions_arg, const nb::ndarray<intensity_type_, nb::shape<-1>>& intensities_arg) :
@@ -73,9 +68,7 @@ public:
         intensities_vector(numpy_to_vector<intensity_type_>(intensities_arg)),
         intensities(intensities_vector)
     {
-        if (positions.size() != intensities_vector.size()) {
-            throw std::invalid_argument("Positions and intensities must have the same size");
-        }
+        init();
     }
 
 
@@ -94,6 +87,18 @@ public:
 
     #endif // INCLUDE_NANOBIND_STUFF
 
+    void init()
+    {
+        if (positions.size() != intensities_vector.size()) {
+            throw std::invalid_argument("Positions and intensities must have the same size");
+        }
+        sorted_indices.resize(positions.size());
+        std::iota(sorted_indices.begin(), sorted_indices.end(), 0);
+        std::sort(sorted_indices.begin(), sorted_indices.end(),
+                  [this](size_t i1, size_t i2) {
+                      return positions[i1][0] < positions[i2][0];
+                  });
+    }
 
 
     size_t size() const {
@@ -192,10 +197,10 @@ public:
     class CloserThanIter {
         const VectorDistribution<DIM, position_type, intensity_type>& distribution;
         const VectorDistribution<DIM, position_type, intensity_type>& other_distribution;
-        std::unique_ptr<CloserThanIteratorPoint<dist_fun>> iterator;
         intensity_type max_dist;
         size_t current_index;
         size_t other_current_index;
+        size_t last_window_start_index;
         intensity_type current_distance;
     public:
         CloserThanIter(
@@ -204,27 +209,50 @@ public:
             intensity_type max_dist_
         ) : distribution(distribution_),
             other_distribution(other_distribution_),
-            iterator(std::make_unique<CloserThanIteratorPoint<dist_fun>>(distribution_, other_distribution_.get_point(0), max_dist_)),
             max_dist(max_dist_),
             current_index(0),
-            other_current_index(-1)
+            other_current_index(-1),
+            last_window_start_index(0)
         {}
         inline bool advance() {
-            while (true) {
-                if (iterator->advance()) {
-                    current_distance = iterator->get_distance();
-                    return true;
-                }
+            other_current_index++;
+            if(other_current_index >= other_distribution.size())
+            {
                 current_index++;
-                if (current_index >= other_distribution.size()) {
+                if(current_index >= distribution.size())
                     return false;
-                }
-                other_current_index = -1;
-                iterator = std::make_unique<CloserThanIteratorPoint<dist_fun>>(distribution, other_distribution.get_point(current_index), max_dist);
+                other_current_index = last_window_start_index - 1;
+                return advance();
             }
+            if(other_distribution.get_point(other_distribution.sorted_indices[other_current_index])[0] < distribution.get_point(distribution.sorted_indices[current_index])[0] - static_cast<position_type>(max_dist))
+            {
+                last_window_start_index = other_current_index + 1;
+                return advance();
+            }
+            if(other_distribution.get_point(other_distribution.sorted_indices[other_current_index])[0] > distribution.get_point(distribution.sorted_indices[current_index])[0] + static_cast<position_type>(max_dist))
+            {
+                current_index++;
+                if(current_index >= distribution.size())
+                    return false;
+                other_current_index = last_window_start_index - 1;
+                return advance();
+            }
+            if constexpr(dist_fun == DistanceMetric::L1) {
+                current_distance = l1_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
+            } else if constexpr(dist_fun == DistanceMetric::L2) {
+                current_distance = l2_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
+            } else if constexpr(dist_fun == DistanceMetric::LINF) {
+                current_distance = linf_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
+            } else {
+                throw std::runtime_error("Unsupported distance metric.");
+            }
+            if (current_distance <= max_dist) [[likely]] {
+                return true;
+            }
+            return advance();
         }
         std::pair<size_t, size_t> get_indices() const {
-            return {iterator->get_index(), current_index};
+            return {distribution.sorted_indices[current_index], other_distribution.sorted_indices[other_current_index]};
         }
         intensity_type get_distance() const {
             return current_distance;
