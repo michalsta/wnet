@@ -188,6 +188,57 @@ public:
         );
     };
 
+    template<DistanceMetric dist_fun>
+    class CloserThanIter {
+        const VectorDistribution<DIM, position_type, intensity_type>& distribution;
+        const VectorDistribution<DIM, position_type, intensity_type>& other_distribution;
+        std::unique_ptr<CloserThanIteratorPoint<dist_fun>> iterator;
+        intensity_type max_dist;
+        size_t current_index;
+        size_t other_current_index;
+        intensity_type current_distance;
+    public:
+        CloserThanIter(
+            const VectorDistribution<DIM, position_type, intensity_type>& distribution_,
+            const VectorDistribution<DIM, position_type, intensity_type>& other_distribution_,
+            intensity_type max_dist_
+        ) : distribution(distribution_),
+            other_distribution(other_distribution_),
+            iterator(std::make_unique<CloserThanIteratorPoint<dist_fun>>(distribution_, other_distribution_.get_point(0), max_dist_)),
+            max_dist(max_dist_),
+            current_index(0),
+            other_current_index(-1)
+        {}
+        inline bool advance() {
+            while (true) {
+                if (iterator->advance()) {
+                    current_distance = iterator->get_distance();
+                    return true;
+                }
+                current_index++;
+                if (current_index >= other_distribution.size()) {
+                    return false;
+                }
+                other_current_index = -1;
+                iterator = std::make_unique<CloserThanIteratorPoint<dist_fun>>(distribution, other_distribution.get_point(current_index), max_dist);
+            }
+        }
+        std::pair<size_t, size_t> get_indices() const {
+            return {iterator->get_index(), current_index};
+        }
+        intensity_type get_distance() const {
+            return current_distance;
+        }
+    };
+
+    template<DistanceMetric dist_fun>
+    CloserThanIter<dist_fun> closer_than_iter(
+        const VectorDistribution<DIM, position_type, intensity_type>& other_distribution,
+        intensity_type max_dist
+    ) const {
+        return CloserThanIter<dist_fun>(*this, other_distribution, max_dist);
+    };
+
     static VectorDistribution CreateRandom(size_t no_points,
                                            position_type position_range,
                                            intensity_type intensity_range,

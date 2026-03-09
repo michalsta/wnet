@@ -824,6 +824,7 @@ public:
             #endif
             const auto& theoretical_spectrum = theoretical_spectra[theoretical_spectrum_idx];
 
+            const size_t first_theoretical_node_idx = nodes.size();
             for (LEMON_INDEX theoretical_peak_idx = 0; theoretical_peak_idx < static_cast<LEMON_INT>(theoretical_spectrum->size()); ++theoretical_peak_idx) {
                 nodes.emplace_back(FlowNode<intensity_type>(
                                         nodes.size(),
@@ -831,22 +832,19 @@ public:
                                                 theoretical_spectrum_idx,
                                                 theoretical_peak_idx,
                                                 theoretical_spectrum->intensities[theoretical_peak_idx])));
-                const auto& theoretical_node = nodes.back();
+            }
 
-                // Calculate the distance between the empirical and theoretical peaks
-                auto it = empirical_spectrum->template closer_than_iter_point<dist_fun>(
-                    theoretical_spectrum->get_point(theoretical_peak_idx),
-                    max_dist
-                );
-                while(it.advance())
-                {
-                    edges.emplace_back(FlowEdge<intensity_type>(
-                        edges.size(),
-                        nodes[it.get_index() + 2], // +2 to skip the source and sink nodes
-                        theoretical_node,
-                        MatchingEdge(static_cast<VALUE_TYPE>(it.get_distance()))
-                    ));
-                }
+            // Calculate the distances between the empirical and theoretical peaks
+            auto it = empirical_spectrum->template closer_than_iter<dist_fun>(*theoretical_spectrum, max_dist);
+            while(it.advance())
+            {
+                auto [empirical_idx, theoretical_peak_idx] = it.get_indices();
+                edges.emplace_back(FlowEdge<intensity_type>(
+                    edges.size(),
+                    nodes[empirical_idx + 2], // +2 to skip the source and sink nodes
+                    nodes[first_theoretical_node_idx + theoretical_peak_idx],
+                    MatchingEdge(static_cast<VALUE_TYPE>(it.get_distance()))
+                ));
             }
         }
         return WassersteinNetwork<VALUE_TYPE, intensity_type>(
