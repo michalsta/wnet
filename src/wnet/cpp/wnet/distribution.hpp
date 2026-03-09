@@ -26,6 +26,7 @@ template<typename intensity_type_>
 class Distribution;
 
 
+
 template<size_t DIM, typename position_type_ = double, typename intensity_type_ = LEMON_INT>
 class VectorDistribution {
     std::vector<std::array<position_type_, DIM>> positions;
@@ -131,7 +132,7 @@ public:
     }*/
 
     template<DistanceMetric dist_fun>
-    class CloserThanIterator {
+    class CloserThanIteratorPoint {
         const VectorDistribution<DIM, position_type, intensity_type>& distribution;
         const Point_t& point;
         intensity_type max_dist;
@@ -139,7 +140,7 @@ public:
         intensity_type current_distance;
 
     public:
-        CloserThanIterator(
+        CloserThanIteratorPoint(
             const VectorDistribution<DIM, position_type, intensity_type>& distribution_,
             const Point_t& point_,
             intensity_type max_dist_
@@ -176,11 +177,11 @@ public:
     };
 
     template<DistanceMetric dist_fun>
-    CloserThanIterator<dist_fun> closer_than_iter(
+    CloserThanIteratorPoint<dist_fun> closer_than_iter_point(
         const Point_t& point,
         intensity_type max_dist
     ) const {
-        return CloserThanIterator<dist_fun>(
+        return CloserThanIteratorPoint<dist_fun>(
             *this,
             point,
             max_dist
@@ -282,14 +283,14 @@ public:
         return {indices, distances};
     }
 
-    class CloserThanIterator {
+    class CloserThanIteratorPoint {
         size_t current_index;
         nb::ndarray<LEMON_INT, nb::shape<-1>> distances_array;
         LEMON_INT* distances_ptr;
         LEMON_INT max_dist;
         size_t distribution_size;
     public:
-        CloserThanIterator(
+        CloserThanIteratorPoint(
             const nb::ndarray<nb::shape<-1, -1>> py_positions_,
             const Point_t point_,
             const distance_fun_t& dist_fun_,
@@ -321,12 +322,12 @@ public:
         }
     };
 
-    CloserThanIterator closer_than_iter(
+    CloserThanIteratorPoint closer_than_iter_point(
         const Point_t point,
         const distance_fun_t& dist_fun,
         LEMON_INT max_dist
     ) const {
-        return CloserThanIterator(
+        return CloserThanIteratorPoint(
             py_positions,
             point,
             dist_fun,

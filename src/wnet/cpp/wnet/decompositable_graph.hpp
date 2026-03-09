@@ -445,7 +445,7 @@ public:
                 const auto& theoretical_node = nodes.back();
 
                 // Calculate the distance between the empirical and theoretical peaks
-                auto it = empirical_spectrum->closer_than_iter(
+                auto it = empirical_spectrum->closer_than_iter_point(
                     theoretical_spectrum->get_point(theoretical_peak_idx),
                     dist_fun,
                     max_dist
@@ -834,7 +834,7 @@ public:
                 const auto& theoretical_node = nodes.back();
 
                 // Calculate the distance between the empirical and theoretical peaks
-                auto it = empirical_spectrum->template closer_than_iter<dist_fun>(
+                auto it = empirical_spectrum->template closer_than_iter_point<dist_fun>(
                     theoretical_spectrum->get_point(theoretical_peak_idx),
                     max_dist
                 );
