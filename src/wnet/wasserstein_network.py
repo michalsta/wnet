@@ -133,7 +133,11 @@ class SubgraphWrapper:
                 "weight": edge.get_cost(),
             }
             if self.is_solved():
-                edge_data["flow"] = flows.get(edge.get_id(), 0)
+                edge_id = edge.get_id()
+                if edge_id in flows:
+                    edge_data["flow"] = flows[edge_id]
+                else:
+                    edge_data["flow"] = 0
             G.add_edge(start, end, **edge_data)
         return G
 

@@ -1,13 +1,22 @@
 #include <iostream>
 
 #include <nanobind/nanobind.h>
+NB_MAKE_OPAQUE(std::vector<int32_t>);
+NB_MAKE_OPAQUE(std::vector<int64_t>);
+NB_MAKE_OPAQUE(std::vector<uint32_t>);
+NB_MAKE_OPAQUE(std::vector<uint64_t>);
+NB_MAKE_OPAQUE(std::vector<double>);
+#include <nanobind/ndarray.h>
+
 #include <nanobind/stl/string.h>
-#include <nanobind/stl/vector.h>
+//#include <nanobind/stl/vector.h>
+#include <nanobind/stl/bind_vector.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/unordered_map.h>
-#include <nanobind/stl/variant.h>
-#include <nanobind/ndarray.h>
+#include <nanobind/stl/bind_map.h>
+
+// Declare the type as opaque to avoid conflicts
+NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>> *, unsigned long>);
 
 #include "decompositable_graph.hpp"
 #include "graph_elements.hpp"
@@ -43,6 +52,12 @@ NB_MODULE(wnet_cpp, m) {
         std::cout << "Hello from WNet (C++)!" << std::endl;
     }, "A simple hello world function for the WNet (C++) extension");
     // Bind the classes to the module
+    nb::bind_vector<std::vector<int32_t>>(m, "std_vector_int32_t");
+    nb::bind_vector<std::vector<int64_t>>(m, "std_vector_int64_t");
+    nb::bind_vector<std::vector<uint32_t>>(m, "std_vector_uint32_t");
+    nb::bind_vector<std::vector<uint64_t>>(m, "std_vector_uint64_t");
+    nb::bind_vector<std::vector<double>>(m, "std_vector_double");
+    nb::bind_map<std::unordered_map<int32_t, int64_t>>(m, "std_unordered_map_int32_t_int64_t");
 
     nb::class_<FlowNode<int64_t>>(m, "FlowNode")
         .def(nb::init<LEMON_INDEX, SourceNode>())
