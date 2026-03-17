@@ -1,4 +1,8 @@
 #include <iostream>
+#include <vector>
+#include <array>
+#include <unordered_map>
+#include <variant>
 
 #include <nanobind/nanobind.h>
 NB_MAKE_OPAQUE(std::vector<int32_t>);
