@@ -14,6 +14,7 @@ NB_MAKE_OPAQUE(std::vector<double>);
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/bind_map.h>
+#include <nanobind/stl/variant.h>
 
 // Declare the type as opaque to avoid conflicts
 NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>> *, unsigned long>);
