@@ -5,11 +5,15 @@
 #include <variant>
 
 #include <nanobind/nanobind.h>
+
 NB_MAKE_OPAQUE(std::vector<int32_t>);
 NB_MAKE_OPAQUE(std::vector<int64_t>);
 NB_MAKE_OPAQUE(std::vector<uint32_t>);
 NB_MAKE_OPAQUE(std::vector<uint64_t>);
 NB_MAKE_OPAQUE(std::vector<double>);
+NB_MAKE_OPAQUE(std::unordered_map<int32_t, int64_t>);
+
+
 #include <nanobind/ndarray.h>
 
 #include <nanobind/stl/string.h>
@@ -21,7 +25,7 @@ NB_MAKE_OPAQUE(std::vector<double>);
 #include <nanobind/stl/variant.h>
 
 // Declare the type as opaque to avoid conflicts
-NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>> *, unsigned long>);
+NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>> *, size_t>);
 
 #include "decompositable_graph.hpp"
 #include "graph_elements.hpp"
