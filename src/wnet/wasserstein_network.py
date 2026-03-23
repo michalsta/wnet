@@ -1,6 +1,7 @@
 from typing import Optional
 from collections.abc import Sequence
 from collections import defaultdict
+import numpy as np
 
 from wnet.wnet_cpp import (
     CWassersteinNetwork,
@@ -56,6 +57,8 @@ class WassersteinNetwork:
         self.count_theoretical_to_sink_edges = self.wnet.count_theoretical_to_sink_edges
         self.count_src_to_empirical_edges = self.wnet.count_src_to_empirical_edges
         self.count_simple_trash_edges = self.wnet.count_simple_trash_edges
+        self.no_theoretical_spectra = self.wnet.no_theoretical_spectra
+        self.theoretical_spectra_sizes = self.wnet.theoretical_spectra_sizes
 
     def __str__(self) -> str:
         """Returns a string representation of the Wasserstein network."""

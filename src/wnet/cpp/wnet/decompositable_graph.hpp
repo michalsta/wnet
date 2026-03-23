@@ -376,6 +376,7 @@ class WassersteinNetwork {
     std::vector<FlowEdge<intensity_type>> edges;
 
     const size_t _no_theoretical_spectra;
+    const std::vector<size_t> _theoretical_spectra_sizes;
 
     std::vector<LEMON_INDEX> dead_end_node_ids;
     std::vector<std::unique_ptr<WassersteinNetworkSubgraph<VALUE_TYPE, intensity_type>>> flow_subgraphs;
@@ -386,11 +387,13 @@ public:
     WassersteinNetwork(std::vector<FlowNode<intensity_type>>&& nodes_,
                        std::vector<FlowEdge<intensity_type>>&& edges_,
                        size_t no_theoretical_spectra_,
+                       std::vector<size_t>&& theoretical_spectra_sizes_,
                        std::vector<LEMON_INDEX>&& dead_end_node_ids_
     ) :
     nodes(std::move(nodes_)),
     edges(std::move(edges_)),
     _no_theoretical_spectra(no_theoretical_spectra_),
+    _theoretical_spectra_sizes(std::move(theoretical_spectra_sizes_)),
     dead_end_node_ids(std::move(dead_end_node_ids_))
     {
         build_subgraphs();
@@ -523,6 +526,7 @@ public:
         nodes(std::move(other.nodes)),
         edges(std::move(other.edges)),
         _no_theoretical_spectra(other._no_theoretical_spectra),
+        _theoretical_spectra_sizes(std::move(other._theoretical_spectra_sizes)),
         dead_end_node_ids(std::move(other.dead_end_node_ids)),
         flow_subgraphs(std::move(other.flow_subgraphs)),
         built(other.built)
@@ -538,6 +542,10 @@ public:
     };
     size_t no_theoretical_spectra() const {
         return _no_theoretical_spectra;
+    };
+
+    const std::vector<size_t>& theoretical_spectra_sizes() const {
+        return _theoretical_spectra_sizes;
     };
 
     const std::vector<FlowNode<intensity_type>>& get_nodes() const {
@@ -847,10 +855,17 @@ public:
                 ));
             }
         }
+
+        std::vector<size_t> theoretical_spectra_sizes;
+        theoretical_spectra_sizes.reserve(theoretical_spectra.size());
+        for (const auto& theoretical_spectrum : theoretical_spectra)
+            theoretical_spectra_sizes.push_back(theoretical_spectrum->size());
+
         return WassersteinNetwork<VALUE_TYPE, intensity_type>(
             std::move(nodes),
             std::move(edges),
             theoretical_spectra.size(),
+            std::move(theoretical_spectra_sizes),
             std::move(dead_end_node_ids)
         );
     };
