@@ -35,6 +35,8 @@ endif()
 
 
 install(TARGETS wnet_cpp LIBRARY DESTINATION wnet)
+install(DIRECTORY src/wnet/cpp/wnet DESTINATION wnet/cpp
+    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h")
 
 # Uncomment the following line to enable detailed debug prints in the C++ code
 # target_compile_definitions(wnet_cpp PRIVATE DO_TONS_OF_PRINTS)
