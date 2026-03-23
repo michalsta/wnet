@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <cstring> // for std::memcpy
+#include <span>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
