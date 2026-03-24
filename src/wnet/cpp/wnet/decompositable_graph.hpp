@@ -133,6 +133,8 @@ public:
     }
 
     void build() {
+        assert_fits_lemon_index(nodes.size(), "subgraph nodes");
+        assert_fits_lemon_index(edges.size(), "subgraph edges");
         edges = std::move(sorted_copy(edges, [](const FlowEdge<intensity_type>& a, const FlowEdge<intensity_type>& b) {
             if(a.get_start_node_id() != b.get_start_node_id())
                 return a.get_start_node_id() < b.get_start_node_id();
@@ -571,6 +573,7 @@ public:
         std::vector<std::vector<LEMON_INDEX>> subgraphs;
         std::vector<LEMON_INDEX> dead_end_nodes;
 
+        assert_fits_lemon_index(nodes.size(), "network nodes");
         std::vector<bool> visited(nodes.size(), false);
         visited[0] = true; // Mark the source node as visited
         visited[1] = true; // Mark the sink node as visited
@@ -808,6 +811,10 @@ public:
             size_t no_nodes = 2 + empirical_spectrum->size();
             for (auto& ts : theoretical_spectra)
                 no_nodes += ts->size();
+            assert_fits_lemon_index(no_nodes, "nodes");
+            assert_fits_lemon_index(empirical_spectrum->size(), "empirical peaks");
+            for (size_t i = 0; i < theoretical_spectra.size(); ++i)
+                assert_fits_lemon_index(theoretical_spectra[i]->size(), "theoretical peaks");
             nodes.reserve(no_nodes);
         }
 
@@ -860,6 +867,8 @@ public:
         theoretical_spectra_sizes.reserve(theoretical_spectra.size());
         for (const auto& theoretical_spectrum : theoretical_spectra)
             theoretical_spectra_sizes.push_back(theoretical_spectrum->size());
+
+        assert_fits_lemon_index(edges.size(), "edges");
 
         return WassersteinNetwork<VALUE_TYPE, intensity_type>(
             std::move(nodes),
