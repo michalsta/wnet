@@ -854,11 +854,17 @@ public:
             while(it.advance())
             {
                 auto [empirical_idx, theoretical_peak_idx] = it.get_indices();
+                double dist = it.get_distance();
+                if (dist > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
+                    throw std::overflow_error(
+                        "Distance " + std::to_string(dist) +
+                        " overflows VALUE_TYPE (max " +
+                        std::to_string(std::numeric_limits<VALUE_TYPE>::max()) + ")");
                 edges.emplace_back(FlowEdge<intensity_type>(
                     edges.size(),
                     nodes[empirical_idx + 2], // +2 to skip the source and sink nodes
                     nodes[first_theoretical_node_idx + theoretical_peak_idx],
-                    MatchingEdge(static_cast<VALUE_TYPE>(it.get_distance()))
+                    MatchingEdge(static_cast<VALUE_TYPE>(dist))
                 ));
             }
         }
