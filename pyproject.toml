@@ -31,19 +31,19 @@ extras = ["networkx", "matplotlib"]
 pytest = ["pytest"]
 
 [tool.scikit-build.sdist]
-exclude = ["**/*"]
-include = [
-    "/src/**/*.py",
-    "/src/**/*.c",
-    "/src/**/*.hpp",
-    "/src/**/*.h",
-    "/src/**/*.cpp",
-    "/src/**/*.cc",
-    "/LICENCE",
-    "/README.md",
-    "/pyproject.toml",
-    "/CMakeLists.txt"
+exclude = [
+    "tests/",
+    "dist/",
+    ".github/",
+    ".vscode/",
+    ".pytest_cache/",
+    "src/wnet/__pycache__/",
+    "src/wnet/cpp/wnet/a.out",
+    "src/wnet/cpp/wnet/a.out.dSYM/",
+    "df.py",
+    "example.py",
+    "reinstall.sh",
+    ".coverage",
 ]
-
 # [tool.scikit-build]
 # cmake.build-type = "Debug"
