@@ -174,6 +174,11 @@ class SubgraphWrapper:
     def signal_part_derivatives(self) -> dict[int, dict[int, int]]:
         """Compute the marginal cost of increasing each theoretical signal by 1.
 
+        Returns a nested dict mapping spectrum_id → {peak_index → derivative},
+        where derivative is the change in total transport cost if that peak's
+        intensity were increased by 1.  A negative derivative means increasing
+        the signal *reduces* total cost (e.g. absorbing a trash unit).
+
         Builds the full residual graph (excluding the trash edge) and uses
         Bellman-Ford shortest paths to find the cheapest way to route one
         more unit to each theoretical node.  The trash edge is handled
