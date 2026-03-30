@@ -156,4 +156,4 @@ def Distribution_1D(
     assert len(positions.shape) == 1
     assert len(intensities.shape) == 1
     assert positions.shape[0] == intensities.shape[0]
-    return Distribution(positions[np.newaxis, :], intensities)
+    return Distribution(positions[np.newaxis, :], intensities, label=label)
