@@ -370,6 +370,124 @@ public:
     bool is_solved() const {
         return solver.has_value();
     }
+
+    // Compute single-source shortest distances on the implicit residual graph
+    // (excluding the trash edge). For each arc:
+    //   forward residual if flow < capacity (cost = original)
+    //   reverse residual if flow > 0 (cost = -original)
+    std::vector<VALUE_TYPE> bellman_ford_residual(LEMON_INDEX source_id) const {
+        const LEMON_INDEX n = lemon_graph.nodeNum();
+        const LEMON_INDEX m = lemon_graph.arcNum();
+        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
+        std::vector<VALUE_TYPE> dist(n, INF);
+        dist[source_id] = 0;
+
+        for (LEMON_INDEX iter = 0; iter < n - 1; ++iter) {
+            bool changed = false;
+            for (LEMON_INDEX ii = 0; ii < m; ++ii) {
+                if (ii == simple_trash_idx) continue;
+                auto arc = lemon_graph.arcFromId(ii);
+                LEMON_INDEX u = lemon_graph.id(lemon_graph.source(arc));
+                LEMON_INDEX v = lemon_graph.id(lemon_graph.target(arc));
+                VALUE_TYPE cost = costs_map[arc];
+                VALUE_TYPE cap = capacities_map[arc];
+                VALUE_TYPE flow = solver->flow(arc);
+                // Matching edges have unlimited base capacity; the LEMON
+                // capacity (min of endpoint intensities) is an optimization
+                // that should not limit the residual graph.
+                bool unlimited = std::holds_alternative<MatchingEdge>(edges[ii].get_type());
+
+                if ((unlimited || flow < cap) && dist[u] != INF && dist[u] + cost < dist[v]) {
+                    dist[v] = dist[u] + cost;
+                    changed = true;
+                }
+                if (flow > 0 && dist[v] != INF && dist[v] - cost < dist[u]) {
+                    dist[u] = dist[v] - cost;
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
+        return dist;
+    }
+
+    // Per-peak marginal cost of increasing each theoretical signal by 1.
+    // Returns vector of (spectrum_id, peak_index, derivative).
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
+        if (!solver)
+            throw std::runtime_error("Must call solve() before signal_part_derivatives().");
+        if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max())
+            throw std::runtime_error("signal_part_derivatives() requires simple trash.");
+
+        const VALUE_TYPE trash_cost = simple_trash_cost();
+        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
+        const LEMON_INDEX sink_id = 1;
+
+        auto dist_src = bellman_ford_residual(0);
+        auto dist_sink = bellman_ford_residual(sink_id);
+
+        const VALUE_TYPE src_adjust = (lemon_empirical_intensity > lemon_theoretical_intensity)
+            ? -trash_cost : 0;
+        const VALUE_TYPE sink_adjust = (lemon_empirical_intensity > lemon_theoretical_intensity)
+            ? 0 : trash_cost;
+
+        // Build theo->sink slack: capacity - flow
+        std::unordered_map<LEMON_INDEX, VALUE_TYPE> theo_sink_slack;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INDEX>(edges.size()); ++ii) {
+            if (std::holds_alternative<TheoreticalToSinkEdge>(edges[ii].get_type())) {
+                auto arc = lemon_graph.arcFromId(ii);
+                theo_sink_slack[edges[ii].get_start_node_id()] =
+                    capacities_map[arc] - solver->flow(arc);
+            }
+        }
+
+        std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
+        for (const auto& node : nodes) {
+            auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
+            if (!theo) continue;
+            LEMON_INDEX node_id = node.get_id();
+
+            // If slack > 0 and excess empirical supply, the solver already
+            // chose not to use this node -- adding capacity changes nothing.
+            auto slack_it = theo_sink_slack.find(node_id);
+            if (slack_it != theo_sink_slack.end() && slack_it->second > 0
+                && lemon_empirical_intensity > lemon_theoretical_intensity) {
+                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), 0);
+                continue;
+            }
+
+            VALUE_TYPE deriv = trash_cost;
+            if (dist_src[node_id] != INF)
+                deriv = std::min(deriv, dist_src[node_id] + src_adjust);
+            if (dist_sink[node_id] != INF)
+                deriv = std::min(deriv, dist_sink[node_id] + sink_adjust);
+
+            result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), deriv);
+        }
+        return result;
+    }
+
+    // Gradient of total cost w.r.t. scaling each spectrum's proportion.
+    // Returns vector of (spectrum_id, derivative).
+    // derivative = sum_i(peak_derivative_i * intensity_i) for each spectrum.
+    std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
+        auto peak_derivs = signal_part_derivatives();
+
+        // Build lookup: (spectrum_id, peak_index) -> derivative
+        std::unordered_map<size_t, std::unordered_map<LEMON_INDEX, VALUE_TYPE>> deriv_map;
+        for (auto& [spec_id, peak_idx, deriv] : peak_derivs)
+            deriv_map[spec_id][peak_idx] = deriv;
+
+        std::unordered_map<size_t, VALUE_TYPE> accum;
+        for (const auto& node : nodes) {
+            auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
+            if (!theo) continue;
+            accum[theo->get_spectrum_id()] +=
+                deriv_map[theo->get_spectrum_id()][theo->get_peak_index()]
+                * static_cast<VALUE_TYPE>(theo->get_intensity());
+        }
+        return {accum.begin(), accum.end()};
+    }
 };
 
 template <typename VALUE_TYPE, typename intensity_type>
@@ -769,6 +887,24 @@ public:
         for (const auto& flow_subgraph : flow_subgraphs)
             denominator += flow_subgraph->template count_nodes_of_type<EmpiricalNode<intensity_type>>() * flow_subgraph->template count_nodes_of_type<TheoreticalNode<intensity_type>>();
         return nominator / denominator;
+    }
+
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
+        std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
+        for (const auto& sg : flow_subgraphs) {
+            auto sg_derivs = sg->signal_part_derivatives();
+            result.insert(result.end(), sg_derivs.begin(), sg_derivs.end());
+        }
+        return result;
+    }
+
+    std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
+        std::unordered_map<size_t, VALUE_TYPE> accum;
+        for (const auto& sg : flow_subgraphs) {
+            for (auto& [spec_id, deriv] : sg->spectrum_proportion_derivatives())
+                accum[spec_id] += deriv;
+        }
+        return {accum.begin(), accum.end()};
     }
 
     static constexpr size_t value_type_size() {

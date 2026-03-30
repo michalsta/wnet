@@ -18,7 +18,13 @@ def show_graph(G):
         (u, v): f"cost: {d['weight']}\n capacity: {d['capacity']}" + (f"\n flow: {d['flow']}" if "flow" in d else "")
         for u, v, d in G.edges(data=True)
     }
-    nx.draw(G, pos, with_labels=True, node_color=node_colors, arrows=True)
+    nx.draw(
+        G,
+        pos,
+        with_labels=True,
+        node_color=node_colors,
+        connectionstyle="arc3,rad=0.1",
+    )
     nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
     plt.show()
 

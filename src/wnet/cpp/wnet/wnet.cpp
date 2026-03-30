@@ -105,7 +105,9 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_nodes", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_nodes)
         .def("get_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_edges)
         .def("get_flow_map", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_flow_map)
-        .def("is_solved", &WassersteinNetworkSubgraph<int64_t, int64_t>::is_solved);
+        .def("is_solved", &WassersteinNetworkSubgraph<int64_t, int64_t>::is_solved)
+        .def("signal_part_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::signal_part_derivatives)
+        .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::spectrum_proportion_derivatives);
 
         nb::class_<WassersteinNetworkSubgraph<int64_t, double>>(m, "CWassersteinNetworkSubgraphFloat")
         .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode<double>>&, const std::vector<FlowEdge<double>*>&, size_t>())
@@ -121,7 +123,9 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_nodes", &WassersteinNetworkSubgraph<int64_t, double>::get_nodes)
         .def("get_edges", &WassersteinNetworkSubgraph<int64_t, double>::get_edges)
         .def("get_flow_map", &WassersteinNetworkSubgraph<int64_t, double>::get_flow_map)
-        .def("is_solved", &WassersteinNetworkSubgraph<int64_t, double>::is_solved);
+        .def("is_solved", &WassersteinNetworkSubgraph<int64_t, double>::is_solved)
+        .def("signal_part_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::signal_part_derivatives)
+        .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::spectrum_proportion_derivatives);
 
     nb::class_<WassersteinNetwork<int64_t, int64_t>>(m, "CWassersteinNetwork")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
@@ -152,7 +156,9 @@ NB_MODULE(wnet_cpp, m) {
         .def_static("value_type_size", &WassersteinNetwork<int64_t, int64_t>::value_type_size)
         .def_static("index_type_size", &WassersteinNetwork<int64_t, int64_t>::index_type_size)
         .def_static("max_value", &WassersteinNetwork<int64_t, int64_t>::max_value)
-        .def_static("max_index", &WassersteinNetwork<int64_t, int64_t>::max_index);
+        .def_static("max_index", &WassersteinNetwork<int64_t, int64_t>::max_index)
+        .def("signal_part_derivatives", &WassersteinNetwork<int64_t, int64_t>::signal_part_derivatives)
+        .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, int64_t>::spectrum_proportion_derivatives);
 
     nb::class_<WassersteinNetwork<int64_t, double>>(m, "CWassersteinNetworkFloat")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
@@ -183,7 +189,9 @@ NB_MODULE(wnet_cpp, m) {
         .def_static("value_type_size", &WassersteinNetwork<int64_t, double>::value_type_size)
         .def_static("index_type_size", &WassersteinNetwork<int64_t, double>::index_type_size)
         .def_static("max_value", &WassersteinNetwork<int64_t, double>::max_value)
-        .def_static("max_index", &WassersteinNetwork<int64_t, double>::max_index);
+        .def_static("max_index", &WassersteinNetwork<int64_t, double>::max_index)
+        .def("signal_part_derivatives", &WassersteinNetwork<int64_t, double>::signal_part_derivatives)
+        .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, double>::spectrum_proportion_derivatives);
 
     nb::class_<Distribution<LEMON_INT>>(m, "CDistribution")
         .def(nb::init<nb::ndarray<nb::shape<-1, -1>>, nb::ndarray<LEMON_INT, nb::shape<-1>>>(), nb::arg().noconvert(), nb::arg().noconvert())
