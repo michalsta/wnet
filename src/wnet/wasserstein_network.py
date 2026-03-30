@@ -64,6 +64,17 @@ class WassersteinNetwork:
         """Returns a string representation of the Wasserstein network."""
         return self.wnet.__str__()
 
+    def spectrum_proportion_derivatives(self) -> dict[int, int]:
+        """Gradient of total cost w.r.t. scaling each spectrum's proportion.
+
+        Aggregates across all subgraphs.  Returns spectrum_id -> derivative.
+        """
+        ret: dict[int, int] = {}
+        for sg in self.subgraphs():
+            for spec_id, deriv in sg.spectrum_proportion_derivatives().items():
+                ret[spec_id] = ret.get(spec_id, 0) + deriv
+        return ret
+
     def subgraphs(self) -> list["SubgraphWrapper"]:
         """
         Returns a list of SubgraphWrapper instances, each representing a subgraph of the network.
@@ -265,4 +276,22 @@ class SubgraphWrapper:
                 if node_id in dist_sink:
                     candidates.append(dist_sink[node_id] + sink_adjust)
                 ret[nt.get_spectrum_id()][nt.get_peak_index()] = min(candidates)
+        return ret
+
+    def spectrum_proportion_derivatives(self) -> dict[int, int]:
+        """Gradient of total cost w.r.t. scaling each spectrum's proportion.
+
+        Returns spectrum_id -> derivative.  The derivative approximates the
+        cost change when every peak in the spectrum is scaled by (1 + eps):
+        d(cost)/d(eps) at eps=0 = sum_i (peak_derivative_i * intensity_i).
+        """
+        peak_derivs = self.signal_part_derivatives()
+        ret: dict[int, int] = {}
+        for node in self.get_nodes():
+            nt = node.get_type()
+            if isinstance(nt, TheoreticalNode):
+                spec_id = nt.get_spectrum_id()
+                peak_idx = nt.get_peak_index()
+                intensity = nt.get_intensity()
+                ret[spec_id] = ret.get(spec_id, 0) + peak_derivs[spec_id][peak_idx] * intensity
         return ret

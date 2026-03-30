@@ -304,3 +304,50 @@ def test_signal_part_derivatives_predict_cost_change(seed):
             f"predicted={predicted_derivative * delta}, actual={actual_change}, "
             f"original_cost={original_cost}, new_cost={new_cost}"
         )
+
+
+# --- spectrum_proportion_derivatives tests ---
+
+
+def test_proportion_derivative_exact_match():
+    """
+    Base: pos=0, intensity=5.  Target: pos=10, intensity=5.  trash=100.
+    Peak derivative = 100 (trash_cost). Intensity = 5.
+    Proportion derivative = 100 * 5 = 500.
+    """
+    W = make_network_and_solve([0], [5], [10], [5], 100)
+    assert W.spectrum_proportion_derivatives() == {0: 500}
+
+
+def test_proportion_derivative_excess_base():
+    """
+    Base: pos=0, intensity=10.  Target: pos=10, intensity=5.  trash=100.
+    Peak derivative = -90. Intensity = 5.
+    Proportion derivative = -90 * 5 = -450.
+    """
+    W = make_network_and_solve([0], [10], [10], [5], 100)
+    assert W.spectrum_proportion_derivatives() == {0: -450}
+
+
+def test_proportion_derivative_two_peaks():
+    """
+    Base: pos=0, intensity=10.
+    Target 0: pos=5, intensity=3.  Target 1: pos=20, intensity=4.  trash=100.
+    Peak 0 derivative = 5 - 100 = -95, intensity = 3.
+    Peak 1 derivative = 20 - 100 = -80, intensity = 4.
+    Proportion derivative = (-95 * 3) + (-80 * 4) = -285 + -320 = -605.
+    """
+    W = make_network_and_solve([0], [10], [5, 20], [3, 4], 100)
+    assert W.spectrum_proportion_derivatives() == {0: -605}
+
+
+def test_proportion_derivative_agrees_with_peak_derivs():
+    """Cross-check: proportion derivative equals dot product of peak derivs and intensities."""
+    W = make_network_and_solve([0, 50], [8, 8], [10, 40, 60], [3, 2, 5], 100)
+    sg = W.subgraphs()[0]
+    peak_derivs = sg.signal_part_derivatives()
+    prop_derivs = sg.spectrum_proportion_derivatives()
+
+    intensities = [3, 2, 5]
+    expected = sum(peak_derivs[0][i] * intensities[i] for i in range(3))
+    assert prop_derivs[0] == expected
