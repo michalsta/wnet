@@ -351,3 +351,77 @@ def test_proportion_derivative_agrees_with_peak_derivs():
     intensities = [3, 2, 5]
     expected = sum(peak_derivs[0][i] * intensities[i] for i in range(3))
     assert prop_derivs[0] == expected
+
+
+# --- set_point / repeated solve tests ---
+
+
+def test_derivatives_stable_after_repeated_set_point():
+    """Solve at point=1, then at other points, then back at point=1.
+    Derivatives at point=1 should match a fresh solve.
+    """
+    bp, bi = [0, 50], [10, 10]
+    tp, ti = [10, 40], [5, 5]
+    md = 100
+
+    # Fresh solve at point=1
+    W_fresh = make_network_and_solve(bp, bi, tp, ti, md)
+    fresh_cost = W_fresh.total_cost()
+    fresh_derivs = W_fresh.signal_part_derivatives()
+
+    # Build once, solve at various points, then come back to point=1
+    base = Distribution_1D(np.array(bp, dtype=np.float64), np.array(bi, dtype=np.int64))
+    target = Distribution_1D(np.array(tp, dtype=np.float64), np.array(ti, dtype=np.int64))
+    W = WassersteinNetwork(base, [target], distance=DistanceMetric.L1, max_distance=md)
+    W.add_simple_trash(md)
+    W.build()
+
+    for point in [[1.0], [0.5], [2.0], [0.1], [3.0], [1.0]]:
+        W.solve(point)
+
+    assert W.total_cost() == fresh_cost
+    assert W.signal_part_derivatives() == fresh_derivs
+
+    # Verify derivatives match perturbation at point=1
+    for peak_idx in range(2):
+        predicted = fresh_derivs[0][peak_idx]
+        new_cost = perturb_and_solve(bp, bi, tp, ti, md, peak_idx, 1)
+        actual = new_cost - fresh_cost
+        assert actual == predicted
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_derivatives_stable_after_set_point_random(seed):
+    """Random networks: solve at several points, return to point=1,
+    and verify derivatives match a fresh solve at point=1.
+    """
+    rng = np.random.default_rng(seed)
+
+    n_base = rng.integers(2, 6)
+    n_target = rng.integers(2, 6)
+
+    bp = (rng.uniform(0, 100, size=n_base) * 1000).astype(np.int64)
+    bi = rng.integers(1, 20, size=n_base)
+    tp = (rng.uniform(0, 100, size=n_target) * 1000).astype(np.int64)
+    ti = rng.integers(1, 20, size=n_target)
+    md = 50000
+
+    # Fresh solve at point=1
+    W_fresh = make_network_and_solve(bp.tolist(), bi.tolist(), tp.tolist(), ti.tolist(), md)
+    fresh_cost = W_fresh.total_cost()
+    fresh_derivs = W_fresh.signal_part_derivatives()
+
+    # Build once, solve at various points, then return to point=1
+    base = Distribution_1D(np.array(bp, dtype=np.float64), np.array(bi, dtype=np.int64))
+    target = Distribution_1D(np.array(tp, dtype=np.float64), np.array(ti, dtype=np.int64))
+    W = WassersteinNetwork(base, [target], distance=DistanceMetric.L1, max_distance=md)
+    W.add_simple_trash(md)
+    W.build()
+
+    points = [[p] for p in rng.uniform(0.3, 3.0, size=5)]
+    for point in points:
+        W.solve(point)
+    W.solve([1.0])
+
+    assert W.total_cost() == fresh_cost
+    assert W.signal_part_derivatives() == fresh_derivs
