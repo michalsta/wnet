@@ -151,33 +151,113 @@ class SubgraphWrapper:
         """
         show_graph(self.as_networkx())
 
-    def derivative_graph(self) -> "networkx.DiGraph":
+    def residual_graph(self) -> "networkx.DiGraph":
+        """Build the residual graph of the solved min-cost flow network.
+
+        For each edge with remaining forward capacity, a forward residual edge
+        is added.  For each edge with positive flow, a reverse residual edge
+        (with negated cost) is added.  The resulting graph has no negative
+        cycles (a property of optimal min-cost flow solutions).
+        """
         import networkx as nx
         G = self.as_networkx()
-        derivative_G = nx.DiGraph()
-        for node in G.nodes():
-            print(G.nodes[node]["type"])
-            if G.nodes[node]["type"] == "SinkNode":
-                continue
-            derivative_G.add_node(node, **G.nodes[node])
+        R = nx.DiGraph()
+        for node, data in G.nodes(data=True):
+            R.add_node(node, **data)
         for u, v, data in G.edges(data=True):
-            if G.nodes[v]["type"] == "SinkNode":
-                continue
             if data["capacity"] is None or data["flow"] < data["capacity"]:
-                print(f"Adding edge from {u} to {v} with weight {data['weight']} and capacity {data['capacity']}")
-                derivative_G.add_edge(u, v, **data)
+                R.add_edge(u, v, weight=data["weight"])
             if data["flow"] > 0:
-                print(f"Adding reverse edge from {v} to {u} with weight {-data['weight']} and capacity {data['flow']}")
-                derivative_G.add_edge(v, u, capacity=data["flow"], weight=-data["weight"])
-        return derivative_G
+                R.add_edge(v, u, weight=-data["weight"])
+        return R
 
-    def signal_part_derivatives(self) -> dict[int, int]:
+    def signal_part_derivatives(self) -> dict[int, dict[int, int]]:
+        """Compute the marginal cost of increasing each theoretical signal by 1.
+
+        Builds the full residual graph (excluding the trash edge) and uses
+        Bellman-Ford shortest paths to find the cheapest way to route one
+        more unit to each theoretical node.  The trash edge is handled
+        separately via a cost adjustment depending on the supply/demand
+        balance.
+        """
         import networkx as nx
-        G = self.derivative_graph()
-        dist, _ = nx.single_source_bellman_ford(G, source=0, weight="weight")
+        R = self.residual_graph()
+        trash_cost = self.simple_trash_cost()
+
+        sink_id = None
+        for node, data in R.nodes(data=True):
+            if data["type"] == "SinkNode":
+                sink_id = node
+                break
+
+        # Remove trash edges (source↔sink) — trash is accounted for
+        # separately based on the supply/demand balance.
+        if R.has_edge(0, sink_id):
+            R.remove_edge(0, sink_id)
+        if R.has_edge(sink_id, 0):
+            R.remove_edge(sink_id, 0)
+
+        nxG = self.as_networkx()
+        emp_cap = sum(
+            data["capacity"] for u, v, data in nxG.edges(data=True)
+            if nxG.nodes[u]["type"] == "SourceNode" and v != sink_id
+        )
+        theo_cap = sum(
+            data["capacity"] for u, v, data in nxG.edges(data=True)
+            if v == sink_id and nxG.nodes[u]["type"] != "SourceNode"
+        )
+
+        # Two ways to deliver 1 extra unit to a theoretical node:
+        #
+        # 1) From source via unused empirical capacity (BF from source).
+        #    If emp > theo, this also cancels a trash unit (−trash_cost).
+        #    If theo ≥ emp, source supply increases; the extra supply
+        #    unit goes to trash (+trash_cost) but the match itself is
+        #    just the BF distance.
+        #
+        # 2) By rerouting existing flow from another theo node (BF from
+        #    sink, which represents the "freed" unit at sink).  The
+        #    freed sink capacity is compensated by a new trash unit
+        #    (+trash_cost).  If emp > theo, the reroute frees a trash
+        #    unit instead (−trash_cost from absorbing the freed emp flow).
+        #
+        # The derivative is the minimum of both options, capped at
+        # trash_cost (can always just send the extra unit to trash).
+
+        dist_src, _ = nx.single_source_bellman_ford(
+            R, source=0, weight="weight"
+        )
+        dist_sink, _ = nx.single_source_bellman_ford(
+            R, source=sink_id, weight="weight"
+        )
+
+        if emp_cap > theo_cap:
+            src_adjust = -trash_cost  # absorbs a trash unit
+            sink_adjust = 0           # pure reroute, no trash change
+        else:
+            src_adjust = 0            # source sends 1 more, no trash change
+            sink_adjust = trash_cost  # reroute + 1 new trash unit
+
+        # Build map of theo→sink slack (unused capacity).
+        theo_sink_slack = {}
+        for u, v, data in nxG.edges(data=True):
+            if v == sink_id and nxG.nodes[u]["type"] != "SourceNode":
+                theo_sink_slack[u] = data["capacity"] - data["flow"]
+
         ret = defaultdict(dict)
         for node in self.get_nodes():
             nt = node.get_type()
             if isinstance(nt, TheoreticalNode):
-                ret[nt.get_spectrum_id()][nt.get_peak_index()] = dist.get(node.get_id(), self.simple_trash_cost())
+                node_id = node.get_id()
+                if theo_sink_slack.get(node_id, 0) > 0 and emp_cap > theo_cap:
+                    # The solver had excess supply but chose not to
+                    # fill this node — adding capacity changes nothing.
+                    ret[nt.get_spectrum_id()][nt.get_peak_index()] = 0
+                    continue
+                candidates = [trash_cost]
+                if node_id in dist_src:
+                    candidates.append(dist_src[node_id] + src_adjust)
+                if node_id in dist_sink:
+                    candidates.append(dist_sink[node_id] + sink_adjust)
+                ret[nt.get_spectrum_id()][nt.get_peak_index()] = min(candidates)
         return ret
