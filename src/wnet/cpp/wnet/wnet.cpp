@@ -248,7 +248,9 @@ NB_MODULE(wnet_cpp, m) {
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<17, double, double>>)
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<18, double, double>>)
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<19, double, double>>)
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<20, double, double>>);
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<20, double, double>>)
+        .def_static("create_1d", &WassersteinNetworkFactory<int64_t>::create_1d<LEMON_INT>)
+        .def_static("create_1d", &WassersteinNetworkFactory<int64_t>::create_1d<double>);
 
     EXPOSE_VECTOR_DISTRIBUTION(1)
     EXPOSE_VECTOR_DISTRIBUTION(2)

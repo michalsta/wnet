@@ -953,6 +953,15 @@ public:
 
         static_assert(std::is_same_v<typename Distribution_t::intensity_type, intensity_type>,
                       "intensity_type does not match the intensity_type of the provided Distribution_t");
+        // Empty distributions previously triggered UB inside CloserThanIter
+        // (out-of-bounds access on empty sorted_indices for empty empirical,
+        // and an infinite loop for empty theoretical). Reject explicitly.
+        if (empirical_spectrum->size() == 0)
+            throw std::invalid_argument("Empirical distribution is empty.");
+        for (size_t i = 0; i < theoretical_spectra.size(); ++i)
+            if (theoretical_spectra[i]->size() == 0)
+                throw std::invalid_argument(
+                    "Theoretical distribution at index " + std::to_string(i) + " is empty.");
         {
             size_t no_nodes = 2 + empirical_spectrum->size();
             for (auto& ts : theoretical_spectra)
@@ -1047,6 +1056,163 @@ public:
         } else {
             throw std::runtime_error("Unsupported distance metric.");
         }
+    };
+
+    // 1D chain-optimized factory. Instead of O(m·n) matching edges,
+    // merges empirical and theoretical peaks into one sorted sequence and
+    // emits only O(m+n) chain edges (gap-cost) between adjacent peaks.
+    // In 1D, L1 = L2 = L_inf = |position difference|, so the distance
+    // metric argument is accepted for API symmetry but has no effect.
+    //
+    // Parity with `create`: single-side fragments (runs of peaks where all
+    // are empirical or all are theoretical, with no cross-side peak within
+    // `max_dist`) emit no chain edges, so their nodes get zero neighbours
+    // and are classified as dead-end by `split_into_subgraphs`. This
+    // matches today's dense behavior of dropping unmatched mass silently.
+    template<typename intensity_type_>
+    static WassersteinNetwork<VALUE_TYPE, intensity_type_> create_1d(
+        const VectorDistribution<1, double, intensity_type_>* empirical_spectrum,
+        const std::vector<VectorDistribution<1, double, intensity_type_>*>& theoretical_spectra,
+        DistanceMetric /* distance_metric */,
+        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
+    ) {
+        using intensity_type = intensity_type_;
+        std::vector<FlowNode<intensity_type>> nodes;
+        std::vector<FlowEdge<intensity_type>> edges;
+        std::vector<LEMON_INDEX> dead_end_node_ids;  // recomputed in build_subgraphs()
+
+        // Reserve node storage (source + sink + all empirical + all theoretical).
+        {
+            size_t no_nodes = 2 + empirical_spectrum->size();
+            for (auto& ts : theoretical_spectra)
+                no_nodes += ts->size();
+            assert_fits_lemon_index(no_nodes, "nodes");
+            assert_fits_lemon_index(empirical_spectrum->size(), "empirical peaks");
+            for (const auto& ts : theoretical_spectra)
+                assert_fits_lemon_index(ts->size(), "theoretical peaks");
+            nodes.reserve(no_nodes);
+        }
+
+        // Source and sink placeholders (matches dense factory's convention).
+        nodes.emplace_back(FlowNode<intensity_type>(0, SourceNode()));
+        nodes.emplace_back(FlowNode<intensity_type>(1, SinkNode()));
+
+        // Position entry for the sorted merge. is_empirical tags the side.
+        struct PosEntry {
+            double position;
+            LEMON_INDEX node_id;
+            bool is_empirical;
+        };
+        std::vector<PosEntry> entries;
+        {
+            size_t no_entries = empirical_spectrum->size();
+            for (const auto& ts : theoretical_spectra)
+                no_entries += ts->size();
+            entries.reserve(no_entries);
+        }
+
+        for (LEMON_INDEX empirical_idx = 0;
+             empirical_idx < static_cast<LEMON_INT>(empirical_spectrum->size());
+             ++empirical_idx) {
+            nodes.emplace_back(FlowNode<intensity_type>(
+                nodes.size(),
+                EmpiricalNode<intensity_type>(
+                    empirical_idx,
+                    empirical_spectrum->intensities[empirical_idx])));
+            entries.push_back(PosEntry{
+                empirical_spectrum->get_point(empirical_idx)[0],
+                static_cast<LEMON_INDEX>(nodes.size() - 1),
+                true});
+        }
+
+        for (size_t theoretical_spectrum_idx = 0;
+             theoretical_spectrum_idx < theoretical_spectra.size();
+             ++theoretical_spectrum_idx) {
+            const auto& ts = theoretical_spectra[theoretical_spectrum_idx];
+            for (LEMON_INDEX peak_idx = 0;
+                 peak_idx < static_cast<LEMON_INT>(ts->size());
+                 ++peak_idx) {
+                nodes.emplace_back(FlowNode<intensity_type>(
+                    nodes.size(),
+                    TheoreticalNode<intensity_type>(
+                        theoretical_spectrum_idx,
+                        peak_idx,
+                        ts->intensities[peak_idx])));
+                entries.push_back(PosEntry{
+                    ts->get_point(peak_idx)[0],
+                    static_cast<LEMON_INDEX>(nodes.size() - 1),
+                    false});
+            }
+        }
+
+        std::sort(entries.begin(), entries.end(),
+                  [](const PosEntry& a, const PosEntry& b) {
+                      return a.position < b.position;
+                  });
+
+        // Walk sorted entries, splitting on gaps > max_dist.
+        // For each maximal run, only emit chain edges if the run contains
+        // at least one empirical AND one theoretical node; otherwise, all
+        // nodes in the run stay isolated and get dropped as dead-ends.
+        auto flush_run = [&](size_t run_start, size_t run_end) {
+            bool has_emp = false;
+            bool has_theo = false;
+            for (size_t i = run_start; i < run_end; ++i) {
+                if (entries[i].is_empirical) has_emp = true;
+                else has_theo = true;
+                if (has_emp && has_theo) break;
+            }
+            if (!(has_emp && has_theo)) return;  // single-side run → drop
+
+            for (size_t i = run_start + 1; i < run_end; ++i) {
+                const double gap_d = entries[i].position - entries[i-1].position;
+                if (gap_d > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
+                    throw std::overflow_error(
+                        "Chain gap " + std::to_string(gap_d) +
+                        " overflows VALUE_TYPE (max " +
+                        std::to_string(std::numeric_limits<VALUE_TYPE>::max()) + ")");
+                const VALUE_TYPE gap = static_cast<VALUE_TYPE>(gap_d);
+                // Bidirectional: LEMON digraph needs two arcs for flow in
+                // either direction. Both carry cost = gap.
+                edges.emplace_back(FlowEdge<intensity_type>(
+                    edges.size(),
+                    nodes[entries[i-1].node_id],
+                    nodes[entries[i].node_id],
+                    ChainEdge(gap)));
+                edges.emplace_back(FlowEdge<intensity_type>(
+                    edges.size(),
+                    nodes[entries[i].node_id],
+                    nodes[entries[i-1].node_id],
+                    ChainEdge(gap)));
+            }
+        };
+
+        if (!entries.empty()) {
+            size_t run_start = 0;
+            for (size_t i = 1; i < entries.size(); ++i) {
+                const double gap = entries[i].position - entries[i-1].position;
+                if (gap > static_cast<double>(max_dist)) {
+                    flush_run(run_start, i);
+                    run_start = i;
+                }
+            }
+            flush_run(run_start, entries.size());
+        }
+
+        std::vector<size_t> theoretical_spectra_sizes;
+        theoretical_spectra_sizes.reserve(theoretical_spectra.size());
+        for (const auto& ts : theoretical_spectra)
+            theoretical_spectra_sizes.push_back(ts->size());
+
+        assert_fits_lemon_index(edges.size(), "edges");
+
+        return WassersteinNetwork<VALUE_TYPE, intensity_type>(
+            std::move(nodes),
+            std::move(edges),
+            theoretical_spectra.size(),
+            std::move(theoretical_spectra_sizes),
+            std::move(dead_end_node_ids)
+        );
     };
 };
 #endif // WNET_DECOMPOSITABLE_GRAPH_HPP
