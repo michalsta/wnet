@@ -150,6 +150,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("count_theoretical_to_sink_edges", &WassersteinNetwork<int64_t,  int64_t>::count_edges_of_type<TheoreticalToSinkEdge>)
         .def("count_src_to_empirical_edges", &WassersteinNetwork<int64_t, int64_t>::count_edges_of_type<SrcToEmpiricalEdge>)
         .def("count_simple_trash_edges", &WassersteinNetwork<int64_t, int64_t>::count_edges_of_type<SimpleTrashEdge>)
+        .def("count_chain_edges", &WassersteinNetwork<int64_t, int64_t>::count_edges_of_type<ChainEdge>)
         .def("matching_density", &WassersteinNetwork<int64_t, int64_t>::matching_density)
         .def("no_theoretical_spectra", &WassersteinNetwork<int64_t, int64_t>::no_theoretical_spectra)
         .def("theoretical_spectra_sizes", &WassersteinNetwork<int64_t, int64_t>::theoretical_spectra_sizes)
@@ -183,6 +184,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("count_theoretical_to_sink_edges", &WassersteinNetwork<int64_t,  double>::count_edges_of_type<TheoreticalToSinkEdge>)
         .def("count_src_to_empirical_edges", &WassersteinNetwork<int64_t, double>::count_edges_of_type<SrcToEmpiricalEdge>)
         .def("count_simple_trash_edges", &WassersteinNetwork<int64_t, double>::count_edges_of_type<SimpleTrashEdge>)
+        .def("count_chain_edges", &WassersteinNetwork<int64_t, double>::count_edges_of_type<ChainEdge>)
         .def("matching_density", &WassersteinNetwork<int64_t, double>::matching_density)
         .def("no_theoretical_spectra", &WassersteinNetwork<int64_t, double>::no_theoretical_spectra)
         .def("theoretical_spectra_sizes", &WassersteinNetwork<int64_t, double>::theoretical_spectra_sizes)
@@ -316,4 +318,9 @@ NB_MODULE(wnet_cpp, m) {
     nb::class_<SimpleTrashEdge>(m, "SimpleTrashEdge")
         .def(nb::init<LEMON_INT>())
         .def("get_cost", &SimpleTrashEdge::get_cost);
+
+    // Export ChainEdge (1D chain-optimization adjacency edge).
+    nb::class_<ChainEdge>(m, "ChainEdge")
+        .def(nb::init<LEMON_INT>())
+        .def("get_cost", &ChainEdge::get_cost);
 }

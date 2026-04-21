@@ -156,6 +156,7 @@ public:
                     else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SimpleTrashEdge>) { simple_trash_idx = ii; return arg.get_cost(); }
+                    else if constexpr (std::is_same_v<T, ChainEdge>) return arg.get_cost();
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
 
@@ -171,6 +172,9 @@ public:
                     }
                     else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SimpleTrashEdge>) return (VALUE_TYPE) 0;
+                    // Chain edges carry unlimited flow; max/2 avoids any
+                    // accidental overflow when LEMON internals sum caps.
+                    else if constexpr (std::is_same_v<T, ChainEdge>) return std::numeric_limits<VALUE_TYPE>::max() / 2;
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
         }
@@ -204,6 +208,7 @@ public:
                 }
                 else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {}
                 else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {}
+                else if constexpr (std::is_same_v<T, ChainEdge>) {}
                 else { throw std::runtime_error("Invalid FlowEdgeType"); };
             }, edge.get_type());
         }
@@ -308,6 +313,9 @@ public:
                 else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {}
                 else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {}
                 else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {}
+                // Chain-edge flows are disaggregated to per-pair flows by
+                // a separate sweep pass; nothing to emit here.
+                else if constexpr (std::is_same_v<T, ChainEdge>) {}
                 else { throw std::runtime_error("Invalid FlowEdgeType"); };
             }, edge.get_type());
         }
@@ -394,8 +402,10 @@ public:
                 VALUE_TYPE flow = solver->flow(arc);
                 // Matching edges have unlimited base capacity; the LEMON
                 // capacity (min of endpoint intensities) is an optimization
-                // that should not limit the residual graph.
-                bool unlimited = std::holds_alternative<MatchingEdge>(edges[ii].get_type());
+                // that should not limit the residual graph. Chain edges
+                // also represent unlimited-capacity residual transitions.
+                bool unlimited = std::holds_alternative<MatchingEdge>(edges[ii].get_type())
+                              || std::holds_alternative<ChainEdge>(edges[ii].get_type());
 
                 if ((unlimited || flow < cap) && dist[u] != INF && dist[u] + cost < dist[v]) {
                     dist[v] = dist[u] + cost;

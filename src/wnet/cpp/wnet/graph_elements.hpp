@@ -117,7 +117,21 @@ public:
     LEMON_INT get_cost() const { return cost; }
 };
 
-using FlowEdgeType = std::variant<MatchingEdge, SrcToEmpiricalEdge, TheoreticalToSinkEdge, SimpleTrashEdge>;
+// Adjacency edge used by the 1D chain optimization: cost equals the gap
+// between two adjacent sorted peak positions. Unlike MatchingEdge, it does
+// not correspond to a specific (empirical, theoretical) pair; it is used
+// as part of a chain through which flow is routed, with accumulated gap-cost
+// equal to the metric distance in 1D.
+class ChainEdge {
+    const LEMON_INT cost;
+public:
+    ChainEdge() = delete;
+    ChainEdge(LEMON_INT cost)
+        : cost(cost) {}
+    LEMON_INT get_cost() const { return cost; }
+};
+
+using FlowEdgeType = std::variant<MatchingEdge, SrcToEmpiricalEdge, TheoreticalToSinkEdge, SimpleTrashEdge, ChainEdge>;
 
 template<typename intensity_type>
 class FlowEdge {
@@ -152,6 +166,8 @@ public:
                 return 0;
             } else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {
                 return arg.get_cost();
+            } else if constexpr (std::is_same_v<T, ChainEdge>) {
+                return arg.get_cost();
             } else {
                 throw std::runtime_error("Invalid FlowEdge type");
             }
@@ -168,6 +184,8 @@ public:
             } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
                 return std::get<TheoreticalNode<intensity_type>>(this->get_start_node().get_type()).get_intensity();
             } else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {
+                return std::nullopt; // Unlimited capacity
+            } else if constexpr (std::is_same_v<T, ChainEdge>) {
                 return std::nullopt; // Unlimited capacity
             } else {
                 throw std::runtime_error("Invalid FlowEdge type");
