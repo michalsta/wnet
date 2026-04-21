@@ -547,6 +547,153 @@ public:
         return solver.has_value();
     }
 
+    // Chain-specialized residual shortest distances. Linear sweep variant of
+    // bellman_ford_residual for chain subgraphs: rather than relaxing every
+    // arc O(n) times, we propagate along the chain (L→R and R→L sweeps)
+    // interleaved with src/sink relays. Each round is O(K); the loop exits
+    // once the distance vector stops changing, typically after 2–3 rounds.
+    // The residual graph of an optimal MCF has no negative cycles, so the
+    // fixpoint is well-defined; the loop is capped at K+2 rounds as a safety
+    // net (matching the Bellman-Ford bound) but real inputs exit much sooner.
+    //
+    // Requires: at least one ChainEdge present (the caller is responsible).
+    std::vector<VALUE_TYPE> chain_residual_distances(LEMON_INDEX source_id) const {
+        const LEMON_INDEX n = lemon_graph.nodeNum();
+        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
+        std::vector<VALUE_TYPE> dist(n, INF);
+        dist[source_id] = 0;
+        const LEMON_INDEX src_id = 0;
+        const LEMON_INDEX sink_id = 1;
+
+        std::unordered_map<LEMON_INDEX, std::vector<std::pair<LEMON_INDEX, LEMON_INDEX>>> chain_adj;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            if (std::holds_alternative<ChainEdge>(edges[ii].get_type())) {
+                const LEMON_INDEX u = edges[ii].get_start_node_id();
+                const LEMON_INDEX v = edges[ii].get_end_node_id();
+                chain_adj[u].push_back({v, ii});
+            }
+        }
+        if (chain_adj.empty())
+            throw std::runtime_error(
+                "chain_residual_distances() called on non-chain subgraph.");
+
+        LEMON_INDEX start_node = -1;
+        for (const auto& [nid, adj] : chain_adj) {
+            if (adj.size() == 1) { start_node = nid; break; }
+        }
+        if (start_node == -1)
+            throw std::runtime_error(
+                "Chain subgraph has no endpoint — malformed chain.");
+
+        std::vector<LEMON_INDEX> chain_order;
+        std::vector<LEMON_INDEX> right_arc_ids, left_arc_ids;
+        std::vector<VALUE_TYPE> gap_cost;
+        chain_order.push_back(start_node);
+        LEMON_INDEX prev = -1, curr = start_node;
+        while (true) {
+            LEMON_INDEX next = -1, out_arc = -1;
+            for (const auto& [nb, aid] : chain_adj[curr]) {
+                if (nb != prev) { next = nb; out_arc = aid; break; }
+            }
+            if (next == -1) break;
+            LEMON_INDEX in_arc = -1;
+            for (const auto& [nb, aid] : chain_adj[next]) {
+                if (nb == curr) { in_arc = aid; break; }
+            }
+            if (in_arc == -1)
+                throw std::runtime_error(
+                    "Chain arc is not bidirectional — malformed chain.");
+            chain_order.push_back(next);
+            right_arc_ids.push_back(out_arc);
+            left_arc_ids.push_back(in_arc);
+            gap_cost.push_back(costs_map[lemon_graph.arcFromId(out_arc)]);
+            prev = curr; curr = next;
+        }
+        const size_t K = chain_order.size();
+
+        // c_right[g]: cost to move chain_order[g] → chain_order[g+1] in residual.
+        //   +gap if no leftward flow (forward of rightward arc), else -gap
+        //   (reverse of leftward arc, since L[g] > 0 unlocks that residual).
+        // c_left[g]: symmetric for the opposite direction.
+        std::vector<VALUE_TYPE> c_right(K > 0 ? K - 1 : 0), c_left(K > 0 ? K - 1 : 0);
+        for (size_t g = 0; g + 1 < K; ++g) {
+            const VALUE_TYPE R = solver->flow(lemon_graph.arcFromId(right_arc_ids[g]));
+            const VALUE_TYPE L = solver->flow(lemon_graph.arcFromId(left_arc_ids[g]));
+            c_right[g] = (L > 0) ? -gap_cost[g] : gap_cost[g];
+            c_left[g]  = (R > 0) ? -gap_cost[g] : gap_cost[g];
+        }
+
+        // src/sink connectivity per chain position. has_*_fwd: forward residual
+        // of the underlying src→emp / theo→sink arc (flow<cap). has_*_rev:
+        // reverse residual (flow>0). All such arcs have cost 0.
+        std::unordered_map<LEMON_INDEX, size_t> node_to_pos;
+        for (size_t i = 0; i < K; ++i) node_to_pos[chain_order[i]] = i;
+        std::vector<bool> has_src_fwd(K, false), has_src_rev(K, false);
+        std::vector<bool> has_sink_fwd(K, false), has_sink_rev(K, false);
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            const auto& et = edges[ii].get_type();
+            if (std::holds_alternative<SrcToEmpiricalEdge>(et)) {
+                auto it = node_to_pos.find(edges[ii].get_end_node_id());
+                if (it == node_to_pos.end()) continue;
+                auto arc = lemon_graph.arcFromId(ii);
+                VALUE_TYPE flow = solver->flow(arc), cap = capacities_map[arc];
+                if (flow < cap) has_src_fwd[it->second] = true;
+                if (flow > 0) has_src_rev[it->second] = true;
+            } else if (std::holds_alternative<TheoreticalToSinkEdge>(et)) {
+                auto it = node_to_pos.find(edges[ii].get_start_node_id());
+                if (it == node_to_pos.end()) continue;
+                auto arc = lemon_graph.arcFromId(ii);
+                VALUE_TYPE flow = solver->flow(arc), cap = capacities_map[arc];
+                if (flow < cap) has_sink_fwd[it->second] = true;
+                if (flow > 0) has_sink_rev[it->second] = true;
+            }
+        }
+
+        auto update_min = [&](VALUE_TYPE& a, VALUE_TYPE b) { if (b < a) a = b; };
+
+        auto relay = [&]() {
+            // Propagate chain → src/sink (cost 0 reverse / forward residuals).
+            for (size_t i = 0; i < K; ++i) {
+                const VALUE_TYPE d = dist[chain_order[i]];
+                if (d == INF) continue;
+                if (has_src_rev[i])  update_min(dist[src_id],  d);
+                if (has_sink_fwd[i]) update_min(dist[sink_id], d);
+            }
+            // Propagate src/sink → chain.
+            const VALUE_TYPE ds = dist[src_id], dk = dist[sink_id];
+            for (size_t i = 0; i < K; ++i) {
+                if (ds != INF && has_src_fwd[i])  update_min(dist[chain_order[i]], ds);
+                if (dk != INF && has_sink_rev[i]) update_min(dist[chain_order[i]], dk);
+            }
+        };
+        auto chain_sweep = [&]() {
+            for (size_t i = 1; i < K; ++i) {
+                const VALUE_TYPE d = dist[chain_order[i-1]];
+                if (d != INF) update_min(dist[chain_order[i]], d + c_right[i-1]);
+            }
+            for (size_t ii = 1; ii < K; ++ii) {
+                const size_t i = K - 1 - ii;
+                const VALUE_TYPE d = dist[chain_order[i+1]];
+                if (d != INF) update_min(dist[chain_order[i]], d + c_left[i]);
+            }
+        };
+
+        const size_t MAX_ROUNDS = K + 2;
+        for (size_t round = 0; round < MAX_ROUNDS; ++round) {
+            std::vector<VALUE_TYPE> prev = dist;
+            relay();
+            chain_sweep();
+            if (dist == prev) break;
+        }
+        return dist;
+    }
+
+    bool has_chain_edges() const {
+        for (const auto& edge : edges)
+            if (std::holds_alternative<ChainEdge>(edge.get_type())) return true;
+        return false;
+    }
+
     // Compute single-source shortest distances on the implicit residual graph
     // (excluding the trash edge). For each arc:
     //   forward residual if flow < capacity (cost = original)
@@ -601,8 +748,11 @@ public:
         const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
         const LEMON_INDEX sink_id = 1;
 
-        auto dist_src = bellman_ford_residual(0);
-        auto dist_sink = bellman_ford_residual(sink_id);
+        const bool use_chain = has_chain_edges();
+        auto dist_src  = use_chain ? chain_residual_distances(0)
+                                   : bellman_ford_residual(0);
+        auto dist_sink = use_chain ? chain_residual_distances(sink_id)
+                                   : bellman_ford_residual(sink_id);
 
         const VALUE_TYPE src_adjust = (lemon_empirical_intensity > lemon_theoretical_intensity)
             ? -trash_cost : 0;

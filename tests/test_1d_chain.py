@@ -295,3 +295,122 @@ def test_chain_edge_count():
     # Dense: pairwise within max_dist — 10×10 = 100 matching edges.
     assert dense_net.count_matching_edges() == 100
     assert dense_net.count_chain_edges() == 0
+
+
+def _derivs_per_subgraph(net):
+    """Collect signal_part_derivatives from every subgraph into a flat dict.
+
+    Returns {(spec_id, peak_index): derivative}. Subgraph decomposition
+    differs between factories but the union of per-subgraph derivatives
+    covers the same peaks and must agree value-for-value.
+    """
+    out: dict[tuple[int, int], int] = {}
+    for i in range(net.no_subgraphs()):
+        sg = net.get_subgraph(i)
+        for spec_id, peak_idx, deriv in sg.signal_part_derivatives():
+            out[(int(spec_id), int(peak_idx))] = int(deriv)
+    return out
+
+
+def _prop_derivs_per_subgraph(net):
+    """Aggregate spectrum_proportion_derivatives across all subgraphs."""
+    out: dict[int, int] = {}
+    for i in range(net.no_subgraphs()):
+        sg = net.get_subgraph(i)
+        for spec_id, deriv in sg.spectrum_proportion_derivatives():
+            out[int(spec_id)] = out.get(int(spec_id), 0) + int(deriv)
+    return out
+
+
+def test_derivatives_basic_parity():
+    """Chain and dense must agree on per-peak derivatives for simple inputs."""
+    base = Distribution_1D(np.array([0.0]), np.array([10]))
+    target = Distribution_1D(np.array([10.0]), np.array([10]))
+    _, _, dense_net, chain_net = _cost_pair(base, [target], 100, 1000)
+    assert _derivs_per_subgraph(dense_net) == _derivs_per_subgraph(chain_net)
+
+
+def test_derivatives_excess_base():
+    """Excess empirical supply: derivative should save a trash unit."""
+    base = Distribution_1D(np.array([0.0]), np.array([10]))
+    target = Distribution_1D(np.array([10.0]), np.array([5]))
+    _, _, dense_net, chain_net = _cost_pair(base, [target], 100, 1000)
+    assert _derivs_per_subgraph(dense_net) == _derivs_per_subgraph(chain_net)
+
+
+def test_derivatives_excess_theo():
+    """Excess theoretical demand: derivative defaults to trash_cost."""
+    base = Distribution_1D(np.array([0.0]), np.array([3]))
+    target = Distribution_1D(np.array([10.0]), np.array([5]))
+    _, _, dense_net, chain_net = _cost_pair(base, [target], 100, 1000)
+    assert _derivs_per_subgraph(dense_net) == _derivs_per_subgraph(chain_net)
+
+
+def test_derivatives_two_bases_reroute():
+    """Two empirical clusters, one theoretical — rerouting scenarios."""
+    base = Distribution_1D(np.array([0.0, 100.0]), np.array([5, 5]))
+    target = Distribution_1D(np.array([10.0]), np.array([5]))
+    _, _, dense_net, chain_net = _cost_pair(base, [target], 200, 1000)
+    assert _derivs_per_subgraph(dense_net) == _derivs_per_subgraph(chain_net)
+
+
+def test_derivatives_multi_spectrum():
+    """Two spectra sharing one empirical chain."""
+    base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
+    t1 = Distribution_1D(np.array([1.0, 6.0]), np.array([4, 6]))
+    t2 = Distribution_1D(np.array([9.5]), np.array([2]))
+    _, _, dense_net, chain_net = _cost_pair(base, [t1, t2], 100, 1000)
+    assert _derivs_per_subgraph(dense_net) == _derivs_per_subgraph(chain_net)
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_derivatives_random_parity(seed):
+    """Randomized parity on per-peak derivatives (integer positions)."""
+    rng = np.random.default_rng(seed)
+    m = int(rng.integers(1, 15))
+    n = int(rng.integers(1, 15))
+    e_pos = rng.integers(0, 100, size=m).astype(np.float64)
+    t_pos = rng.integers(0, 100, size=n).astype(np.float64)
+    e_int = rng.integers(1, 10, size=m).astype(np.int64)
+    t_int = rng.integers(1, 10, size=n).astype(np.int64)
+    base = Distribution_1D(e_pos, e_int)
+    target = Distribution_1D(t_pos, t_int)
+    trash_cost = 50
+    max_dist = int(rng.integers(50, 300))
+    dense_cost, chain_cost, dense_net, chain_net = _cost_pair(
+        base, [target], trash_cost, max_dist)
+    # Parity on derivatives requires parity on total cost (same optimal flow).
+    if dense_cost != chain_cost:
+        pytest.skip(f"seed={seed}: cost divergence (max_dist truncation split)")
+    dense_derivs = _derivs_per_subgraph(dense_net)
+    chain_derivs = _derivs_per_subgraph(chain_net)
+    assert dense_derivs == chain_derivs, (
+        f"seed={seed}: dense={dense_derivs} chain={chain_derivs}")
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_spectrum_proportion_derivatives_parity(seed):
+    """Randomized parity on spectrum proportion derivatives."""
+    rng = np.random.default_rng(seed)
+    m = int(rng.integers(1, 15))
+    n1 = int(rng.integers(1, 10))
+    n2 = int(rng.integers(1, 10))
+    e_pos = rng.integers(0, 100, size=m).astype(np.float64)
+    e_int = rng.integers(1, 10, size=m).astype(np.int64)
+    base = Distribution_1D(e_pos, e_int)
+    t1_pos = rng.integers(0, 100, size=n1).astype(np.float64)
+    t1_int = rng.integers(1, 10, size=n1).astype(np.int64)
+    t2_pos = rng.integers(0, 100, size=n2).astype(np.float64)
+    t2_int = rng.integers(1, 10, size=n2).astype(np.int64)
+    t1 = Distribution_1D(t1_pos, t1_int)
+    t2 = Distribution_1D(t2_pos, t2_int)
+    trash_cost = 100
+    max_dist = int(rng.integers(100, 300))
+    dense_cost, chain_cost, dense_net, chain_net = _cost_pair(
+        base, [t1, t2], trash_cost, max_dist)
+    if dense_cost != chain_cost:
+        pytest.skip(f"seed={seed}: cost divergence")
+    dense_props = _prop_derivs_per_subgraph(dense_net)
+    chain_props = _prop_derivs_per_subgraph(chain_net)
+    assert dense_props == chain_props, (
+        f"seed={seed}: dense={dense_props} chain={chain_props}")
