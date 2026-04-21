@@ -4,7 +4,10 @@ from .distances import Distance
 
 
 def WassersteinDistance(
-    distribution1: Distribution, distribution2: Distribution, distance: Distance
+    distribution1: Distribution,
+    distribution2: Distribution,
+    distance: Distance,
+    force_dense_1d: bool = True,
 ) -> float:
     """
     Computes the Wasserstein distance between two distributions using the provided distance metric.
@@ -13,6 +16,7 @@ def WassersteinDistance(
         distribution1 (Distribution): The first distribution.
         distribution2 (Distribution): The second distribution.
         distance (Distance): The distance metric to use. Must be a subclass of wnet.distances.Distance
+        force_dense_1d (bool): In 1D, force the dense factory. See WassersteinNetwork for details.
 
     Returns:
         float: The Wasserstein distance between the two distributions.
@@ -23,7 +27,9 @@ def WassersteinDistance(
     assert (
         distribution1.sum_intensities == distribution2.sum_intensities
     ), "Distributions must have the same total intensity"
-    W = WassersteinNetwork(distribution1, [distribution2], distance, None)
+    W = WassersteinNetwork(
+        distribution1, [distribution2], distance, None,
+        force_dense_1d=force_dense_1d)
     W.build()
     W.solve()
     return W.total_cost()
@@ -34,6 +40,7 @@ def TruncatedWassersteinDistance(
     distribution2: Distribution,
     distance: Distance,
     max_distance: float,
+    force_dense_1d: bool = True,
 ) -> float:
     """
     Computes the truncated Wasserstein distance between two distributions, limiting the transport cost to max_distance.
@@ -43,6 +50,7 @@ def TruncatedWassersteinDistance(
         distribution2 (Distribution): The second distribution.
         distance (Distance): The distance metric to use. Must be a subclass of wnet.distances.Distance
         max_distance (float): The maximum allowed transport cost.
+        force_dense_1d (bool): In 1D, force the dense factory. See WassersteinNetwork for details.
 
     Returns:
         float: The truncated Wasserstein distance between the two distributions.
@@ -53,7 +61,9 @@ def TruncatedWassersteinDistance(
     assert (
         distribution1.sum_intensities == distribution2.sum_intensities
     ), "Distributions must have the same total intensity"
-    W = WassersteinNetwork(distribution1, [distribution2], distance, max_distance)
+    W = WassersteinNetwork(
+        distribution1, [distribution2], distance, max_distance,
+        force_dense_1d=force_dense_1d)
     W.add_simple_trash(max_distance)
     W.build()
     W.solve()

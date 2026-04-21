@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include <optional>
+#include <deque>
 
 
 #define LEMON_ONLY_TEMPLATES
@@ -294,10 +295,15 @@ public:
                             std::vector<LEMON_INDEX>& theoretical_peak_indices,
                             std::vector<VALUE_TYPE>& flows) const
     {
+        bool has_chain = false;
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
         {
             const FlowEdge<intensity_type>& edge = edges[ii];
             const VALUE_TYPE flow = solver->flow(lemon_graph.arcFromId(ii));
+            if (std::holds_alternative<ChainEdge>(edge.get_type())) {
+                has_chain = true;
+                continue;
+            }
             if (flow == 0) continue;
             std::visit([&](const auto& arg) {
                 using T = std::decay_t<decltype(arg)>;
@@ -313,11 +319,173 @@ public:
                 else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {}
                 else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {}
                 else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {}
-                // Chain-edge flows are disaggregated to per-pair flows by
-                // a separate sweep pass; nothing to emit here.
                 else if constexpr (std::is_same_v<T, ChainEdge>) {}
                 else { throw std::runtime_error("Invalid FlowEdgeType"); };
             }, edge.get_type());
+        }
+        if (has_chain)
+            flows_for_target_chain(
+                spectrum_id, empirical_peak_indices,
+                theoretical_peak_indices, flows);
+    };
+
+    // Sweep-line reconstruction of per-(empirical, theoretical) flows from
+    // chain-arc flows. Each chain-edge subgraph holds one linear chain of
+    // empirical and theoretical nodes connected by bidirectional ChainEdges.
+    // Flow on those arcs encodes transport between pairs without recording
+    // which empirical unit ended up at which theoretical. We recover one
+    // valid FIFO decomposition in two passes: left-to-right for rightward
+    // net flow, right-to-left for leftward net flow. In canonical min-cost
+    // solutions, at most one direction carries flow on any positive-cost
+    // gap; on zero-cost gaps both directions may be non-zero, which the
+    // two-pass split still handles correctly.
+    void flows_for_target_chain(
+        size_t spectrum_id,
+        std::vector<LEMON_INDEX>& empirical_peak_indices,
+        std::vector<LEMON_INDEX>& theoretical_peak_indices,
+        std::vector<VALUE_TYPE>& flows) const
+    {
+        // Per chain node: outgoing chain arcs as (neighbor_node_id, arc_id).
+        std::unordered_map<LEMON_INDEX, std::vector<std::pair<LEMON_INDEX, LEMON_INDEX>>> chain_adj;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            if (std::holds_alternative<ChainEdge>(edges[ii].get_type())) {
+                const LEMON_INDEX u = edges[ii].get_start_node_id();
+                const LEMON_INDEX v = edges[ii].get_end_node_id();
+                chain_adj[u].push_back({v, ii});
+            }
+        }
+        if (chain_adj.empty()) return;
+
+        // Endpoints have exactly one outgoing chain arc (one neighbor).
+        // Internal nodes have two. Pick any endpoint as the walk's start.
+        LEMON_INDEX start_node = -1;
+        for (const auto& [node_id, adj] : chain_adj) {
+            if (adj.size() == 1) {
+                start_node = node_id;
+                break;
+            }
+        }
+        if (start_node == -1)
+            throw std::runtime_error(
+                "Chain subgraph has no endpoint — malformed chain.");
+
+        // Walk the chain. right_arc_ids[g] is the arc from chain_order[g]
+        // toward chain_order[g+1] (the "walk direction"); left_arc_ids[g]
+        // is its reverse arc.
+        std::vector<LEMON_INDEX> chain_order;
+        std::vector<LEMON_INDEX> right_arc_ids;
+        std::vector<LEMON_INDEX> left_arc_ids;
+        chain_order.push_back(start_node);
+        LEMON_INDEX prev = -1;
+        LEMON_INDEX curr = start_node;
+        while (true) {
+            LEMON_INDEX next = -1;
+            LEMON_INDEX out_arc = -1;
+            for (const auto& [neighbor, arc_id] : chain_adj[curr]) {
+                if (neighbor != prev) {
+                    next = neighbor;
+                    out_arc = arc_id;
+                    break;
+                }
+            }
+            if (next == -1) break;
+            LEMON_INDEX in_arc = -1;
+            for (const auto& [neighbor, arc_id] : chain_adj[next]) {
+                if (neighbor == curr) {
+                    in_arc = arc_id;
+                    break;
+                }
+            }
+            if (in_arc == -1)
+                throw std::runtime_error(
+                    "Chain arc is not bidirectional — malformed chain.");
+            chain_order.push_back(next);
+            right_arc_ids.push_back(out_arc);
+            left_arc_ids.push_back(in_arc);
+            prev = curr;
+            curr = next;
+        }
+
+        const size_t K = chain_order.size();
+        if (K < 2) return;  // Isolated node — no gap flow to decompose.
+
+        // Read per-gap forward/reverse flows from the solver.
+        std::vector<VALUE_TYPE> R(K - 1), L(K - 1);
+        for (size_t g = 0; g < K - 1; ++g) {
+            R[g] = solver->flow(lemon_graph.arcFromId(right_arc_ids[g]));
+            L[g] = solver->flow(lemon_graph.arcFromId(left_arc_ids[g]));
+        }
+
+        // Pass 1 — rightward decomposition.
+        // delta = R[i] - R[i-1] is the change in the rightward conveyor
+        // across node i. delta > 0 means this (empirical) node injects flow
+        // onto the conveyor; delta < 0 means this (theoretical) node drains
+        // it. In a canonical min-cost flow the sign of delta at a node
+        // matches that node's role.
+        {
+            std::deque<std::pair<LEMON_INDEX, VALUE_TYPE>> queue;
+            for (size_t i = 0; i < K; ++i) {
+                const VALUE_TYPE r_in = (i == 0) ? 0 : R[i - 1];
+                const VALUE_TYPE r_out = (i == K - 1) ? 0 : R[i];
+                const VALUE_TYPE delta = r_out - r_in;
+                const auto& node_type = nodes[chain_order[i]].get_type();
+                if (delta > 0) {
+                    const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&node_type);
+                    if (emp == nullptr) continue;
+                    queue.push_back({emp->get_peak_index(), delta});
+                } else if (delta < 0) {
+                    const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node_type);
+                    if (theo == nullptr) continue;
+                    const bool is_target = (theo->get_spectrum_id() == spectrum_id);
+                    VALUE_TYPE remaining = -delta;
+                    while (remaining > 0 && !queue.empty()) {
+                        auto& front = queue.front();
+                        const VALUE_TYPE take = std::min(remaining, front.second);
+                        if (is_target) {
+                            empirical_peak_indices.push_back(front.first);
+                            theoretical_peak_indices.push_back(theo->get_peak_index());
+                            flows.push_back(take);
+                        }
+                        remaining -= take;
+                        front.second -= take;
+                        if (front.second == 0) queue.pop_front();
+                    }
+                }
+            }
+        }
+
+        // Pass 2 — leftward decomposition (mirror of pass 1, walking R→L).
+        {
+            std::deque<std::pair<LEMON_INDEX, VALUE_TYPE>> queue;
+            for (size_t ii = 0; ii < K; ++ii) {
+                const size_t i = K - 1 - ii;
+                const VALUE_TYPE l_in = (i == K - 1) ? 0 : L[i];
+                const VALUE_TYPE l_out = (i == 0) ? 0 : L[i - 1];
+                const VALUE_TYPE delta = l_out - l_in;
+                const auto& node_type = nodes[chain_order[i]].get_type();
+                if (delta > 0) {
+                    const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&node_type);
+                    if (emp == nullptr) continue;
+                    queue.push_back({emp->get_peak_index(), delta});
+                } else if (delta < 0) {
+                    const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node_type);
+                    if (theo == nullptr) continue;
+                    const bool is_target = (theo->get_spectrum_id() == spectrum_id);
+                    VALUE_TYPE remaining = -delta;
+                    while (remaining > 0 && !queue.empty()) {
+                        auto& front = queue.front();
+                        const VALUE_TYPE take = std::min(remaining, front.second);
+                        if (is_target) {
+                            empirical_peak_indices.push_back(front.first);
+                            theoretical_peak_indices.push_back(theo->get_peak_index());
+                            flows.push_back(take);
+                        }
+                        remaining -= take;
+                        front.second -= take;
+                        if (front.second == 0) queue.pop_front();
+                    }
+                }
+            }
         }
     };
 

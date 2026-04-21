@@ -36,6 +36,23 @@ def _cost_pair(base, targets, trash_cost, max_dist):
     return dense_cost, chain_cost, dense_net, chain_net
 
 
+def _flows_by_pair(net, target_id):
+    """Aggregate flows_for_target output into {(emp_idx, theo_idx): total_flow}."""
+    emp, theo, flow = net.flows_for_target(target_id)
+    out: dict[tuple[int, int], int] = {}
+    for e, t, f in zip(emp.tolist(), theo.tolist(), flow.tolist()):
+        if f == 0:
+            continue
+        key = (int(e), int(t))
+        out[key] = out.get(key, 0) + int(f)
+    return out
+
+
+def _flow_cost(pairs, base, target, pair_cost):
+    """Sum |pos[e] - pos[t]| * flow — used to check decomposition validity."""
+    return sum(pair_cost(e, t) * f for (e, t), f in pairs.items())
+
+
 MAX_VALUE = CWassersteinNetworkFactory.create_1d.__doc__  # ensure bound
 
 
@@ -153,6 +170,116 @@ def test_random_parity(seed):
     assert dense == chain, (
         f"seed={seed} m={m} n={n} max_dist={max_dist} "
         f"dense={dense} chain={chain}")
+
+
+def _marginals(pairs, m, n):
+    """Row/column sums of the pair→flow matrix, for parity."""
+    row = [0] * m
+    col = [0] * n
+    for (e, t), f in pairs.items():
+        row[e] += f
+        col[t] += f
+    return row, col
+
+
+def _assert_flows_valid(dense_net, chain_net, base, target, m, n, trash_cost):
+    """Parity and validity checks on flows_for_target output for both factories.
+
+    Optimal transport decompositions are non-unique when multiple pairings
+    achieve the same cost. We check that chain and dense agree on:
+      - the per-empirical total flow (how much of each empirical is matched)
+      - the per-theoretical total flow (how much of each theoretical is met)
+      - the reported transport cost of the decomposition (must equal
+        total_cost minus the trash contribution)
+    We do NOT require identical tuple sets.
+    """
+    dense_pairs = _flows_by_pair(dense_net, 0)
+    chain_pairs = _flows_by_pair(chain_net, 0)
+    e_pos = np.asarray(base.positions).reshape(-1)
+    t_pos = np.asarray(target.positions).reshape(-1)
+
+    def pair_cost(e, t):
+        return int(abs(e_pos[e] - t_pos[t]))
+
+    dense_row, dense_col = _marginals(dense_pairs, m, n)
+    chain_row, chain_col = _marginals(chain_pairs, m, n)
+    assert dense_row == chain_row, (
+        f"empirical marginals differ: dense={dense_row} chain={chain_row}")
+    assert dense_col == chain_col, (
+        f"theoretical marginals differ: dense={dense_col} chain={chain_col}")
+
+    # Both decompositions must deliver the same transport cost
+    # (total_cost minus simple-trash cost, if any).
+    dense_flow_cost = _flow_cost(dense_pairs, base, target, pair_cost)
+    chain_flow_cost = _flow_cost(chain_pairs, base, target, pair_cost)
+    assert dense_flow_cost == chain_flow_cost, (
+        f"decomp costs differ: dense={dense_flow_cost} chain={chain_flow_cost}")
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_flows_for_target_parity(seed):
+    """Parity on flows_for_target decomposition for randomized 1D inputs.
+
+    Parity on *decomposition* requires parity on *total cost*. With a
+    truncated max_dist dense forbids pairs beyond the cap while chain
+    still routes them along adjacencies at cost = gap-sum, so costs can
+    legitimately diverge. To stay on the parity regime we use a max_dist
+    larger than the position span and equal total intensities (no trash).
+    """
+    rng = np.random.default_rng(seed)
+    m = int(rng.integers(1, 20))
+    n = int(rng.integers(1, 20))
+    e_pos = rng.integers(0, 100, size=m).astype(np.float64)
+    t_pos = rng.integers(0, 100, size=n).astype(np.float64)
+    e_int = rng.integers(1, 10, size=m).astype(np.int64)
+    t_int = rng.integers(1, 10, size=n).astype(np.int64)
+    # Force equal mass by padding one side with zero-intensity spacers.
+    total = max(int(e_int.sum()), int(t_int.sum()))
+    e_int_padded = np.concatenate([e_int, [total - int(e_int.sum())]])
+    t_int_padded = np.concatenate([t_int, [total - int(t_int.sum())]])
+    e_pos_padded = np.concatenate([e_pos, [e_pos[0]]])
+    t_pos_padded = np.concatenate([t_pos, [t_pos[0]]])
+    # Drop zero-intensity pads — chain factory doesn't mind but keeps
+    # the graph smaller.
+    e_mask = e_int_padded > 0
+    t_mask = t_int_padded > 0
+    base = Distribution_1D(e_pos_padded[e_mask], e_int_padded[e_mask])
+    target = Distribution_1D(t_pos_padded[t_mask], t_int_padded[t_mask])
+    dense_cost, chain_cost, dense_net, chain_net = _cost_pair(
+        base, [target], None, 1000)
+    assert dense_cost == chain_cost
+    _assert_flows_valid(
+        dense_net, chain_net, base, target,
+        len(base.positions[0]), len(target.positions[0]), None)
+
+
+def test_flows_for_target_crossing():
+    """Non-trivial case where flow enters a theoretical from both sides."""
+    base = Distribution_1D(np.array([0.0, 10.0]), np.array([3, 7]))
+    target = Distribution_1D(np.array([5.0]), np.array([10]))
+    _, _, dense_net, chain_net = _cost_pair(base, [target], None, 100)
+    _assert_flows_valid(dense_net, chain_net, base, target, 2, 1, None)
+
+
+def test_flows_for_target_multi_spectrum():
+    """flows_for_target returns only pairs for the queried target_id."""
+    base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
+    t1 = Distribution_1D(np.array([1.0, 6.0]), np.array([4, 6]))
+    t2 = Distribution_1D(np.array([9.5]), np.array([2]))
+    _, _, dense_net, chain_net = _cost_pair(base, [t1, t2], None, 100)
+    # Target 0: only empirical 0,1 matter.
+    dense_p0 = _flows_by_pair(dense_net, 0)
+    chain_p0 = _flows_by_pair(chain_net, 0)
+    # All pairs must reference t1 indices only.
+    for e, t in chain_p0:
+        assert t in (0, 1), f"target_id=0 pair references t1 index {t}"
+    # Chain should never emit pairs for a spectrum other than the query.
+    assert sum(chain_p0.values()) == sum(dense_p0.values())
+    dense_p1 = _flows_by_pair(dense_net, 1)
+    chain_p1 = _flows_by_pair(chain_net, 1)
+    for e, t in chain_p1:
+        assert t == 0
+    assert sum(chain_p1.values()) == sum(dense_p1.values())
 
 
 def test_chain_edge_count():
