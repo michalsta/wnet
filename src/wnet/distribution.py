@@ -112,6 +112,55 @@ class Distribution:
     def __len__(self):
         return self.intensities.shape[0]
 
+    def plot(self, filename: Optional[str] = None) -> None:
+        """
+        Visualize the distribution as an N×N plot matrix.
+
+        Diagonal (i,i): stem plot of dimension i vs intensity.
+        Off-diagonal (i,j): 2D scatter of dim i vs dim j, intensity as color.
+
+        Args:
+            filename: if given, save to file instead of showing interactively.
+        """
+        import matplotlib.pyplot as plt
+
+        pos = self.positions
+        intensities = self.intensities.astype(float)
+        D = self.dimension
+        title = self.label if self.label is not None else "Distribution"
+
+        i_max = intensities.max()
+        norm_int = intensities / i_max if i_max > 0 else intensities
+
+        fig, axes = plt.subplots(D, D, figsize=(3 * D, 3 * D), squeeze=False)
+        fig.suptitle(title)
+
+        sc = None
+        for i in range(D):
+            for j in range(D):
+                ax = axes[i][j]
+                if i == j:
+                    ax.vlines(pos[i], 0, intensities, linewidth=1)
+                    ax.plot(pos[i], intensities, "o", markersize=3)
+                    ax.set_ylabel("Intensity")
+                else:
+                    sc = ax.scatter(pos[j], pos[i], c=intensities, s=10 + 100 * norm_int, cmap="viridis", alpha=0.7)
+                if i == D - 1:
+                    ax.set_xlabel(f"dim {j}")
+                if j == 0:
+                    ax.set_ylabel(f"dim {i}" if i != j else "Intensity")
+
+        if sc is not None:
+            fig.colorbar(sc, ax=axes.ravel().tolist(), label="Intensity", shrink=0.6)
+
+        fig.tight_layout()
+
+        if filename is not None:
+            fig.savefig(filename, bbox_inches="tight")
+            plt.close(fig)
+        else:
+            plt.show()
+
     def bounding_box(self) -> tuple[np.ndarray, np.ndarray]:
         """
         Computes the axis-aligned bounding box of the distribution.
