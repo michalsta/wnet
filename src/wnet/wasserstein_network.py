@@ -22,7 +22,7 @@ class WassersteinNetwork:
         target_distributions (Sequence[Distribution]): A sequence of target distributions to which the Wasserstein distance is computed.
         distance (DistanceFunction): A callable that computes the distance between points in the distributions.
         max_distance (float | None): The maximum distance to consider. If None or infinity, it defaults to the maximum representable value.
-        force_dense_1d (bool): In 1D, force use of the O(m*n) dense factory instead of the O(m+n) chain factory. Currently the chain path at the Python level is not wired, so the default is True; passing False raises NotImplementedError.
+        force_dense_1d (bool): In 1D, force the O(m*n) dense factory instead of the O(m+n) chain factory. Default False uses the chain factory in 1D. Note: max_distance semantics differ between factories — chain only uses it to split the chain into components, while dense also caps per-pair cost.
     """
 
     def __init__(
@@ -31,21 +31,18 @@ class WassersteinNetwork:
         target_distributions: Sequence[Distribution],
         distance: Distance,
         max_distance: Optional[float] = None,
-        force_dense_1d: bool = True,
+        force_dense_1d: bool = False,
     ) -> None:
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
+        vec_base = base_distribution.vecdist()
+        vec_targets = [t.vecdist() for t in target_distributions]
         if base_distribution.dimension == 1 and not force_dense_1d:
-            raise NotImplementedError(
-                "1D chain-factory dispatch is not yet wired at the Python "
-                "level. Pass force_dense_1d=True or call "
-                "CWassersteinNetworkFactory.create_1d directly.")
-        self.wnet = CWassersteinNetworkFactory.create(
-            base_distribution.vecdist(),
-            [t.vecdist() for t in target_distributions],
-            distance,
-            max_distance,
-        )
+            self.wnet = CWassersteinNetworkFactory.create_1d(
+                vec_base, vec_targets, distance, max_distance)
+        else:
+            self.wnet = CWassersteinNetworkFactory.create(
+                vec_base, vec_targets, distance, max_distance)
         self.add_simple_trash = self.wnet.add_simple_trash
         self.build = self.wnet.build
         self.solve = self.wnet.solve

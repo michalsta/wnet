@@ -7,7 +7,7 @@ def WassersteinDistance(
     distribution1: Distribution,
     distribution2: Distribution,
     distance: Distance,
-    force_dense_1d: bool = True,
+    force_dense_1d: bool = False,
 ) -> float:
     """
     Computes the Wasserstein distance between two distributions using the provided distance metric.
@@ -40,7 +40,7 @@ def TruncatedWassersteinDistance(
     distribution2: Distribution,
     distance: Distance,
     max_distance: float,
-    force_dense_1d: bool = True,
+    force_dense_1d: bool = False,
 ) -> float:
     """
     Computes the truncated Wasserstein distance between two distributions, limiting the transport cost to max_distance.
