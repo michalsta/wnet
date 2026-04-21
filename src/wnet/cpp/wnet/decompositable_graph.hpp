@@ -1081,6 +1081,14 @@ public:
         std::vector<FlowEdge<intensity_type>> edges;
         std::vector<LEMON_INDEX> dead_end_node_ids;  // recomputed in build_subgraphs()
 
+        // Reject empty inputs for API parity with the dense `create` factory.
+        if (empirical_spectrum->size() == 0)
+            throw std::invalid_argument("Empirical distribution is empty.");
+        for (size_t i = 0; i < theoretical_spectra.size(); ++i)
+            if (theoretical_spectra[i]->size() == 0)
+                throw std::invalid_argument(
+                    "Theoretical distribution at index " + std::to_string(i) + " is empty.");
+
         // Reserve node storage (source + sink + all empirical + all theoretical).
         {
             size_t no_nodes = 2 + empirical_spectrum->size();
