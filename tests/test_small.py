@@ -1030,8 +1030,20 @@ expected_results = [
 try:
     import pytest
 
-    @pytest.mark.parametrize("params, expected", zip(parameter_set, expected_results))
+    @pytest.mark.parametrize("params, expected", zip(parameter_set[:30], expected_results[:30]))
     def test_large_wsdflow(params, expected):
+        wsdflow_instance_point = create_large_wsdflow_instance(**params)
+        wsdflow_instance, point = wsdflow_instance_point
+        if point is not None:
+            wsdflow_instance.solve(point)
+        else:
+            wsdflow_instance.solve()
+        result = wsdflow_instance.total_cost()
+        assert result == expected, f"Expected {expected}, got {result}"
+
+    @pytest.mark.long
+    @pytest.mark.parametrize("params, expected", zip(parameter_set[30:], expected_results[30:]))
+    def test_large_wsdflow_extended(params, expected):
         wsdflow_instance_point = create_large_wsdflow_instance(**params)
         wsdflow_instance, point = wsdflow_instance_point
         if point is not None:

@@ -59,6 +59,7 @@ expected_results = [18662, 2070, 132388, 535936, 5134997]
 try:
     import pytest
 
+    @pytest.mark.long
     @pytest.mark.parametrize("params, expected", zip(parameter_set, expected_results))
     def test_large_wsdflow_instances(params, expected):
         wsd_instance = create_large_wsdflow_instance(**params)

@@ -150,6 +150,7 @@ def test_truncation_with_mixed_runs():
     assert dense == chain
 
 
+@pytest.mark.long
 @pytest.mark.parametrize("seed", range(5))
 def test_random_parity(seed):
     """Randomized parity on integer-position 1D inputs."""
@@ -216,6 +217,7 @@ def _assert_flows_valid(dense_net, chain_net, base, target, m, n, trash_cost):
         f"decomp costs differ: dense={dense_flow_cost} chain={chain_flow_cost}")
 
 
+@pytest.mark.long
 @pytest.mark.parametrize("seed", range(5))
 def test_flows_for_target_parity(seed):
     """Parity on flows_for_target decomposition for randomized 1D inputs.
@@ -363,6 +365,7 @@ def test_derivatives_multi_spectrum():
     assert _derivs_per_subgraph(dense_net) == _derivs_per_subgraph(chain_net)
 
 
+@pytest.mark.long
 @pytest.mark.parametrize("seed", range(10))
 def test_derivatives_random_parity(seed):
     """Randomized parity on per-peak derivatives (integer positions)."""
@@ -388,6 +391,7 @@ def test_derivatives_random_parity(seed):
         f"seed={seed}: dense={dense_derivs} chain={chain_derivs}")
 
 
+@pytest.mark.long
 @pytest.mark.parametrize("seed", range(5))
 def test_spectrum_proportion_derivatives_parity(seed):
     """Randomized parity on spectrum proportion derivatives."""

@@ -254,6 +254,7 @@ def test_many_bases_one_target():
     assert derivs[0][0] == new_cost - original
 
 
+@pytest.mark.long
 @pytest.mark.parametrize("seed", range(50))
 def test_signal_part_derivatives_predict_cost_change(seed):
     """
@@ -390,6 +391,7 @@ def test_derivatives_stable_after_repeated_set_point():
         assert actual == predicted
 
 
+@pytest.mark.long
 @pytest.mark.parametrize("seed", range(20))
 def test_derivatives_stable_after_set_point_random(seed):
     """Random networks: solve at several points, return to point=1,
