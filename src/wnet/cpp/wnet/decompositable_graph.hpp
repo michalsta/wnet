@@ -129,20 +129,36 @@ public:
         simple_trash_added = true;
     }
 
-    void add_experimental_trash(VALUE_TYPE /*cost*/) {
+    void add_experimental_trash(VALUE_TYPE cost) {
         if (simple_trash_added)
             throw std::runtime_error("add_experimental_trash() is exclusive with simple trash.");
+        if (experimental_trash_added)
+            throw std::runtime_error("Experimental trash already added.");
         if (built)
             throw std::runtime_error("add_experimental_trash() must be called before build().");
-        throw std::runtime_error("Not implemented: experimental trash.");
+        // One EmpiricalTrashEdge per empirical node: EmpiricalNode -> Sink.
+        // Capacity is set to max/2 in build(); see comment there.
+        for (const auto& node : nodes) {
+            if (!std::holds_alternative<EmpiricalNode<intensity_type>>(node.get_type())) continue;
+            edges.emplace_back(edges.size(), node, nodes[1], EmpiricalTrashEdge(cost));
+        }
+        experimental_trash_added = true;
     }
 
-    void add_theoretical_trash(VALUE_TYPE /*cost*/) {
+    void add_theoretical_trash(VALUE_TYPE cost) {
         if (simple_trash_added)
             throw std::runtime_error("add_theoretical_trash() is exclusive with simple trash.");
+        if (theoretical_trash_added)
+            throw std::runtime_error("Theoretical trash already added.");
         if (built)
             throw std::runtime_error("add_theoretical_trash() must be called before build().");
-        throw std::runtime_error("Not implemented: theoretical trash.");
+        // One TheoreticalTrashEdge per theoretical node: Source -> TheoreticalNode.
+        // Capacity is set to max/2 in build(); see comment there.
+        for (const auto& node : nodes) {
+            if (!std::holds_alternative<TheoreticalNode<intensity_type>>(node.get_type())) continue;
+            edges.emplace_back(edges.size(), nodes[0], node, TheoreticalTrashEdge(cost));
+        }
+        theoretical_trash_added = true;
     }
 
     VALUE_TYPE simple_trash_cost() const {
