@@ -44,6 +44,8 @@ class WassersteinNetwork:
             self.wnet = CWassersteinNetworkFactory.create(
                 vec_base, vec_targets, distance, max_distance)
         self.add_simple_trash = self.wnet.add_simple_trash
+        self.add_experimental_trash = self.wnet.add_experimental_trash
+        self.add_theoretical_trash = self.wnet.add_theoretical_trash
         self.build = self.wnet.build
         self.solve = self.wnet.solve
         self.total_cost = self.wnet.total_cost

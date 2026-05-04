@@ -94,6 +94,8 @@ NB_MODULE(wnet_cpp, m) {
     nb::class_<WassersteinNetworkSubgraph<int64_t, int64_t>>(m, "CWassersteinNetworkSubgraph")
         .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode<int64_t>>&, const std::vector<FlowEdge<int64_t>*>&, size_t>())
         .def("add_simple_trash", &WassersteinNetworkSubgraph<int64_t, int64_t>::add_simple_trash)
+        .def("add_experimental_trash", &WassersteinNetworkSubgraph<int64_t, int64_t>::add_experimental_trash)
+        .def("add_theoretical_trash", &WassersteinNetworkSubgraph<int64_t, int64_t>::add_theoretical_trash)
         .def("build", &WassersteinNetworkSubgraph<int64_t, int64_t>::build)
         .def("set_point", &WassersteinNetworkSubgraph<int64_t, int64_t>::set_point)
         .def("total_cost", &WassersteinNetworkSubgraph<int64_t, int64_t>::total_cost)
@@ -112,6 +114,8 @@ NB_MODULE(wnet_cpp, m) {
         nb::class_<WassersteinNetworkSubgraph<int64_t, double>>(m, "CWassersteinNetworkSubgraphFloat")
         .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode<double>>&, const std::vector<FlowEdge<double>*>&, size_t>())
         .def("add_simple_trash", &WassersteinNetworkSubgraph<int64_t, double>::add_simple_trash)
+        .def("add_experimental_trash", &WassersteinNetworkSubgraph<int64_t, double>::add_experimental_trash)
+        .def("add_theoretical_trash", &WassersteinNetworkSubgraph<int64_t, double>::add_theoretical_trash)
         .def("build", &WassersteinNetworkSubgraph<int64_t, double>::build)
         .def("set_point", &WassersteinNetworkSubgraph<int64_t, double>::set_point)
         .def("total_cost", &WassersteinNetworkSubgraph<int64_t, double>::total_cost)
@@ -130,6 +134,8 @@ NB_MODULE(wnet_cpp, m) {
     nb::class_<WassersteinNetwork<int64_t, int64_t>>(m, "CWassersteinNetwork")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
         .def("add_simple_trash", &WassersteinNetwork<int64_t, int64_t>::add_simple_trash)
+        .def("add_experimental_trash", &WassersteinNetwork<int64_t, int64_t>::add_experimental_trash)
+        .def("add_theoretical_trash", &WassersteinNetwork<int64_t, int64_t>::add_theoretical_trash)
         .def("build", &WassersteinNetwork<int64_t, int64_t>::build)
         .def("solve", nb::overload_cast<>(&WassersteinNetwork<int64_t, int64_t>::solve))
         .def("solve", nb::overload_cast<const std::vector<double>&>(&WassersteinNetwork<int64_t, int64_t>::solve))
@@ -164,6 +170,8 @@ NB_MODULE(wnet_cpp, m) {
     nb::class_<WassersteinNetwork<int64_t, double>>(m, "CWassersteinNetworkFloat")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
         .def("add_simple_trash", &WassersteinNetwork<int64_t, double>::add_simple_trash)
+        .def("add_experimental_trash", &WassersteinNetwork<int64_t, double>::add_experimental_trash)
+        .def("add_theoretical_trash", &WassersteinNetwork<int64_t, double>::add_theoretical_trash)
         .def("build", &WassersteinNetwork<int64_t, double>::build)
         .def("solve", nb::overload_cast<>(&WassersteinNetwork<int64_t, double>::solve))
         .def("solve", nb::overload_cast<const std::vector<double>&>(&WassersteinNetwork<int64_t, double>::solve))
@@ -325,4 +333,14 @@ NB_MODULE(wnet_cpp, m) {
     nb::class_<ChainEdge>(m, "ChainEdge")
         .def(nb::init<LEMON_INT>())
         .def("get_cost", &ChainEdge::get_cost);
+
+    // Export EmpiricalTrashEdge (asymmetric trash: EmpiricalNode -> Sink).
+    nb::class_<EmpiricalTrashEdge>(m, "EmpiricalTrashEdge")
+        .def(nb::init<LEMON_INT>())
+        .def("get_cost", &EmpiricalTrashEdge::get_cost);
+
+    // Export TheoreticalTrashEdge (asymmetric trash: Source -> TheoreticalNode).
+    nb::class_<TheoreticalTrashEdge>(m, "TheoreticalTrashEdge")
+        .def(nb::init<LEMON_INT>())
+        .def("get_cost", &TheoreticalTrashEdge::get_cost);
 }

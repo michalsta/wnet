@@ -31,6 +31,9 @@ class WassersteinNetworkSubgraph {
     lemon::StaticDigraph::ArcMap<VALUE_TYPE> costs_map;
     std::optional<lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> solver;
     LEMON_INDEX simple_trash_idx;
+    bool simple_trash_added = false;
+    bool experimental_trash_added = false;
+    bool theoretical_trash_added = false;
     VALUE_TYPE lemon_empirical_intensity;
     VALUE_TYPE lemon_theoretical_intensity;
     const size_t no_target_distributions;
@@ -111,8 +114,10 @@ public:
     WassersteinNetworkSubgraph& operator=(WassersteinNetworkSubgraph&&) = delete;
 
     void add_simple_trash(VALUE_TYPE cost) {
-        if (simple_trash_idx != std::numeric_limits<LEMON_INDEX>::max())
+        if (simple_trash_added)
             throw std::runtime_error("Simple trash edge already added.");
+        if (experimental_trash_added || theoretical_trash_added)
+            throw std::runtime_error("add_simple_trash() is exclusive with experimental/theoretical trash.");
         if (built)
             throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
         edges.emplace_back(
@@ -121,6 +126,23 @@ public:
             nodes[1],
             SimpleTrashEdge(cost)
         );
+        simple_trash_added = true;
+    }
+
+    void add_experimental_trash(VALUE_TYPE /*cost*/) {
+        if (simple_trash_added)
+            throw std::runtime_error("add_experimental_trash() is exclusive with simple trash.");
+        if (built)
+            throw std::runtime_error("add_experimental_trash() must be called before build().");
+        throw std::runtime_error("Not implemented: experimental trash.");
+    }
+
+    void add_theoretical_trash(VALUE_TYPE /*cost*/) {
+        if (simple_trash_added)
+            throw std::runtime_error("add_theoretical_trash() is exclusive with simple trash.");
+        if (built)
+            throw std::runtime_error("add_theoretical_trash() must be called before build().");
+        throw std::runtime_error("Not implemented: theoretical trash.");
     }
 
     VALUE_TYPE simple_trash_cost() const {
@@ -158,6 +180,8 @@ public:
                     else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SimpleTrashEdge>) { simple_trash_idx = ii; return arg.get_cost(); }
                     else if constexpr (std::is_same_v<T, ChainEdge>) return arg.get_cost();
+                    else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) return arg.get_cost();
+                    else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) return arg.get_cost();
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
 
@@ -176,6 +200,13 @@ public:
                     // Chain edges carry unlimited flow; max/2 avoids any
                     // accidental overflow when LEMON internals sum caps.
                     else if constexpr (std::is_same_v<T, ChainEdge>) return std::numeric_limits<VALUE_TYPE>::max() / 2;
+                    // Asymmetric trash edges: the adjacent anchor edge is always the
+                    // binding constraint (SrcToEmpiricalEdge caps empirical inflow;
+                    // TheoreticalToSinkEdge caps theoretical outflow), so a redundant
+                    // tight cap here adds pivot candidates without shrinking the feasible
+                    // region. Use max/2 like ChainEdge and skip set_point updates.
+                    else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) return std::numeric_limits<VALUE_TYPE>::max() / 2;
+                    else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) return std::numeric_limits<VALUE_TYPE>::max() / 2;
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
         }
@@ -210,6 +241,9 @@ public:
                 else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {}
                 else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {}
                 else if constexpr (std::is_same_v<T, ChainEdge>) {}
+                // Capacity fixed at max/2 in build(); no update needed (see comment there).
+                else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) {}
+                else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) {}
                 else { throw std::runtime_error("Invalid FlowEdgeType"); };
             }, edge.get_type());
         }
@@ -320,6 +354,8 @@ public:
                 else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {}
                 else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {}
                 else if constexpr (std::is_same_v<T, ChainEdge>) {}
+                else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) {}
+                else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) {}
                 else { throw std::runtime_error("Invalid FlowEdgeType"); };
             }, edge.get_type());
         }
@@ -741,6 +777,8 @@ public:
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
         if (!solver)
             throw std::runtime_error("Must call solve() before signal_part_derivatives().");
+        if (experimental_trash_added || theoretical_trash_added)
+            throw std::runtime_error("Not implemented: signal_part_derivatives() with asymmetric trash.");
         if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max())
             throw std::runtime_error("signal_part_derivatives() requires simple trash.");
 
@@ -1118,6 +1156,20 @@ public:
             throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_simple_trash(cost);
+    };
+
+    void add_experimental_trash(VALUE_TYPE cost) {
+        if (built)
+            throw std::runtime_error("add_experimental_trash() must be called before build().");
+        for (auto& flow_subgraph : flow_subgraphs)
+            flow_subgraph->add_experimental_trash(cost);
+    };
+
+    void add_theoretical_trash(VALUE_TYPE cost) {
+        if (built)
+            throw std::runtime_error("add_theoretical_trash() must be called before build().");
+        for (auto& flow_subgraph : flow_subgraphs)
+            flow_subgraph->add_theoretical_trash(cost);
     };
 
     void build() {

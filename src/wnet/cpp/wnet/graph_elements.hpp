@@ -131,7 +131,29 @@ public:
     LEMON_INT get_cost() const { return cost; }
 };
 
-using FlowEdgeType = std::variant<MatchingEdge, SrcToEmpiricalEdge, TheoreticalToSinkEdge, SimpleTrashEdge, ChainEdge>;
+// Asymmetric trash: EmpiricalNode → Sink, skipping the theoretical layer.
+// Allows empirical signal to be discarded at a per-unit cost without needing
+// a matching theoretical peak. Exclusive with SimpleTrashEdge.
+class EmpiricalTrashEdge {
+    const LEMON_INT cost;
+public:
+    EmpiricalTrashEdge() = delete;
+    EmpiricalTrashEdge(LEMON_INT cost) : cost(cost) {}
+    LEMON_INT get_cost() const { return cost; }
+};
+
+// Asymmetric trash: Source → TheoreticalNode, skipping the empirical layer.
+// Allows theoretical capacity to be phantom-filled at a per-unit cost without
+// a matching empirical peak. Exclusive with SimpleTrashEdge.
+class TheoreticalTrashEdge {
+    const LEMON_INT cost;
+public:
+    TheoreticalTrashEdge() = delete;
+    TheoreticalTrashEdge(LEMON_INT cost) : cost(cost) {}
+    LEMON_INT get_cost() const { return cost; }
+};
+
+using FlowEdgeType = std::variant<MatchingEdge, SrcToEmpiricalEdge, TheoreticalToSinkEdge, SimpleTrashEdge, ChainEdge, EmpiricalTrashEdge, TheoreticalTrashEdge>;
 
 template<typename intensity_type>
 class FlowEdge {
@@ -168,6 +190,10 @@ public:
                 return arg.get_cost();
             } else if constexpr (std::is_same_v<T, ChainEdge>) {
                 return arg.get_cost();
+            } else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) {
+                return arg.get_cost();
+            } else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) {
+                return arg.get_cost();
             } else {
                 throw std::runtime_error("Invalid FlowEdge type");
             }
@@ -187,6 +213,10 @@ public:
                 return std::nullopt; // Unlimited capacity
             } else if constexpr (std::is_same_v<T, ChainEdge>) {
                 return std::nullopt; // Unlimited capacity
+            } else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) {
+                return std::get<EmpiricalNode<intensity_type>>(this->get_start_node().get_type()).get_intensity();
+            } else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) {
+                return std::nullopt; // Effectively unbounded; TheoreticalToSinkEdge is the binding cap
             } else {
                 throw std::runtime_error("Invalid FlowEdge type");
             }
