@@ -12,6 +12,13 @@
 #define LEMON_ONLY_TEMPLATES
 #include <lemon/static_graph.h>
 #include <lemon/network_simplex.h>
+#include <lemon/cycle_canceling.h>
+
+// Selects the min-cost flow algorithm used by WassersteinNetworkSubgraph.
+// NetworkSimplex is the default and supports warm-starting (latent — not yet
+// exploited).  CycleCanceling always cold-starts; any future warm_start()
+// implementation must throw std::logic_error for this variant.
+enum class SolverMethod { NetworkSimplex, CycleCanceling };
 
 //#include "pylmcf/py_support.h"
 #include "graph_elements.hpp"
@@ -29,7 +36,9 @@ class WassersteinNetworkSubgraph {
     lemon::StaticDigraph::NodeMap<VALUE_TYPE> node_supply_map;
     lemon::StaticDigraph::ArcMap<VALUE_TYPE> capacities_map;
     lemon::StaticDigraph::ArcMap<VALUE_TYPE> costs_map;
-    std::optional<lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> solver;
+    std::optional<lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> ns_solver;
+    std::optional<lemon::CycleCanceling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cc_solver;
+    SolverMethod _method = SolverMethod::NetworkSimplex;
     LEMON_INDEX simple_trash_idx;
     bool simple_trash_added = false;
     bool experimental_trash_added = false;
@@ -38,6 +47,16 @@ class WassersteinNetworkSubgraph {
     VALUE_TYPE lemon_theoretical_intensity;
     const size_t no_target_distributions;
     bool built = false;
+
+    bool _solver_has_value() const {
+        return _method == SolverMethod::NetworkSimplex ? ns_solver.has_value() : cc_solver.has_value();
+    }
+    VALUE_TYPE _solver_flow(lemon::StaticDigraph::Arc arc) const {
+        return _method == SolverMethod::NetworkSimplex ? ns_solver->flow(arc) : cc_solver->flow(arc);
+    }
+    VALUE_TYPE _solver_total_cost() const {
+        return _method == SolverMethod::NetworkSimplex ? ns_solver->totalCost() : cc_solver->totalCost();
+    }
 
 public:
     WassersteinNetworkSubgraph(
@@ -50,7 +69,6 @@ public:
         node_supply_map(lemon_graph),
         capacities_map(lemon_graph),
         costs_map(lemon_graph),
-        solver(),
         simple_trash_idx(std::numeric_limits<LEMON_INDEX>::max()),
         lemon_empirical_intensity(0),
         lemon_theoretical_intensity(0),
@@ -112,6 +130,12 @@ public:
     WassersteinNetworkSubgraph& operator=(const WassersteinNetworkSubgraph&) = delete;
     WassersteinNetworkSubgraph(WassersteinNetworkSubgraph&&) = delete;
     WassersteinNetworkSubgraph& operator=(WassersteinNetworkSubgraph&&) = delete;
+
+    void set_solver_method(SolverMethod method) {
+        if (built)
+            throw std::runtime_error("set_solver_method() must be called before build().");
+        _method = method;
+    }
 
     void add_simple_trash(VALUE_TYPE cost) {
         if (simple_trash_added)
@@ -226,9 +250,8 @@ public:
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
         }
-        //solver.emplace(lemon_graph);//lemon::NetworkSimplex<lemon::StaticDigraph>(lemon_graph);
-        //solver->upperMap(capacities_map);
-        solver.reset();
+        ns_solver.reset();
+        cc_solver.reset();
         built = true;
     }
 
@@ -271,16 +294,30 @@ public:
         }
         node_supply_map[lemon_graph.nodeFromId(0)] = lemon_total_flow;
         node_supply_map[lemon_graph.nodeFromId(1)] = -lemon_total_flow;
-        solver.emplace(lemon_graph);
-        solver->upperMap(capacities_map);
-        solver->costMap(costs_map);
-        solver->supplyMap(node_supply_map);
-        solver->run();
+        // Both solvers cold-start: a fresh instance is created on every call.
+        // NetworkSimplex exposes warm-start accessors (internalFlow, repairTreeFlows)
+        // that could reuse the previous spanning tree when only capacities change
+        // between calls.  CycleCanceling has no equivalent — its init() always
+        // calls Circulation to find a fresh feasible flow.  Any future warm_start()
+        // implementation must therefore throw std::logic_error for CycleCanceling.
+        if (_method == SolverMethod::NetworkSimplex) {
+            ns_solver.emplace(lemon_graph);
+            ns_solver->upperMap(capacities_map);
+            ns_solver->costMap(costs_map);
+            ns_solver->supplyMap(node_supply_map);
+            ns_solver->run();
+        } else {
+            cc_solver.emplace(lemon_graph);
+            cc_solver->upperMap(capacities_map);
+            cc_solver->costMap(costs_map);
+            cc_solver->supplyMap(node_supply_map);
+            cc_solver->run();
+        }
     }
 
     VALUE_TYPE total_cost() const {
-        if(!solver) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
-        return solver->totalCost();
+        if(!_solver_has_value()) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
+        return _solver_total_cost();
     };
 
     std::string to_string() const {
@@ -297,8 +334,8 @@ public:
                       std::to_string(lemon_graph.id(lemon_graph.target(lemon_graph.arcFromId(ii)))) + " cost: " +
                       std::to_string(costs_map[lemon_graph.arcFromId(ii)]) + " capacity: " +
                       std::to_string(capacities_map[lemon_graph.arcFromId(ii)]) + " flow: " +
-                      (solver.has_value() ?
-                      std::to_string(solver->flow(lemon_graph.arcFromId(ii))) + "\n" :  "not yet computed\n");
+                      (_solver_has_value() ?
+                      std::to_string(_solver_flow(lemon_graph.arcFromId(ii))) + "\n" :  "not yet computed\n");
         }
         return result;
     };
@@ -318,8 +355,8 @@ public:
                       std::to_string(lemon_graph.id(lemon_graph.target(lemon_graph.arcFromId(ii)))) + " cost: " +
                       std::to_string(costs_map[lemon_graph.arcFromId(ii)]) + " capacity: " +
                       std::to_string(capacities_map[lemon_graph.arcFromId(ii)]) + " flow: " +
-                      (solver.has_value() ?
-                      std::to_string(solver->flow(lemon_graph.arcFromId(ii))) + "\n" :  "not yet computed\n");
+                      (_solver_has_value() ?
+                      std::to_string(_solver_flow(lemon_graph.arcFromId(ii))) + "\n" :  "not yet computed\n");
         }
         return result;
     };
@@ -349,7 +386,7 @@ public:
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
         {
             const FlowEdge<intensity_type>& edge = edges[ii];
-            const VALUE_TYPE flow = solver->flow(lemon_graph.arcFromId(ii));
+            const VALUE_TYPE flow = _solver_flow(lemon_graph.arcFromId(ii));
             if (std::holds_alternative<ChainEdge>(edge.get_type())) {
                 has_chain = true;
                 continue;
@@ -464,8 +501,8 @@ public:
         // Read per-gap forward/reverse flows from the solver.
         std::vector<VALUE_TYPE> R(K - 1), L(K - 1);
         for (size_t g = 0; g < K - 1; ++g) {
-            R[g] = solver->flow(lemon_graph.arcFromId(right_arc_ids[g]));
-            L[g] = solver->flow(lemon_graph.arcFromId(left_arc_ids[g]));
+            R[g] = _solver_flow(lemon_graph.arcFromId(right_arc_ids[g]));
+            L[g] = _solver_flow(lemon_graph.arcFromId(left_arc_ids[g]));
         }
 
         // Pass 1 — rightward decomposition.
@@ -546,7 +583,7 @@ public:
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
         {
             const FlowEdge<intensity_type>& edge = edges[ii];
-            const VALUE_TYPE flow = solver->flow(lemon_graph.arcFromId(ii));
+            const VALUE_TYPE flow = _solver_flow(lemon_graph.arcFromId(ii));
             if (flow == 0) continue;
             result[edge.get_id()] = flow;
         }
@@ -596,7 +633,7 @@ public:
     }
 
     bool is_solved() const {
-        return solver.has_value();
+        return _solver_has_value();
     }
 
     // Chain-specialized residual shortest distances. Linear sweep variant of
@@ -669,8 +706,8 @@ public:
         // c_left[g]: symmetric for the opposite direction.
         std::vector<VALUE_TYPE> c_right(K > 0 ? K - 1 : 0), c_left(K > 0 ? K - 1 : 0);
         for (size_t g = 0; g + 1 < K; ++g) {
-            const VALUE_TYPE R = solver->flow(lemon_graph.arcFromId(right_arc_ids[g]));
-            const VALUE_TYPE L = solver->flow(lemon_graph.arcFromId(left_arc_ids[g]));
+            const VALUE_TYPE R = _solver_flow(lemon_graph.arcFromId(right_arc_ids[g]));
+            const VALUE_TYPE L = _solver_flow(lemon_graph.arcFromId(left_arc_ids[g]));
             c_right[g] = (L > 0) ? -gap_cost[g] : gap_cost[g];
             c_left[g]  = (R > 0) ? -gap_cost[g] : gap_cost[g];
         }
@@ -692,14 +729,14 @@ public:
                 auto it = node_to_pos.find(edges[ii].get_end_node_id());
                 if (it == node_to_pos.end()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
-                VALUE_TYPE flow = solver->flow(arc), cap = capacities_map[arc];
+                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
                 if (flow < cap) has_src_fwd[it->second] = true;
                 if (flow > 0) has_src_rev[it->second] = true;
             } else if (std::holds_alternative<TheoreticalToSinkEdge>(et)) {
                 auto it = node_to_pos.find(edges[ii].get_start_node_id());
                 if (it == node_to_pos.end()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
-                VALUE_TYPE flow = solver->flow(arc), cap = capacities_map[arc];
+                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
                 if (flow < cap) has_sink_fwd[it->second] = true;
                 if (flow > 0) has_sink_rev[it->second] = true;
             } else if (const auto* e = std::get_if<EmpiricalTrashEdge>(&et)) {
@@ -707,7 +744,7 @@ public:
                 auto it = node_to_pos.find(edges[ii].get_start_node_id());
                 if (it == node_to_pos.end()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
-                VALUE_TYPE flow = solver->flow(arc), cap = capacities_map[arc];
+                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
                 exp_trash_cost[it->second] = e->get_cost();
                 if (flow < cap) exp_trash_fwd[it->second] = true;
                 if (flow > 0)   exp_trash_rev[it->second] = true;
@@ -716,7 +753,7 @@ public:
                 auto it = node_to_pos.find(edges[ii].get_end_node_id());
                 if (it == node_to_pos.end()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
-                VALUE_TYPE flow = solver->flow(arc), cap = capacities_map[arc];
+                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
                 theo_trash_cost[it->second] = t->get_cost();
                 if (flow < cap) theo_trash_fwd[it->second] = true;
                 if (flow > 0)   theo_trash_rev[it->second] = true;
@@ -796,7 +833,7 @@ public:
                 LEMON_INDEX v = lemon_graph.id(lemon_graph.target(arc));
                 VALUE_TYPE cost = costs_map[arc];
                 VALUE_TYPE cap = capacities_map[arc];
-                VALUE_TYPE flow = solver->flow(arc);
+                VALUE_TYPE flow = _solver_flow(arc);
                 // Matching edges have unlimited base capacity; the LEMON
                 // capacity (min of endpoint intensities) is an optimization
                 // that should not limit the residual graph. Chain edges
@@ -830,7 +867,7 @@ public:
     //   E > T (supply fixed): augmenting cycle through T_node uses dist_sink.
     //   T >= E (supply +1):   extra Source unit routed to T_node uses dist_src.
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
-        if (!solver)
+        if (!_solver_has_value())
             throw std::runtime_error("Must call solve() before signal_part_derivatives().");
         if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max()
                 && !experimental_trash_added && !theoretical_trash_added)
@@ -857,7 +894,7 @@ public:
             if (std::holds_alternative<TheoreticalToSinkEdge>(edges[ii].get_type())) {
                 auto arc = lemon_graph.arcFromId(ii);
                 theo_sink_slack[edges[ii].get_start_node_id()] =
-                    capacities_map[arc] - solver->flow(arc);
+                    capacities_map[arc] - _solver_flow(arc);
             }
         }
 
@@ -1229,6 +1266,13 @@ public:
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_theoretical_trash(cost);
     };
+
+    void set_solver_method(SolverMethod method) {
+        if (built)
+            throw std::runtime_error("set_solver_method() must be called before build().");
+        for (auto& flow_subgraph : flow_subgraphs)
+            flow_subgraph->set_solver_method(method);
+    }
 
     void build() {
         for (auto& flow_subgraph : flow_subgraphs)
