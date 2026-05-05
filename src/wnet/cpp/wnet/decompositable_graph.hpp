@@ -675,13 +675,17 @@ public:
             c_left[g]  = (R > 0) ? -gap_cost[g] : gap_cost[g];
         }
 
-        // src/sink connectivity per chain position. has_*_fwd: forward residual
-        // of the underlying src→emp / theo→sink arc (flow<cap). has_*_rev:
-        // reverse residual (flow>0). All such arcs have cost 0.
+        // src/sink connectivity per chain position.
+        // Cost-0 arcs (SrcToEmpiricalEdge, TheoreticalToSinkEdge) use bool flags.
+        // Non-zero trash arcs (EmpiricalTrashEdge, TheoreticalTrashEdge) store the
+        // arc cost per position (INF = absent) plus forward/reverse availability.
         std::unordered_map<LEMON_INDEX, size_t> node_to_pos;
         for (size_t i = 0; i < K; ++i) node_to_pos[chain_order[i]] = i;
         std::vector<bool> has_src_fwd(K, false), has_src_rev(K, false);
         std::vector<bool> has_sink_fwd(K, false), has_sink_rev(K, false);
+        std::vector<VALUE_TYPE> exp_trash_cost(K, INF), theo_trash_cost(K, INF);
+        std::vector<bool> exp_trash_fwd(K, false), exp_trash_rev(K, false);
+        std::vector<bool> theo_trash_fwd(K, false), theo_trash_rev(K, false);
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             const auto& et = edges[ii].get_type();
             if (std::holds_alternative<SrcToEmpiricalEdge>(et)) {
@@ -698,24 +702,50 @@ public:
                 VALUE_TYPE flow = solver->flow(arc), cap = capacities_map[arc];
                 if (flow < cap) has_sink_fwd[it->second] = true;
                 if (flow > 0) has_sink_rev[it->second] = true;
+            } else if (const auto* e = std::get_if<EmpiricalTrashEdge>(&et)) {
+                // EmpiricalNode → Sink (cost C_exp); start node is in the chain.
+                auto it = node_to_pos.find(edges[ii].get_start_node_id());
+                if (it == node_to_pos.end()) continue;
+                auto arc = lemon_graph.arcFromId(ii);
+                VALUE_TYPE flow = solver->flow(arc), cap = capacities_map[arc];
+                exp_trash_cost[it->second] = e->get_cost();
+                if (flow < cap) exp_trash_fwd[it->second] = true;
+                if (flow > 0)   exp_trash_rev[it->second] = true;
+            } else if (const auto* t = std::get_if<TheoreticalTrashEdge>(&et)) {
+                // Source → TheoreticalNode (cost C_theo); end node is in the chain.
+                auto it = node_to_pos.find(edges[ii].get_end_node_id());
+                if (it == node_to_pos.end()) continue;
+                auto arc = lemon_graph.arcFromId(ii);
+                VALUE_TYPE flow = solver->flow(arc), cap = capacities_map[arc];
+                theo_trash_cost[it->second] = t->get_cost();
+                if (flow < cap) theo_trash_fwd[it->second] = true;
+                if (flow > 0)   theo_trash_rev[it->second] = true;
             }
         }
 
         auto update_min = [&](VALUE_TYPE& a, VALUE_TYPE b) { if (b < a) a = b; };
 
         auto relay = [&]() {
-            // Propagate chain → src/sink (cost 0 reverse / forward residuals).
             for (size_t i = 0; i < K; ++i) {
                 const VALUE_TYPE d = dist[chain_order[i]];
                 if (d == INF) continue;
+                // Cost-0: reverse SrcToEmpiricalEdge, forward TheoreticalToSinkEdge.
                 if (has_src_rev[i])  update_min(dist[src_id],  d);
                 if (has_sink_fwd[i]) update_min(dist[sink_id], d);
+                // Forward EmpiricalTrashEdge (Emp→Sink, cost +C_exp).
+                if (exp_trash_fwd[i]) update_min(dist[sink_id], d + exp_trash_cost[i]);
+                // Reverse TheoreticalTrashEdge (Theo→Source, cost -C_theo).
+                if (theo_trash_rev[i]) update_min(dist[src_id], d - theo_trash_cost[i]);
             }
-            // Propagate src/sink → chain.
             const VALUE_TYPE ds = dist[src_id], dk = dist[sink_id];
             for (size_t i = 0; i < K; ++i) {
+                // Cost-0: forward SrcToEmpiricalEdge, reverse TheoreticalToSinkEdge.
                 if (ds != INF && has_src_fwd[i])  update_min(dist[chain_order[i]], ds);
                 if (dk != INF && has_sink_rev[i]) update_min(dist[chain_order[i]], dk);
+                // Forward TheoreticalTrashEdge (Source→Theo, cost +C_theo).
+                if (ds != INF && theo_trash_fwd[i]) update_min(dist[chain_order[i]], ds + theo_trash_cost[i]);
+                // Reverse EmpiricalTrashEdge (Sink→Emp, cost -C_exp).
+                if (dk != INF && exp_trash_rev[i]) update_min(dist[chain_order[i]], dk - exp_trash_cost[i]);
             }
         };
         auto chain_sweep = [&]() {
@@ -790,30 +820,38 @@ public:
 
     // Per-peak marginal cost of increasing each theoretical signal by 1.
     // Returns vector of (spectrum_id, peak_index, derivative).
+    //
+    // Simple trash: Bellman-Ford excludes the trash edge; src_adjust/sink_adjust
+    // manually account for the Source↔Sink shortcut it provides.
+    //
+    // Asymmetric trash: full residual already contains the shortcuts (reverse
+    // EmpiricalTrashEdge: Sink→Emp at -C_exp; forward TheoreticalTrashEdge:
+    // Source→Theo at C_theo), so no adjustments are needed.
+    //   E > T (supply fixed): augmenting cycle through T_node uses dist_sink.
+    //   T >= E (supply +1):   extra Source unit routed to T_node uses dist_src.
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
         if (!solver)
             throw std::runtime_error("Must call solve() before signal_part_derivatives().");
-        if (experimental_trash_added || theoretical_trash_added)
-            throw std::runtime_error("Not implemented: signal_part_derivatives() with asymmetric trash.");
-        if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max())
-            throw std::runtime_error("signal_part_derivatives() requires simple trash.");
+        if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max()
+                && !experimental_trash_added && !theoretical_trash_added)
+            throw std::runtime_error("signal_part_derivatives() requires trash edges.");
 
-        const VALUE_TYPE trash_cost = simple_trash_cost();
         const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
         const LEMON_INDEX sink_id = 1;
-
+        const bool supply_fixed = (lemon_empirical_intensity > lemon_theoretical_intensity);
         const bool use_chain = has_chain_edges();
-        auto dist_src  = use_chain ? chain_residual_distances(0)
-                                   : bellman_ford_residual(0);
-        auto dist_sink = use_chain ? chain_residual_distances(sink_id)
-                                   : bellman_ford_residual(sink_id);
+        auto dist_src  = use_chain ? chain_residual_distances(0)       : bellman_ford_residual(0);
+        auto dist_sink = use_chain ? chain_residual_distances(sink_id) : bellman_ford_residual(sink_id);
 
-        const VALUE_TYPE src_adjust = (lemon_empirical_intensity > lemon_theoretical_intensity)
-            ? -trash_cost : 0;
-        const VALUE_TYPE sink_adjust = (lemon_empirical_intensity > lemon_theoretical_intensity)
-            ? 0 : trash_cost;
+        // Pre-compute simple-trash adjustments (unused in asymmetric path).
+        VALUE_TYPE trash_cost = 0, src_adjust = 0, sink_adjust = 0;
+        if (!experimental_trash_added && !theoretical_trash_added) {
+            trash_cost  = simple_trash_cost();
+            src_adjust  = supply_fixed ? -trash_cost : 0;
+            sink_adjust = supply_fixed ? 0 : trash_cost;
+        }
 
-        // Build theo->sink slack: capacity - flow
+        // Build theo->sink slack: capacity - flow.
         std::unordered_map<LEMON_INDEX, VALUE_TYPE> theo_sink_slack;
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INDEX>(edges.size()); ++ii) {
             if (std::holds_alternative<TheoreticalToSinkEdge>(edges[ii].get_type())) {
@@ -829,20 +867,24 @@ public:
             if (!theo) continue;
             LEMON_INDEX node_id = node.get_id();
 
-            // If slack > 0 and excess empirical supply, the solver already
-            // chose not to use this node -- adding capacity changes nothing.
+            // Slack > 0 with excess empirical: adding capacity does nothing.
             auto slack_it = theo_sink_slack.find(node_id);
-            if (slack_it != theo_sink_slack.end() && slack_it->second > 0
-                && lemon_empirical_intensity > lemon_theoretical_intensity) {
+            if (slack_it != theo_sink_slack.end() && slack_it->second > 0 && supply_fixed) {
                 result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), 0);
                 continue;
             }
 
-            VALUE_TYPE deriv = trash_cost;
-            if (dist_src[node_id] != INF)
-                deriv = std::min(deriv, dist_src[node_id] + src_adjust);
-            if (dist_sink[node_id] != INF)
-                deriv = std::min(deriv, dist_sink[node_id] + sink_adjust);
+            VALUE_TYPE deriv;
+            if (experimental_trash_added || theoretical_trash_added) {
+                deriv = supply_fixed ? dist_sink[node_id] : dist_src[node_id];
+                if (deriv == INF) deriv = 0;
+            } else {
+                deriv = trash_cost;
+                if (dist_src[node_id] != INF)
+                    deriv = std::min(deriv, dist_src[node_id] + src_adjust);
+                if (dist_sink[node_id] != INF)
+                    deriv = std::min(deriv, dist_sink[node_id] + sink_adjust);
+            }
 
             result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), deriv);
         }
