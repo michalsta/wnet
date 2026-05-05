@@ -53,12 +53,11 @@ class WassersteinNetwork:
         else:
             self.wnet = CWassersteinNetworkFactory.create(
                 vec_base, vec_targets, distance, max_distance)
-        if method != "network_simplex":
-            self.wnet.set_solver_method(self._SOLVER_METHODS[method])
+        _method_enum = self._SOLVER_METHODS[method]
         self.add_simple_trash = self.wnet.add_simple_trash
         self.add_experimental_trash = self.wnet.add_experimental_trash
         self.add_theoretical_trash = self.wnet.add_theoretical_trash
-        self.build = self.wnet.build
+        self.build = lambda: self.wnet.build(_method_enum)
         self.solve = self.wnet.solve
         self.total_cost = self.wnet.total_cost
         self.get_subgraph = self.wnet.get_subgraph

@@ -131,12 +131,6 @@ public:
     WassersteinNetworkSubgraph(WassersteinNetworkSubgraph&&) = delete;
     WassersteinNetworkSubgraph& operator=(WassersteinNetworkSubgraph&&) = delete;
 
-    void set_solver_method(SolverMethod method) {
-        if (built)
-            throw std::runtime_error("set_solver_method() must be called before build().");
-        _method = method;
-    }
-
     void add_simple_trash(VALUE_TYPE cost) {
         if (simple_trash_added)
             throw std::runtime_error("Simple trash edge already added.");
@@ -253,6 +247,11 @@ public:
         ns_solver.reset();
         cc_solver.reset();
         built = true;
+    }
+
+    void build(SolverMethod method = SolverMethod::NetworkSimplex) {
+        _method = method;
+        build();
     }
 
     void set_point(const std::vector<double>& point) {
@@ -1267,16 +1266,9 @@ public:
             flow_subgraph->add_theoretical_trash(cost);
     };
 
-    void set_solver_method(SolverMethod method) {
-        if (built)
-            throw std::runtime_error("set_solver_method() must be called before build().");
+    void build(SolverMethod method = SolverMethod::NetworkSimplex) {
         for (auto& flow_subgraph : flow_subgraphs)
-            flow_subgraph->set_solver_method(method);
-    }
-
-    void build() {
-        for (auto& flow_subgraph : flow_subgraphs)
-            flow_subgraph->build();
+            flow_subgraph->build(method);
         built = true;
     };
 
