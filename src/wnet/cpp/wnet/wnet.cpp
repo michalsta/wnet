@@ -68,6 +68,15 @@ NB_MODULE(wnet_cpp, m) {
     nb::bind_vector<std::vector<double>>(m, "std_vector_double");
     nb::bind_map<std::unordered_map<int32_t, int64_t>>(m, "std_unordered_map_int32_t_int64_t");
 
+    nb::enum_<DistanceMetric>(m, "DistanceMetric")
+        .value("L1", DistanceMetric::L1)
+        .value("L2", DistanceMetric::L2)
+        .value("LINF", DistanceMetric::LINF);
+
+    nb::enum_<SolverMethod>(m, "SolverMethod")
+        .value("NetworkSimplex", SolverMethod::NetworkSimplex)
+        .value("CycleCanceling", SolverMethod::CycleCanceling);
+
     nb::class_<FlowNode<int64_t>>(m, "FlowNode")
         .def(nb::init<LEMON_INDEX, SourceNode>())
         .def(nb::init<LEMON_INDEX, SinkNode>())
@@ -289,15 +298,6 @@ NB_MODULE(wnet_cpp, m) {
         VectorDistribution<2, double, LEMON_INT> empirical_vec_dist(*empirical_dist);
     }
 );*/
-    nb::enum_<DistanceMetric>(m, "DistanceMetric")
-        .value("L1", DistanceMetric::L1)
-        .value("L2", DistanceMetric::L2)
-        .value("LINF", DistanceMetric::LINF);
-
-    nb::enum_<SolverMethod>(m, "SolverMethod")
-        .value("NetworkSimplex", SolverMethod::NetworkSimplex)
-        .value("CycleCanceling", SolverMethod::CycleCanceling);
-
     // Export SourceNode
     nb::class_<SourceNode>(m, "SourceNode");
 
