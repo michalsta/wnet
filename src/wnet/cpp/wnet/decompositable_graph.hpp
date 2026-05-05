@@ -189,7 +189,7 @@ public:
         }, edges[simple_trash_idx].get_type());
     }
 
-    void build() {
+    void build_impl() {
         assert_fits_lemon_index(nodes.size(), "subgraph nodes");
         assert_fits_lemon_index(edges.size(), "subgraph edges");
         edges = std::move(sorted_copy(edges, [](const FlowEdge<intensity_type>& a, const FlowEdge<intensity_type>& b) {
@@ -251,7 +251,7 @@ public:
 
     void build(SolverMethod method = SolverMethod::NetworkSimplex) {
         _method = method;
-        build();
+        build_impl();
     }
 
     void set_point(const std::vector<double>& point) {
