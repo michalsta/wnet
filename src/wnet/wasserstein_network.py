@@ -24,12 +24,14 @@ class WassersteinNetwork:
         distance (DistanceFunction): A callable that computes the distance between points in the distributions.
         max_distance (float | None): The maximum distance to consider. If None or infinity, it defaults to the maximum representable value.
         force_dense_1d (bool): In 1D, force the O(m*n) dense factory instead of the O(m+n) chain factory. Default False uses the chain factory in 1D. Note: max_distance semantics differ between factories — chain only uses it to split the chain into components, while dense also caps per-pair cost.
-        method (str): Min-cost flow algorithm. "network_simplex" (default) or "cycle_canceling".
+        method (str): Min-cost flow algorithm. "network_simplex" (default), "cycle_canceling", "cost_scaling", or "capacity_scaling".
     """
 
     _SOLVER_METHODS = {
         "network_simplex": SolverMethod.NetworkSimplex,
         "cycle_canceling": SolverMethod.CycleCanceling,
+        "cost_scaling": SolverMethod.CostScaling,
+        "capacity_scaling": SolverMethod.CapacityScaling,
     }
 
     def __init__(

@@ -13,12 +13,15 @@
 #include <lemon/static_graph.h>
 #include <lemon/network_simplex.h>
 #include <lemon/cycle_canceling.h>
+#include <lemon/cost_scaling.h>
+#include <lemon/capacity_scaling.h>
 
 // Selects the min-cost flow algorithm used by WassersteinNetworkSubgraph.
 // NetworkSimplex is the default and supports warm-starting (latent — not yet
-// exploited).  CycleCanceling always cold-starts; any future warm_start()
-// implementation must throw std::logic_error for this variant.
-enum class SolverMethod { NetworkSimplex, CycleCanceling };
+// exploited).  CycleCanceling, CostScaling, and CapacityScaling always
+// cold-start; any future warm_start() implementation must throw
+// std::logic_error for those variants.
+enum class SolverMethod { NetworkSimplex, CycleCanceling, CostScaling, CapacityScaling };
 
 //#include "pylmcf/py_support.h"
 #include "graph_elements.hpp"
@@ -38,6 +41,8 @@ class WassersteinNetworkSubgraph {
     lemon::StaticDigraph::ArcMap<VALUE_TYPE> costs_map;
     std::optional<lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> ns_solver;
     std::optional<lemon::CycleCanceling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cc_solver;
+    std::optional<lemon::CostScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cs_solver;
+    std::optional<lemon::CapacityScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cap_solver;
     SolverMethod _method = SolverMethod::NetworkSimplex;
     LEMON_INDEX simple_trash_idx;
     bool simple_trash_added = false;
@@ -49,13 +54,22 @@ class WassersteinNetworkSubgraph {
     bool built = false;
 
     bool _solver_has_value() const {
-        return _method == SolverMethod::NetworkSimplex ? ns_solver.has_value() : cc_solver.has_value();
+        if (_method == SolverMethod::NetworkSimplex) return ns_solver.has_value();
+        if (_method == SolverMethod::CycleCanceling) return cc_solver.has_value();
+        if (_method == SolverMethod::CostScaling)    return cs_solver.has_value();
+        return cap_solver.has_value();
     }
     VALUE_TYPE _solver_flow(lemon::StaticDigraph::Arc arc) const {
-        return _method == SolverMethod::NetworkSimplex ? ns_solver->flow(arc) : cc_solver->flow(arc);
+        if (_method == SolverMethod::NetworkSimplex) return ns_solver->flow(arc);
+        if (_method == SolverMethod::CycleCanceling) return cc_solver->flow(arc);
+        if (_method == SolverMethod::CostScaling)    return cs_solver->flow(arc);
+        return cap_solver->flow(arc);
     }
     VALUE_TYPE _solver_total_cost() const {
-        return _method == SolverMethod::NetworkSimplex ? ns_solver->totalCost() : cc_solver->totalCost();
+        if (_method == SolverMethod::NetworkSimplex) return ns_solver->totalCost();
+        if (_method == SolverMethod::CycleCanceling) return cc_solver->totalCost();
+        if (_method == SolverMethod::CostScaling)    return cs_solver->totalCost();
+        return cap_solver->totalCost();
     }
 
 public:
@@ -305,12 +319,24 @@ public:
             ns_solver->costMap(costs_map);
             ns_solver->supplyMap(node_supply_map);
             ns_solver->run();
-        } else {
+        } else if (_method == SolverMethod::CycleCanceling) {
             cc_solver.emplace(lemon_graph);
             cc_solver->upperMap(capacities_map);
             cc_solver->costMap(costs_map);
             cc_solver->supplyMap(node_supply_map);
             cc_solver->run();
+        } else if (_method == SolverMethod::CostScaling) {
+            cs_solver.emplace(lemon_graph);
+            cs_solver->upperMap(capacities_map);
+            cs_solver->costMap(costs_map);
+            cs_solver->supplyMap(node_supply_map);
+            cs_solver->run();
+        } else {
+            cap_solver.emplace(lemon_graph);
+            cap_solver->upperMap(capacities_map);
+            cap_solver->costMap(costs_map);
+            cap_solver->supplyMap(node_supply_map);
+            cap_solver->run();
         }
     }
 

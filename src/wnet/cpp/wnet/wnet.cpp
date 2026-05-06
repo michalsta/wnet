@@ -75,7 +75,9 @@ NB_MODULE(wnet_cpp, m) {
 
     nb::enum_<SolverMethod>(m, "SolverMethod")
         .value("NetworkSimplex", SolverMethod::NetworkSimplex)
-        .value("CycleCanceling", SolverMethod::CycleCanceling);
+        .value("CycleCanceling", SolverMethod::CycleCanceling)
+        .value("CostScaling", SolverMethod::CostScaling)
+        .value("CapacityScaling", SolverMethod::CapacityScaling);
 
     nb::class_<FlowNode<int64_t>>(m, "FlowNode")
         .def(nb::init<LEMON_INDEX, SourceNode>())
