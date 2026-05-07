@@ -54,3 +54,4 @@ markers = [
 ]
 addopts = "-m 'not long'"
 timeout = 120
+timeout_method = "thread"
