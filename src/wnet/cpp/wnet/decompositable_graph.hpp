@@ -299,7 +299,23 @@ public:
                 else { throw std::runtime_error("Invalid FlowEdgeType"); };
             }, edge.get_type());
         }
-        const VALUE_TYPE lemon_total_flow = std::max<VALUE_TYPE>(lemon_empirical_intensity, lemon_theoretical_intensity);
+        // Determine how many units to push from source to sink.
+        // When both sides can absorb excess (simple trash, or both asymmetric
+        // trash types), use max so every peak participates.  When only one
+        // asymmetric trash direction is present, cap supply to the side that
+        // has a valid escape route so the MCF is feasible.  When there is no
+        // trash at all, min gives the partial-transport formulation (always
+        // feasible; the larger side simply has unmatched units).
+        VALUE_TYPE lemon_total_flow;
+        if (simple_trash_added || (experimental_trash_added && theoretical_trash_added)) {
+            lemon_total_flow = std::max<VALUE_TYPE>(lemon_empirical_intensity, lemon_theoretical_intensity);
+        } else if (experimental_trash_added) {
+            lemon_total_flow = lemon_empirical_intensity;
+        } else if (theoretical_trash_added) {
+            lemon_total_flow = lemon_theoretical_intensity;
+        } else {
+            lemon_total_flow = std::min<VALUE_TYPE>(lemon_empirical_intensity, lemon_theoretical_intensity);
+        }
         if(simple_trash_idx != std::numeric_limits<LEMON_INDEX>::max())
         {
             capacities_map[lemon_graph.arcFromId(simple_trash_idx)] = lemon_total_flow;
