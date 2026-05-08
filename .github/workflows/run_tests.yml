@@ -81,7 +81,8 @@ jobs:
           CMAKE_ARGS: >-
             -DCMAKE_C_COMPILER=clang
             -DCMAKE_CXX_COMPILER=clang++
-            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -Og -g"
+            -DCMAKE_BUILD_TYPE=Debug
+            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize=vptr -fno-omit-frame-pointer -fno-sanitize-recover=all -Og -g"
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined"
             -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=undefined"
           VERBOSE: '1'
