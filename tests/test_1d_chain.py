@@ -56,7 +56,7 @@ def _flow_cost(pairs, base, target, pair_cost):
 MAX_VALUE = CWassersteinNetworkFactory.create_1d.__doc__  # ensure bound
 
 
-@pytest.mark.parametrize("trash_cost", [None, 5, 100])
+@pytest.mark.parametrize("trash_cost", [500, 5, 100])
 def test_basic_matched(trash_cost):
     """Two close peaks with equal mass — trivial matching."""
     base = Distribution_1D(np.array([0.0]), np.array([10]))
@@ -65,7 +65,7 @@ def test_basic_matched(trash_cost):
     assert dense == chain == 30
 
 
-@pytest.mark.parametrize("trash_cost", [None, 10])
+@pytest.mark.parametrize("trash_cost", [500, 10])
 def test_multiple_peaks(trash_cost):
     """Multiple peaks on both sides, overlapping range."""
     base = Distribution_1D(
@@ -123,7 +123,7 @@ def test_coincident_positions():
     """Empirical and theoretical at the same position — zero-cost chain edge."""
     base = Distribution_1D(np.array([5.0, 10.0]), np.array([3, 7]))
     target = Distribution_1D(np.array([5.0, 10.0]), np.array([3, 7]))
-    dense, chain, _, _ = _cost_pair(base, [target], None, 100)
+    dense, chain, _, _ = _cost_pair(base, [target], 500, 100)
     assert dense == chain == 0
 
 
@@ -132,7 +132,7 @@ def test_multi_spectrum():
     base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
     t1 = Distribution_1D(np.array([1.0, 6.0]), np.array([4, 6]))
     t2 = Distribution_1D(np.array([9.5]), np.array([2]))
-    dense, chain, _, _ = _cost_pair(base, [t1, t2], None, 100)
+    dense, chain, _, _ = _cost_pair(base, [t1, t2], 500, 100)
     assert dense == chain
 
 
@@ -248,19 +248,19 @@ def test_flows_for_target_parity(seed):
     base = Distribution_1D(e_pos_padded[e_mask], e_int_padded[e_mask])
     target = Distribution_1D(t_pos_padded[t_mask], t_int_padded[t_mask])
     dense_cost, chain_cost, dense_net, chain_net = _cost_pair(
-        base, [target], None, 1000)
+        base, [target], 500, 1000)
     assert dense_cost == chain_cost
     _assert_flows_valid(
         dense_net, chain_net, base, target,
-        len(base.positions[0]), len(target.positions[0]), None)
+        len(base.positions[0]), len(target.positions[0]), 500)
 
 
 def test_flows_for_target_crossing():
     """Non-trivial case where flow enters a theoretical from both sides."""
     base = Distribution_1D(np.array([0.0, 10.0]), np.array([3, 7]))
     target = Distribution_1D(np.array([5.0]), np.array([10]))
-    _, _, dense_net, chain_net = _cost_pair(base, [target], None, 100)
-    _assert_flows_valid(dense_net, chain_net, base, target, 2, 1, None)
+    _, _, dense_net, chain_net = _cost_pair(base, [target], 500, 100)
+    _assert_flows_valid(dense_net, chain_net, base, target, 2, 1, 500)
 
 
 def test_flows_for_target_multi_spectrum():
@@ -268,7 +268,7 @@ def test_flows_for_target_multi_spectrum():
     base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
     t1 = Distribution_1D(np.array([1.0, 6.0]), np.array([4, 6]))
     t2 = Distribution_1D(np.array([9.5]), np.array([2]))
-    _, _, dense_net, chain_net = _cost_pair(base, [t1, t2], None, 100)
+    _, _, dense_net, chain_net = _cost_pair(base, [t1, t2], 500, 100)
     # Target 0: only empirical 0,1 matter.
     dense_p0 = _flows_by_pair(dense_net, 0)
     chain_p0 = _flows_by_pair(chain_net, 0)
@@ -290,7 +290,7 @@ def test_chain_edge_count():
         np.arange(10, dtype=np.float64), np.ones(10, dtype=np.int64))
     target = Distribution_1D(
         np.arange(10, dtype=np.float64) + 0.5, np.ones(10, dtype=np.int64))
-    _, _, dense_net, chain_net = _cost_pair(base, [target], None, 100)
+    _, _, dense_net, chain_net = _cost_pair(base, [target], 500, 100)
     # Chain: 20 nodes in one run → 19 adjacencies × 2 arcs = 38 chain edges.
     assert chain_net.count_chain_edges() == 38
     assert chain_net.count_matching_edges() == 0
