@@ -27,6 +27,17 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
     target_compile_options(wnet_cpp PRIVATE -Wall -Wextra)
 endif()
 
+# On Linux, LEMON's NetworkSimplex uses ART_COST = 2^62 and accumulates
+# potentials during pivot steps.  For large-scale problems (high pos_range /
+# int_range) the accumulation can overflow signed 64-bit integers, which is UB.
+# Under GCC/Clang with -O2/-O3, this UB is exploited by the optimiser and can
+# produce a near-infinite loop specifically on Python 3.14's Linux binary.
+# -fwrapv makes signed overflow defined (two's-complement wrap-around), which
+# breaks the loop and allows the algorithm to terminate normally.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_options(wnet_cpp PRIVATE -fwrapv)
+endif()
+
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_definitions(wnet_cpp PRIVATE DEBUG_MODE)
     target_compile_options(wnet_cpp PRIVATE -g -Og -DWNET_DO_ASSERTS -D_GLIBCXX_ASSERTIONS -D_GLIBCXX_SANITIZE_VECTOR -DGLIBCXX_DEBUG -D_LIBCPP_ENABLE_ASSERTIONS=1)# -fsanitize=address)
