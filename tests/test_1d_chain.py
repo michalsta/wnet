@@ -30,9 +30,11 @@ def _run(factory_fn, base, targets, trash_cost, max_dist):
 
 def _cost_pair(base, targets, trash_cost, max_dist):
     dense_cost, dense_net = _run(
-        CWassersteinNetworkFactory.create, base, targets, trash_cost, max_dist)
+        CWassersteinNetworkFactory.create, base, targets, trash_cost, max_dist
+    )
     chain_cost, chain_net = _run(
-        CWassersteinNetworkFactory.create_1d, base, targets, trash_cost, max_dist)
+        CWassersteinNetworkFactory.create_1d, base, targets, trash_cost, max_dist
+    )
     return dense_cost, chain_cost, dense_net, chain_net
 
 
@@ -68,10 +70,8 @@ def test_basic_matched(trash_cost):
 @pytest.mark.parametrize("trash_cost", [500, 10])
 def test_multiple_peaks(trash_cost):
     """Multiple peaks on both sides, overlapping range."""
-    base = Distribution_1D(
-        np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
-    target = Distribution_1D(
-        np.array([1.0, 6.0, 9.0]), np.array([4, 6, 2]))
+    base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
+    target = Distribution_1D(np.array([1.0, 6.0, 9.0]), np.array([4, 6, 2]))
     dense, chain, _, _ = _cost_pair(base, [target], trash_cost, 1000)
     assert dense == chain
 
@@ -99,10 +99,10 @@ def test_unmatched_far_cluster_dropped():
 
 @pytest.mark.parametrize(
     "factory_fn",
-    [CWassersteinNetworkFactory.create, CWassersteinNetworkFactory.create_1d])
+    [CWassersteinNetworkFactory.create, CWassersteinNetworkFactory.create_1d],
+)
 def test_empty_empirical_raises(factory_fn):
-    base = Distribution_1D(
-        np.array([], dtype=np.float64), np.array([], dtype=np.int64))
+    base = Distribution_1D(np.array([], dtype=np.float64), np.array([], dtype=np.int64))
     target = Distribution_1D(np.array([1.0, 2.0]), np.array([3, 4]))
     with pytest.raises(ValueError):
         _run(factory_fn, base, [target], 5, 100)
@@ -110,11 +110,13 @@ def test_empty_empirical_raises(factory_fn):
 
 @pytest.mark.parametrize(
     "factory_fn",
-    [CWassersteinNetworkFactory.create, CWassersteinNetworkFactory.create_1d])
+    [CWassersteinNetworkFactory.create, CWassersteinNetworkFactory.create_1d],
+)
 def test_empty_theoretical_raises(factory_fn):
     base = Distribution_1D(np.array([1.0, 2.0]), np.array([3, 4]))
     target = Distribution_1D(
-        np.array([], dtype=np.float64), np.array([], dtype=np.int64))
+        np.array([], dtype=np.float64), np.array([], dtype=np.int64)
+    )
     with pytest.raises(ValueError):
         _run(factory_fn, base, [target], 5, 100)
 
@@ -142,8 +144,7 @@ def test_truncation_with_mixed_runs():
     (should drop). Verifies pre-pass per-run logic.
     """
     # Cluster A: E at 0,1; T at 2.  Cluster B (far right): E at 100,101.
-    base = Distribution_1D(
-        np.array([0.0, 1.0, 100.0, 101.0]), np.array([3, 3, 5, 5]))
+    base = Distribution_1D(np.array([0.0, 1.0, 100.0, 101.0]), np.array([3, 3, 5, 5]))
     target = Distribution_1D(np.array([2.0]), np.array([6]))
     # max_dist = 5 breaks between the two clusters; B has no theoreticals.
     dense, chain, _, _ = _cost_pair(base, [target], 20, 5)
@@ -169,8 +170,8 @@ def test_random_parity(seed):
     max_dist = int(rng.integers(5, 300))
     dense, chain, _, _ = _cost_pair(base, [target], trash_cost, max_dist)
     assert dense == chain, (
-        f"seed={seed} m={m} n={n} max_dist={max_dist} "
-        f"dense={dense} chain={chain}")
+        f"seed={seed} m={m} n={n} max_dist={max_dist} " f"dense={dense} chain={chain}"
+    )
 
 
 def _marginals(pairs, m, n):
@@ -204,17 +205,20 @@ def _assert_flows_valid(dense_net, chain_net, base, target, m, n, trash_cost):
 
     dense_row, dense_col = _marginals(dense_pairs, m, n)
     chain_row, chain_col = _marginals(chain_pairs, m, n)
-    assert dense_row == chain_row, (
-        f"empirical marginals differ: dense={dense_row} chain={chain_row}")
-    assert dense_col == chain_col, (
-        f"theoretical marginals differ: dense={dense_col} chain={chain_col}")
+    assert (
+        dense_row == chain_row
+    ), f"empirical marginals differ: dense={dense_row} chain={chain_row}"
+    assert (
+        dense_col == chain_col
+    ), f"theoretical marginals differ: dense={dense_col} chain={chain_col}"
 
     # Both decompositions must deliver the same transport cost
     # (total_cost minus simple-trash cost, if any).
     dense_flow_cost = _flow_cost(dense_pairs, base, target, pair_cost)
     chain_flow_cost = _flow_cost(chain_pairs, base, target, pair_cost)
-    assert dense_flow_cost == chain_flow_cost, (
-        f"decomp costs differ: dense={dense_flow_cost} chain={chain_flow_cost}")
+    assert (
+        dense_flow_cost == chain_flow_cost
+    ), f"decomp costs differ: dense={dense_flow_cost} chain={chain_flow_cost}"
 
 
 @pytest.mark.long
@@ -247,12 +251,17 @@ def test_flows_for_target_parity(seed):
     t_mask = t_int_padded > 0
     base = Distribution_1D(e_pos_padded[e_mask], e_int_padded[e_mask])
     target = Distribution_1D(t_pos_padded[t_mask], t_int_padded[t_mask])
-    dense_cost, chain_cost, dense_net, chain_net = _cost_pair(
-        base, [target], 500, 1000)
+    dense_cost, chain_cost, dense_net, chain_net = _cost_pair(base, [target], 500, 1000)
     assert dense_cost == chain_cost
     _assert_flows_valid(
-        dense_net, chain_net, base, target,
-        len(base.positions[0]), len(target.positions[0]), 500)
+        dense_net,
+        chain_net,
+        base,
+        target,
+        len(base.positions[0]),
+        len(target.positions[0]),
+        500,
+    )
 
 
 def test_flows_for_target_crossing():
@@ -286,10 +295,10 @@ def test_flows_for_target_multi_spectrum():
 
 def test_chain_edge_count():
     """Sanity-check that chain creates O(m+n) edges, not O(m·n)."""
-    base = Distribution_1D(
-        np.arange(10, dtype=np.float64), np.ones(10, dtype=np.int64))
+    base = Distribution_1D(np.arange(10, dtype=np.float64), np.ones(10, dtype=np.int64))
     target = Distribution_1D(
-        np.arange(10, dtype=np.float64) + 0.5, np.ones(10, dtype=np.int64))
+        np.arange(10, dtype=np.float64) + 0.5, np.ones(10, dtype=np.int64)
+    )
     _, _, dense_net, chain_net = _cost_pair(base, [target], 500, 100)
     # Chain: 20 nodes in one run → 19 adjacencies × 2 arcs = 38 chain edges.
     assert chain_net.count_chain_edges() == 38
@@ -381,14 +390,16 @@ def test_derivatives_random_parity(seed):
     trash_cost = 50
     max_dist = int(rng.integers(50, 300))
     dense_cost, chain_cost, dense_net, chain_net = _cost_pair(
-        base, [target], trash_cost, max_dist)
+        base, [target], trash_cost, max_dist
+    )
     # Parity on derivatives requires parity on total cost (same optimal flow).
     if dense_cost != chain_cost:
         pytest.skip(f"seed={seed}: cost divergence (max_dist truncation split)")
     dense_derivs = _derivs_per_subgraph(dense_net)
     chain_derivs = _derivs_per_subgraph(chain_net)
-    assert dense_derivs == chain_derivs, (
-        f"seed={seed}: dense={dense_derivs} chain={chain_derivs}")
+    assert (
+        dense_derivs == chain_derivs
+    ), f"seed={seed}: dense={dense_derivs} chain={chain_derivs}"
 
 
 @pytest.mark.long
@@ -411,10 +422,12 @@ def test_spectrum_proportion_derivatives_parity(seed):
     trash_cost = 100
     max_dist = int(rng.integers(100, 300))
     dense_cost, chain_cost, dense_net, chain_net = _cost_pair(
-        base, [t1, t2], trash_cost, max_dist)
+        base, [t1, t2], trash_cost, max_dist
+    )
     if dense_cost != chain_cost:
         pytest.skip(f"seed={seed}: cost divergence")
     dense_props = _prop_derivs_per_subgraph(dense_net)
     chain_props = _prop_derivs_per_subgraph(chain_net)
-    assert dense_props == chain_props, (
-        f"seed={seed}: dense={dense_props} chain={chain_props}")
+    assert (
+        dense_props == chain_props
+    ), f"seed={seed}: dense={dense_props} chain={chain_props}"

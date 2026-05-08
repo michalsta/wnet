@@ -25,8 +25,8 @@ def create_large_wsdflow_instance(
         theoretical_distributions,
         distance=DistanceMetric.L2,
         max_distance=int(pos_range * dimension / 10),
-        method="cost_scaling",
     )
+    wsdflow_instance.add_simple_trash(int(pos_range * dimension / 10))
     wsdflow_instance.build()
     return (wsdflow_instance, point)
 
