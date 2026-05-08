@@ -78,20 +78,18 @@ jobs:
         env:
           CC: clang
           CXX: clang++
-          CMAKE_ARGS: >-
-            -DCMAKE_C_COMPILER=clang
-            -DCMAKE_CXX_COMPILER=clang++
-            -DCMAKE_BUILD_TYPE=Debug
-            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize=vptr -fno-omit-frame-pointer -fno-sanitize-recover=all -Og -g"
-            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined"
-            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=undefined"
-          VERBOSE: '1'
         run: |
-          python -m pip install -v .[pytest]
+          UBSAN_FLAGS="-fsanitize=undefined -fno-sanitize=vptr -fno-omit-frame-pointer -fno-sanitize-recover=all -Og -g"
+          VERBOSE=1 python -m pip install -v .[pytest] \
+            --config-settings="cmake.build-type=Debug" \
+            --config-settings="cmake.define.CMAKE_C_COMPILER=clang" \
+            --config-settings="cmake.define.CMAKE_CXX_COMPILER=clang++" \
+            --config-settings="cmake.define.CMAKE_CXX_FLAGS=${UBSAN_FLAGS}"
       - name: Test with pytest (UBSan)
         working-directory: ./tests
-        env:
-          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
-          python -m pytest . -v -m "long or not long"
+          UBSAN_RT=$(find /usr/lib/llvm-* -name "libclang_rt.ubsan_standalone-$(uname -m).so" 2>/dev/null | head -1)
+          echo "UBSan runtime: $UBSAN_RT"
+          LD_PRELOAD="$UBSAN_RT" UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" \
+            python -m pytest . -v -m "long or not long"
 
