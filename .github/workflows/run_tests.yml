@@ -10,7 +10,7 @@ on:
 
 jobs:
   run_pytest:
-    name: ${{ matrix.compiler == 'clang' && format('[clang] {0}', matrix.os) || format('{0} / py{1}', matrix.os, matrix.python-version) }}
+    name: ${{ matrix.compiler == 'clang' && format('[clang] {0} / py{1}', matrix.os, matrix.python-version) || format('{0} / py{1}', matrix.os, matrix.python-version) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
