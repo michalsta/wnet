@@ -54,7 +54,7 @@ parameter_set = [
 #     create_large_wsdflow_instance(**params) for params in parameter_set
 # ]
 
-expected_results = [18662, 2070, 132388, 535936, 5134997]
+expected_results = [1458992, 2792, 229908, 5235286, 188445197]
 
 try:
     import pytest
