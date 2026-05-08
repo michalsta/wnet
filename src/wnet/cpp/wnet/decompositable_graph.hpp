@@ -303,9 +303,8 @@ public:
         // When both sides can absorb excess (simple trash, or both asymmetric
         // trash types), use max so every peak participates.  When only one
         // asymmetric trash direction is present, cap supply to the side that
-        // has a valid escape route so the MCF is feasible.  In the no-trash
-        // case, NetworkSimplex throws (ART_COST overflow UB); CostScaling and
-        // CapacityScaling use min-transport instead.
+        // has a valid escape route so the MCF is feasible.  No-trash always
+        // throws — see the comment inside the else branch.
         VALUE_TYPE lemon_total_flow = 0;
         if (simple_trash_added || (experimental_trash_added && theoretical_trash_added)) {
             lemon_total_flow = std::max<VALUE_TYPE>(lemon_empirical_intensity, lemon_theoretical_intensity);
@@ -314,71 +313,27 @@ public:
         } else if (theoretical_trash_added) {
             lemon_total_flow = lemon_theoretical_intensity;
         } else {
-            // No trash edges present.
+            // No trash edges present.  All MCF solvers are unsafe or produce
+            // incorrect results without a trash escape route:
             //
-            // NetworkSimplex is unsafe here because of a signed-integer overflow
-            // UB in LEMON's network_simplex.h::updatePotential().
+            // NetworkSimplex: signed-integer overflow UB in updatePotential().
+            //   ART_COST = 2^62; potential accumulation during init pivots can
+            //   reach 2^63 — UB.  GCC wraps and terminates; Clang loops forever.
             //
-            // Root cause
-            // ----------
-            // LEMON NetworkSimplex initialises the artificial spanning tree
-            // with ART_COST = std::numeric_limits<Cost>::max()/2 + 1
-            // (= 2^62 for int64_t).  Demand nodes receive _pi[u] = ART_COST.
-            // During the first few pivots that replace artificial arcs with
-            // real ones, updatePotential() computes
+            // CostScaling / CapacityScaling: no ART_COST issue, but
+            //   lemon_total_flow = min(emp, theo) is infeasible on sparse graphs
+            //   (some units have no matching path), causing these solvers to
+            //   return INFEASIBLE with totalCost() = 0 — silently wrong.
             //
-            //   sigma = _pi[v_in] - _pi[u_in] - pred_dir * cost[in_arc]
-            //
-            // and then does `_pi[u] += sigma` for every u in the moving
-            // subtree.  In the balanced (sum_supply == 0) case, supply nodes
-            // start at _pi = 0 and demand nodes start at _pi = ART_COST.
-            // After one pivot, a supply-side node can end up at _pi = ART_COST.
-            // A second pivot whose sigma ≈ ART_COST then causes
-            //   _pi[u] += ART_COST   (with _pi[u] already ≈ ART_COST)
-            // which equals 2 * 2^62 = 2^63 — signed overflow, undefined
-            // behaviour in C++.  GCC happens to produce two's-complement
-            // wraparound and the algorithm still terminates; Clang exploits
-            // the UB and the loop never exits, hanging the process.
-            //
-            // Why "no trash" is the dangerous case
-            // --------------------------------------
-            // When trash edges exist, the MCF always has a valid escape route
-            // for excess supply/demand, so the artificial arcs leave the
-            // spanning tree quickly without entering degenerate pivot cycles.
-            // Without trash the overflow UB occurs even for feasible instances
-            // during the ordinary initialisation phase.  The partial-transport
-            // fix (min(emp, theo) flow) makes the problem formally feasible
-            // but does not prevent the transient overflow during the artificial
-            // spanning-tree warm-up.
-            //
-            // Safe alternatives
-            // -----------------
-            // A. Use CostScaling or CapacityScaling — they do not build an
-            //    artificial spanning tree and are therefore immune to the
-            //    ART_COST overflow.  This branch allows them with min-transport.
-            // B. Patch LEMON's network_simplex.h to compute ART_COST as
-            //    (max_arc_cost + 1) * node_count instead of max()/2+1, as the
-            //    floating-point branch of init() already does.  This keeps
-            //    ART_COST proportional to real arc costs so potential
-            //    accumulation stays well within int64 range.  The change is
-            //    one line in the `is_exact` branch of init().
-            // C. Keep NetworkSimplex but add trash edges with a high cost,
-            //    ensuring the MCF always has an escape route.
-            if (_method == SolverMethod::NetworkSimplex) {
-                throw std::runtime_error(
-                    "wnet: solve() without trash edges is not supported when using "
-                    "NetworkSimplex (the default solver). LEMON's NetworkSimplex "
-                    "initialises potentials at ART_COST = 2^62, and potential "
-                    "accumulation during initialisation pivots causes signed-integer "
-                    "overflow UB that hangs under Clang. Use add_simple_trash() "
-                    "before solving, or construct WassersteinNetwork with "
-                    "method=\"cost_scaling\"."
-                );
-            }
-            // CostScaling and CapacityScaling do not use an artificial spanning
-            // tree, so they are safe here.  Use partial (min) transport: push
-            // only as many units as the smaller side can absorb.
-            lemon_total_flow = std::min<VALUE_TYPE>(lemon_empirical_intensity, lemon_theoretical_intensity);
+            // The correct fix is to add trash edges before calling solve():
+            //   use add_simple_trash(cost) to give every unit an escape route.
+            throw std::runtime_error(
+                "wnet: solve() without trash edges is not supported. "
+                "Without trash edges the MCF may be infeasible (sparse matching "
+                "graph) or cause signed-integer overflow UB in NetworkSimplex "
+                "(ART_COST = 2^62 potential accumulation). "
+                "Call add_simple_trash() before build() to fix this."
+            );
         }
         if(simple_trash_idx != std::numeric_limits<LEMON_INDEX>::max())
         {
