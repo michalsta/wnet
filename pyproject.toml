@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core", "nanobind", "pylmcf>=0.9.10"]
+requires = ["scikit-build-core", "nanobind", "pylmcf>=0.9.11"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -8,7 +8,7 @@ version = "0.9.13"
 description = "Tools for calculation of Wasserstein metric between distributions based on Network Flow algorithm"
 authors = [{ name="Michał Startek", email="michal.startek@mimuw.edu.pl" }]
 maintainers = [{ name="Michał Startek", email="michal.startek@mimuw.edu.pl" }]
-dependencies = ["pylmcf>=0.9.10", "numpy"]
+dependencies = ["pylmcf>=0.9.11", "numpy"]
 license = "MIT"
 license-files = ["LICENCE"]
 readme = "README.md"
