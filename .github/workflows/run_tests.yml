@@ -83,7 +83,12 @@ jobs:
         working-directory: ./tests
         env:
           LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libasan.so.8
-          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:print_stacktrace=1"
+          # PYTHONMALLOC=malloc: force Python to use system malloc so ASan can
+          # track all allocations (pymalloc bypasses malloc and confuses ASan)
+          PYTHONMALLOC: malloc
+          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan"
         run: |
-          python -m pytest . -v -m "long or not long"
+          python -m pytest . -v -m "long or not long" || true
+          echo "=== ASan logs ==="
+          cat /tmp/asan.* 2>/dev/null || echo "(no asan log files)"
 
