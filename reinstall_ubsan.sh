@@ -15,7 +15,7 @@ VERBOSE=1 pip install -v -e . \
 
 echo ""
 echo "Run tests with:"
-echo "  LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.8 \\"
+echo "  LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6:/usr/lib/x86_64-linux-gnu/libasan.so.8 \\"
 echo "  PYTHONMALLOC=malloc \\"
 echo "  ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan \\"
 echo "  UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan \\"

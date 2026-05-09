@@ -86,8 +86,10 @@ jobs:
       - name: Test with pytest (ASan+UBSan)
         working-directory: ./tests
         env:
-          # libasan.so.8 pulls in UBSan runtime automatically when combined
-          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libasan.so.8
+          # libstdc++ must be preloaded before libasan so ASan can intercept
+          # __cxa_throw at init time (otherwise real___cxa_throw stays null and
+          # ASan crashes on the first C++ exception, even expected ones)
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libstdc++.so.6:/usr/lib/x86_64-linux-gnu/libasan.so.8
           # PYTHONMALLOC=malloc: pymalloc bypasses malloc and confuses ASan
           PYTHONMALLOC: malloc
           ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan"
