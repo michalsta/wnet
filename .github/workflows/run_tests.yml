@@ -78,7 +78,10 @@ jobs:
           # address:       heap/stack/global buffer overflows, use-after-free
           # undefined:     all UB (signed overflow, null deref, bad shift, bounds, ...)
           # -fno-sanitize=vptr: skip vtable checks (needs RTTI, causes false positives)
-          # -fno-sanitize-recover=all: abort on first error rather than continuing
+          # -shared-libasan: link libasan as a dynamic .so dependency instead of
+          #   embedding it statically. This means libasan is loaded when Python imports
+          #   wnet (not at Python startup via LD_PRELOAD), so libstdc++ is already
+          #   in memory and ASan can intercept __cxa_throw correctly.
           SAN_FLAGS="-fsanitize=address,undefined -fno-sanitize=vptr -fno-sanitize-recover=all -fno-omit-frame-pointer -Og -g"
           VERBOSE=1 python -m pip install -v .[pytest] \
             --config-settings="cmake.build-type=Debug" \
@@ -86,13 +89,13 @@ jobs:
       - name: Test with pytest (ASan+UBSan)
         working-directory: ./tests
         env:
-          # libstdc++ must be preloaded before libasan so ASan can intercept
-          # __cxa_throw at init time (otherwise real___cxa_throw stays null and
-          # ASan crashes on the first C++ exception, even expected ones)
-          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libstdc++.so.6:/usr/lib/x86_64-linux-gnu/libasan.so.8
-          # PYTHONMALLOC=malloc: pymalloc bypasses malloc and confuses ASan
+          # No LD_PRELOAD: libasan.so.8 is a NEEDED entry in wnet_cpp.so.
+          # It loads when Python imports wnet, which is after numpy is imported
+          # (numpy loads libstdc++.so.6 first, so ASan's __cxa_throw interceptor
+          # can find the real function). verify_asan_link_order=0 suppresses the
+          # "ASan not first" check since the Python process started without ASan.
           PYTHONMALLOC: malloc
-          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan"
+          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
         run: |
           python -m pytest . -v -m "long or not long" || true
