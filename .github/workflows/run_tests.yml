@@ -62,7 +62,7 @@ jobs:
           python -m pytest . -v -m "long or not long"
 
   sanitize:
-    name: "[ubsan] ubuntu-latest / py3.14"
+    name: "[asan] ubuntu-latest / py3.14"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -73,17 +73,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-      - name: Install package with UBSan
+      - name: Install package with ASan
         run: |
-          UBSAN_FLAGS="-fsanitize=signed-integer-overflow -fno-sanitize-recover=all -fno-omit-frame-pointer -Og -g"
+          ASAN_FLAGS="-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer -Og -g"
           VERBOSE=1 python -m pip install -v .[pytest] \
             --config-settings="cmake.build-type=Debug" \
-            --config-settings="cmake.define.CMAKE_CXX_FLAGS=${UBSAN_FLAGS}"
-      - name: Test with pytest (UBSan)
+            --config-settings="cmake.define.CMAKE_CXX_FLAGS=${ASAN_FLAGS}"
+      - name: Test with pytest (ASan)
         working-directory: ./tests
         env:
-          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libubsan.so.1
-          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libasan.so.8
+          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:print_stacktrace=1"
         run: |
           python -m pytest . -v -m "long or not long"
 
