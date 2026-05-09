@@ -62,7 +62,7 @@ jobs:
           python -m pytest . -v -m "long or not long"
 
   sanitize:
-    name: "[asan] ubuntu-latest / py3.14"
+    name: "[asan+ubsan] ubuntu-latest / py3.14"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -73,22 +73,29 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-      - name: Install package with ASan
+      - name: Install package with ASan+UBSan
         run: |
-          ASAN_FLAGS="-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer -Og -g"
+          # address:       heap/stack/global buffer overflows, use-after-free
+          # undefined:     all UB (signed overflow, null deref, bad shift, bounds, ...)
+          # -fno-sanitize=vptr: skip vtable checks (needs RTTI, causes false positives)
+          # -fno-sanitize-recover=all: abort on first error rather than continuing
+          SAN_FLAGS="-fsanitize=address,undefined -fno-sanitize=vptr -fno-sanitize-recover=all -fno-omit-frame-pointer -Og -g"
           VERBOSE=1 python -m pip install -v .[pytest] \
             --config-settings="cmake.build-type=Debug" \
-            --config-settings="cmake.define.CMAKE_CXX_FLAGS=${ASAN_FLAGS}"
-      - name: Test with pytest (ASan)
+            --config-settings="cmake.define.CMAKE_CXX_FLAGS=${SAN_FLAGS}"
+      - name: Test with pytest (ASan+UBSan)
         working-directory: ./tests
         env:
+          # libasan.so.8 pulls in UBSan runtime automatically when combined
           LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libasan.so.8
-          # PYTHONMALLOC=malloc: force Python to use system malloc so ASan can
-          # track all allocations (pymalloc bypasses malloc and confuses ASan)
+          # PYTHONMALLOC=malloc: pymalloc bypasses malloc and confuses ASan
           PYTHONMALLOC: malloc
           ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
         run: |
           python -m pytest . -v -m "long or not long" || true
           echo "=== ASan logs ==="
           cat /tmp/asan.* 2>/dev/null || echo "(no asan log files)"
+          echo "=== UBSan logs ==="
+          cat /tmp/ubsan.* 2>/dev/null || echo "(no ubsan log files)"
 
