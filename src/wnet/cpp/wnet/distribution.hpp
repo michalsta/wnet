@@ -154,7 +154,7 @@ public:
         ) : distribution(distribution_),
             point(point_),
             max_dist(max_dist_),
-            current_index(-1)
+            current_index(std::numeric_limits<decltype(current_index)>::max())
         {}
         inline bool advance() {
             current_index++;
