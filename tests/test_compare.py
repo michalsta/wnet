@@ -22,39 +22,32 @@ def compare(E, T, trash_cost, fractions=None):
     # decomp_solver.show_cgraph()
     decomp_solver.add_simple_trash(trash_cost)
     decomp_solver.build()
-    val4 = decomp_solver.solve(fractions)
-    # print(
-    #    f"Solver: {val1}, Wasserstein: {val2}, Wasserstein_compat: {val3}, DecompositableFlowGraph: {val4}"
-    # )
-    # assert val1 == val2 # 2 uses diffrent trash so not really the same
-    # assert val1 == val3
-    # assert val1 == val4
-    # return val1, val2, val3, val4
-    return val4
+    decomp_solver.solve(fractions)
+    return decomp_solver.total_cost()
 
 
 def test_compare_1():
+    # E at (0,0), T at (1,0): one unit matched at L2 dist=1.
     S1 = Distribution(np.array([[0], [0]]), np.array([1]))
     S2 = Distribution(np.array([[1], [0]]), np.array([1]))
-
-    print(compare(S1, [S2], 10))
+    assert compare(S1, [S2], 10) == 1
 
 
 def test_compare_2():
+    # E=1 unit vs T1+T2=2 units. E matches T2@(1,0) at cost 1; T3@(2,0) trashed at 10.
     S1 = Distribution(np.array([[0], [0]]), np.array([1]))
     S2 = Distribution(np.array([[1], [0]]), np.array([1]))
     S3 = Distribution(np.array([[2], [0]]), np.array([1]))
-
-    print(compare(S1, [S2, S3], 10))
+    assert compare(S1, [S2, S3], 10) == 11
 
 
 def test_compare_3():
+    # E=1 unit vs T1+T2+T3=3 units. E matches T2@(1,0) at cost 1; T3 and T4 trashed at 10 each.
     S1 = Distribution(np.array([[0], [0]]), np.array([1]))
     S2 = Distribution(np.array([[1], [0]]), np.array([1]))
     S3 = Distribution(np.array([[2], [0]]), np.array([1]))
     S4 = Distribution(np.array([[3], [0]]), np.array([1]))
-
-    print(compare(S1, [S2, S3, S4], 10))
+    assert compare(S1, [S2, S3, S4], 10) == 21
 
 
 """
