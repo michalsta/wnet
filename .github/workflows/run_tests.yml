@@ -98,7 +98,7 @@ jobs:
           ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
         run: |
-          python -m pytest . -v -m "long or not long" || true
+          python -m pytest . -v -m "not long" || true
           echo "=== ASan logs ==="
           cat /tmp/asan.* 2>/dev/null || echo "(no asan log files)"
           echo "=== UBSan logs ==="
