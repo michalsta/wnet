@@ -47,12 +47,12 @@ class Distribution:
             raise ValueError(
                 f"Unsupported dimension: {dimension}. Must be between 1 and 20."
             )
-        cfun = globals()[f"CVectorDistribution{dimension}"]
-
-        self.vecdist = lambda: cfun(
-            positions.astype(np.float64), intensities.astype(np.int64)
-        )
         self.label = label
+
+    @cached_property
+    def vecdist(self):
+        cfun = globals()[f"CVectorDistribution{self.dimension}"]
+        return cfun(self.positions.astype(np.float64), self.intensities.astype(np.int64))
 
     def scaled(self, scale_factor: float) -> "Distribution":
         """
