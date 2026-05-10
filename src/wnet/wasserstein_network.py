@@ -59,7 +59,13 @@ class WassersteinNetwork:
         self.add_simple_trash = self.wnet.add_simple_trash
         self.add_experimental_trash = self.wnet.add_experimental_trash
         self.add_theoretical_trash = self.wnet.add_theoretical_trash
-        self.build = lambda: self.wnet.build(_method_enum)
+
+        # Avoid capturing self in the lambda to prevent reference cycles that could lead to memory leaks.  The underlying C++ object should be freed when this wrapper is freed, but if we capture self in the lambda, the lambda's reference to self would keep it alive indefinitely.
+        # Without this trick, the lambda would hold a reference to self, which holds a reference to the C++ object, which holds a reference back to the lambda, creating a cycle that prevents garbage collection.
+        # Without this, the incremental GC introduced in Python3.14 can't collect WassersteinNetwork instances that are no longer needed, leading to memory leaks.
+        _wnet = self.wnet  # avoid capturing self in the lambda (reference cycle).
+        self.build = lambda: _wnet.build(_method_enum)
+
         self.solve = self.wnet.solve
         self.total_cost = self.wnet.total_cost
         self.get_subgraph = self.wnet.get_subgraph
@@ -194,6 +200,7 @@ class SubgraphWrapper:
         cycles (a property of optimal min-cost flow solutions).
         """
         import networkx as nx
+
         G = self.as_networkx()
         R = nx.DiGraph()
         for node, data in G.nodes(data=True):
