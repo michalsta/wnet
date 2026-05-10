@@ -47,8 +47,8 @@ class WassersteinNetwork:
             raise ValueError(f"Unknown method {method!r}. Choose from: {list(self._SOLVER_METHODS)}")
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
-        vec_base = base_distribution.vecdist()
-        vec_targets = [t.vecdist() for t in target_distributions]
+        vec_base = base_distribution.vecdist
+        vec_targets = [t.vecdist for t in target_distributions]
         if base_distribution.dimension == 1 and not force_dense_1d:
             self.wnet = CWassersteinNetworkFactory.create_1d(
                 vec_base, vec_targets, distance, max_distance)
