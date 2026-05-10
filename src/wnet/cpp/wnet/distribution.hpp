@@ -168,7 +168,7 @@ public:
                 } else {
                     throw std::runtime_error("Unsupported distance metric.");
                 }
-                if (current_distance <= max_dist) [[unlikely]] {
+                if (current_distance <= max_dist) [[likely]] {
                     return true;
                 }
                 ++current_index;
