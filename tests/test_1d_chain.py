@@ -78,9 +78,10 @@ def test_multiple_peaks(trash_cost):
 
 def test_unmatched_far_cluster_dropped():
     """
-    Empirical cluster far from any theoretical — today's dense factory drops
-    the empirical mass entirely (dead-end). The chain pre-pass must do the
-    same: single-side run → no chain edges → dead-end → mass dropped.
+    Empirical cluster far from any theoretical — no cross-side edges, so all
+    peaks become dead-ends and pay trash cost. Both factories must agree.
+    trash_cost=50, max_dist=5: emp cost = 50*(5+5+5)=750, theo cost =
+    50*15*1.0=750, total = 1500.
     """
     # E peaks at 0,1,2 (cluster); T peaks at 100 (single).
     base = Distribution_1D(np.array([0.0, 1.0, 2.0]), np.array([5, 5, 5]))
@@ -88,8 +89,7 @@ def test_unmatched_far_cluster_dropped():
     # max_dist small enough that no cross-side matching is possible.
     dense, chain, _, _ = _cost_pair(base, [target], 50, 5)
     assert dense == chain
-    # Both should drop all mass (empirical and theoretical), total cost 0.
-    assert dense == 0
+    assert dense == 1500
 
 
 # Empty-input behavior: both factories reject empty empirical/theoretical
