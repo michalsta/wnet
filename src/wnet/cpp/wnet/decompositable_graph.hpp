@@ -206,11 +206,11 @@ public:
     void build_impl() {
         assert_fits_lemon_index(nodes.size(), "subgraph nodes");
         assert_fits_lemon_index(edges.size(), "subgraph edges");
-        std::sort(edges.begin(), edges.end(), [](const FlowEdge<intensity_type>& a, const FlowEdge<intensity_type>& b) {
+        edges = std::move(sorted_copy(edges, [](const FlowEdge<intensity_type>& a, const FlowEdge<intensity_type>& b) {
             if(a.get_start_node_id() != b.get_start_node_id())
                 return a.get_start_node_id() < b.get_start_node_id();
             return a.get_end_node_id() < b.get_end_node_id();
-        });
+        }));
         std::vector<std::pair<LEMON_INDEX, LEMON_INDEX>> arcs;
         arcs.reserve(edges.size());
         for (const FlowEdge<intensity_type>& edge : edges)
