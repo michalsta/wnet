@@ -198,7 +198,14 @@ class SubgraphWrapper:
         is added.  For each edge with positive flow, a reverse residual edge
         (with negated cost) is added.  The resulting graph has no negative
         cycles (a property of optimal min-cost flow solutions).
+
+        Raises:
+            RuntimeError: If the subgraph has not been solved yet.
         """
+        if not self.is_solved():
+            raise RuntimeError(
+                "residual_graph() requires a solved flow. Call solve() first."
+            )
         import networkx as nx
 
         G = self.as_networkx()
