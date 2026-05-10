@@ -2,6 +2,7 @@ from .wasserstein_network import WassersteinNetwork
 from .distribution import Distribution
 from .distances import Distance
 
+import numpy as np
 
 def WassersteinDistance(
     distribution1: Distribution,
@@ -24,11 +25,10 @@ def WassersteinDistance(
         float: The Wasserstein distance between the two distributions.
 
     Raises:
-        AssertionError: If the distributions do not have the same total intensity.
+        RuntimeError: If the distributions do not have the same total intensity.
     """
-    assert (
-        distribution1.sum_intensities == distribution2.sum_intensities
-    ), "Distributions must have the same total intensity"
+    if not np.isclose(distribution1.sum_intensities, distribution2.sum_intensities):
+        raise RuntimeError("Distributions must have the same total intensity")
     W = WassersteinNetwork(
         distribution1, [distribution2], distance, None,
         force_dense_1d=force_dense_1d, method=method)
