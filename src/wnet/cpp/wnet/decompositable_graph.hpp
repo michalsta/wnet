@@ -53,6 +53,15 @@ class WassersteinNetworkSubgraph {
     const size_t no_target_distributions;
     bool built = false;
 
+    struct ChainTopology {
+        std::vector<LEMON_INDEX> order;
+        std::vector<LEMON_INDEX> right_arc_ids;
+        std::vector<LEMON_INDEX> left_arc_ids;
+        std::vector<VALUE_TYPE>  gap_cost;
+        std::unordered_map<LEMON_INDEX, size_t> node_to_pos;
+    };
+    std::optional<ChainTopology> _chain_topo;
+
     bool _solver_has_value() const {
         if (_method == SolverMethod::NetworkSimplex) return ns_solver.has_value();
         if (_method == SolverMethod::CycleCanceling) return cc_solver.has_value();
@@ -70,6 +79,50 @@ class WassersteinNetworkSubgraph {
         if (_method == SolverMethod::CycleCanceling) return cc_solver->totalCost();
         if (_method == SolverMethod::CostScaling)    return cs_solver->totalCost();
         return cap_solver->totalCost();
+    }
+
+    void _build_chain_topology() {
+        std::unordered_map<LEMON_INDEX, std::vector<std::pair<LEMON_INDEX, LEMON_INDEX>>> chain_adj;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            if (std::holds_alternative<ChainEdge>(edges[ii].get_type())) {
+                const LEMON_INDEX u = edges[ii].get_start_node_id();
+                const LEMON_INDEX v = edges[ii].get_end_node_id();
+                chain_adj[u].push_back({v, ii});
+            }
+        }
+        if (chain_adj.empty()) return;
+
+        LEMON_INDEX start_node = -1;
+        for (const auto& [node_id, adj] : chain_adj) {
+            if (adj.size() == 1) { start_node = node_id; break; }
+        }
+        if (start_node == -1)
+            throw std::runtime_error("Chain subgraph has no endpoint — malformed chain.");
+
+        ChainTopology topo;
+        topo.order.push_back(start_node);
+        LEMON_INDEX prev = -1, curr = start_node;
+        while (true) {
+            LEMON_INDEX next = -1, out_arc = -1;
+            for (const auto& [neighbor, arc_id] : chain_adj[curr]) {
+                if (neighbor != prev) { next = neighbor; out_arc = arc_id; break; }
+            }
+            if (next == -1) break;
+            LEMON_INDEX in_arc = -1;
+            for (const auto& [neighbor, arc_id] : chain_adj[next]) {
+                if (neighbor == curr) { in_arc = arc_id; break; }
+            }
+            if (in_arc == -1)
+                throw std::runtime_error("Chain arc is not bidirectional — malformed chain.");
+            topo.order.push_back(next);
+            topo.right_arc_ids.push_back(out_arc);
+            topo.left_arc_ids.push_back(in_arc);
+            topo.gap_cost.push_back(costs_map[lemon_graph.arcFromId(out_arc)]);
+            prev = curr; curr = next;
+        }
+        for (size_t i = 0; i < topo.order.size(); ++i)
+            topo.node_to_pos[topo.order[i]] = i;
+        _chain_topo = std::move(topo);
     }
 
 public:
@@ -260,6 +313,7 @@ public:
         }
         ns_solver.reset();
         cc_solver.reset();
+        _build_chain_topology();
         built = true;
     }
 
@@ -493,75 +547,16 @@ public:
         std::vector<LEMON_INDEX>& theoretical_peak_indices,
         std::vector<VALUE_TYPE>& flows) const
     {
-        // Per chain node: outgoing chain arcs as (neighbor_node_id, arc_id).
-        std::unordered_map<LEMON_INDEX, std::vector<std::pair<LEMON_INDEX, LEMON_INDEX>>> chain_adj;
-        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
-            if (std::holds_alternative<ChainEdge>(edges[ii].get_type())) {
-                const LEMON_INDEX u = edges[ii].get_start_node_id();
-                const LEMON_INDEX v = edges[ii].get_end_node_id();
-                chain_adj[u].push_back({v, ii});
-            }
-        }
-        if (chain_adj.empty()) return;
-
-        // Endpoints have exactly one outgoing chain arc (one neighbor).
-        // Internal nodes have two. Pick any endpoint as the walk's start.
-        LEMON_INDEX start_node = -1;
-        for (const auto& [node_id, adj] : chain_adj) {
-            if (adj.size() == 1) {
-                start_node = node_id;
-                break;
-            }
-        }
-        if (start_node == -1)
-            throw std::runtime_error(
-                "Chain subgraph has no endpoint — malformed chain.");
-
-        // Walk the chain. right_arc_ids[g] is the arc from chain_order[g]
-        // toward chain_order[g+1] (the "walk direction"); left_arc_ids[g]
-        // is its reverse arc.
-        std::vector<LEMON_INDEX> chain_order;
-        std::vector<LEMON_INDEX> right_arc_ids;
-        std::vector<LEMON_INDEX> left_arc_ids;
-        chain_order.push_back(start_node);
-        LEMON_INDEX prev = -1;
-        LEMON_INDEX curr = start_node;
-        while (true) {
-            LEMON_INDEX next = -1;
-            LEMON_INDEX out_arc = -1;
-            for (const auto& [neighbor, arc_id] : chain_adj[curr]) {
-                if (neighbor != prev) {
-                    next = neighbor;
-                    out_arc = arc_id;
-                    break;
-                }
-            }
-            if (next == -1) break;
-            LEMON_INDEX in_arc = -1;
-            for (const auto& [neighbor, arc_id] : chain_adj[next]) {
-                if (neighbor == curr) {
-                    in_arc = arc_id;
-                    break;
-                }
-            }
-            if (in_arc == -1)
-                throw std::runtime_error(
-                    "Chain arc is not bidirectional — malformed chain.");
-            chain_order.push_back(next);
-            right_arc_ids.push_back(out_arc);
-            left_arc_ids.push_back(in_arc);
-            prev = curr;
-            curr = next;
-        }
-
-        const size_t K = chain_order.size();
+        if (!_chain_topo.has_value()) return;
+        const auto& topo = *_chain_topo;
+        const size_t K = topo.order.size();
         if (K < 2) return;  // Isolated node — no gap flow to decompose.
 
         // Read per-gap forward/reverse flows from the solver.
         std::vector<VALUE_TYPE> R(K - 1), L(K - 1);
         for (size_t g = 0; g < K - 1; ++g) {
-            R[g] = _solver_flow(lemon_graph.arcFromId(right_arc_ids[g]));
-            L[g] = _solver_flow(lemon_graph.arcFromId(left_arc_ids[g]));
+            R[g] = _solver_flow(lemon_graph.arcFromId(topo.right_arc_ids[g]));
+            L[g] = _solver_flow(lemon_graph.arcFromId(topo.left_arc_ids[g]));
         }
 
         // Pass 1 — rightward decomposition.
@@ -576,7 +571,7 @@ public:
                 const VALUE_TYPE r_in = (i == 0) ? 0 : R[i - 1];
                 const VALUE_TYPE r_out = (i == K - 1) ? 0 : R[i];
                 const VALUE_TYPE delta = r_out - r_in;
-                const auto& node_type = nodes[chain_order[i]].get_type();
+                const auto& node_type = nodes[topo.order[i]].get_type();
                 if (delta > 0) {
                     const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&node_type);
                     if (emp == nullptr) continue;
@@ -610,7 +605,7 @@ public:
                 const VALUE_TYPE l_in = (i == K - 1) ? 0 : L[i];
                 const VALUE_TYPE l_out = (i == 0) ? 0 : L[i - 1];
                 const VALUE_TYPE delta = l_out - l_in;
-                const auto& node_type = nodes[chain_order[i]].get_type();
+                const auto& node_type = nodes[topo.order[i]].get_type();
                 if (delta > 0) {
                     const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&node_type);
                     if (emp == nullptr) continue;
@@ -706,6 +701,12 @@ public:
     //
     // Requires: at least one ChainEdge present (the caller is responsible).
     std::vector<VALUE_TYPE> chain_residual_distances(LEMON_INDEX source_id) const {
+        if (!_chain_topo.has_value())
+            throw std::runtime_error(
+                "chain_residual_distances() called on non-chain subgraph.");
+        const auto& topo = *_chain_topo;
+        const size_t K = topo.order.size();
+
         const LEMON_INDEX n = lemon_graph.nodeNum();
         const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
         std::vector<VALUE_TYPE> dist(n, INF);
@@ -713,70 +714,22 @@ public:
         const LEMON_INDEX src_id = 0;
         const LEMON_INDEX sink_id = 1;
 
-        std::unordered_map<LEMON_INDEX, std::vector<std::pair<LEMON_INDEX, LEMON_INDEX>>> chain_adj;
-        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
-            if (std::holds_alternative<ChainEdge>(edges[ii].get_type())) {
-                const LEMON_INDEX u = edges[ii].get_start_node_id();
-                const LEMON_INDEX v = edges[ii].get_end_node_id();
-                chain_adj[u].push_back({v, ii});
-            }
-        }
-        if (chain_adj.empty())
-            throw std::runtime_error(
-                "chain_residual_distances() called on non-chain subgraph.");
-
-        LEMON_INDEX start_node = -1;
-        for (const auto& [nid, adj] : chain_adj) {
-            if (adj.size() == 1) { start_node = nid; break; }
-        }
-        if (start_node == -1)
-            throw std::runtime_error(
-                "Chain subgraph has no endpoint — malformed chain.");
-
-        std::vector<LEMON_INDEX> chain_order;
-        std::vector<LEMON_INDEX> right_arc_ids, left_arc_ids;
-        std::vector<VALUE_TYPE> gap_cost;
-        chain_order.push_back(start_node);
-        LEMON_INDEX prev = -1, curr = start_node;
-        while (true) {
-            LEMON_INDEX next = -1, out_arc = -1;
-            for (const auto& [nb, aid] : chain_adj[curr]) {
-                if (nb != prev) { next = nb; out_arc = aid; break; }
-            }
-            if (next == -1) break;
-            LEMON_INDEX in_arc = -1;
-            for (const auto& [nb, aid] : chain_adj[next]) {
-                if (nb == curr) { in_arc = aid; break; }
-            }
-            if (in_arc == -1)
-                throw std::runtime_error(
-                    "Chain arc is not bidirectional — malformed chain.");
-            chain_order.push_back(next);
-            right_arc_ids.push_back(out_arc);
-            left_arc_ids.push_back(in_arc);
-            gap_cost.push_back(costs_map[lemon_graph.arcFromId(out_arc)]);
-            prev = curr; curr = next;
-        }
-        const size_t K = chain_order.size();
-
-        // c_right[g]: cost to move chain_order[g] → chain_order[g+1] in residual.
+        // c_right[g]: cost to move topo.order[g] → topo.order[g+1] in residual.
         //   +gap if no leftward flow (forward of rightward arc), else -gap
         //   (reverse of leftward arc, since L[g] > 0 unlocks that residual).
         // c_left[g]: symmetric for the opposite direction.
         std::vector<VALUE_TYPE> c_right(K > 0 ? K - 1 : 0), c_left(K > 0 ? K - 1 : 0);
         for (size_t g = 0; g + 1 < K; ++g) {
-            const VALUE_TYPE R = _solver_flow(lemon_graph.arcFromId(right_arc_ids[g]));
-            const VALUE_TYPE L = _solver_flow(lemon_graph.arcFromId(left_arc_ids[g]));
-            c_right[g] = (L > 0) ? -gap_cost[g] : gap_cost[g];
-            c_left[g]  = (R > 0) ? -gap_cost[g] : gap_cost[g];
+            const VALUE_TYPE R = _solver_flow(lemon_graph.arcFromId(topo.right_arc_ids[g]));
+            const VALUE_TYPE L = _solver_flow(lemon_graph.arcFromId(topo.left_arc_ids[g]));
+            c_right[g] = (L > 0) ? -topo.gap_cost[g] : topo.gap_cost[g];
+            c_left[g]  = (R > 0) ? -topo.gap_cost[g] : topo.gap_cost[g];
         }
 
         // src/sink connectivity per chain position.
         // Cost-0 arcs (SrcToEmpiricalEdge, TheoreticalToSinkEdge) use bool flags.
         // Non-zero trash arcs (EmpiricalTrashEdge, TheoreticalTrashEdge) store the
         // arc cost per position (INF = absent) plus forward/reverse availability.
-        std::unordered_map<LEMON_INDEX, size_t> node_to_pos;
-        for (size_t i = 0; i < K; ++i) node_to_pos[chain_order[i]] = i;
         std::vector<bool> has_src_fwd(K, false), has_src_rev(K, false);
         std::vector<bool> has_sink_fwd(K, false), has_sink_rev(K, false);
         std::vector<VALUE_TYPE> exp_trash_cost(K, INF), theo_trash_cost(K, INF);
@@ -785,23 +738,23 @@ public:
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             const auto& et = edges[ii].get_type();
             if (std::holds_alternative<SrcToEmpiricalEdge>(et)) {
-                auto it = node_to_pos.find(edges[ii].get_end_node_id());
-                if (it == node_to_pos.end()) continue;
+                auto it = topo.node_to_pos.find(edges[ii].get_end_node_id());
+                if (it == topo.node_to_pos.end()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
                 if (flow < cap) has_src_fwd[it->second] = true;
                 if (flow > 0) has_src_rev[it->second] = true;
             } else if (std::holds_alternative<TheoreticalToSinkEdge>(et)) {
-                auto it = node_to_pos.find(edges[ii].get_start_node_id());
-                if (it == node_to_pos.end()) continue;
+                auto it = topo.node_to_pos.find(edges[ii].get_start_node_id());
+                if (it == topo.node_to_pos.end()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
                 if (flow < cap) has_sink_fwd[it->second] = true;
                 if (flow > 0) has_sink_rev[it->second] = true;
             } else if (const auto* e = std::get_if<EmpiricalTrashEdge>(&et)) {
                 // EmpiricalNode → Sink (cost C_exp); start node is in the chain.
-                auto it = node_to_pos.find(edges[ii].get_start_node_id());
-                if (it == node_to_pos.end()) continue;
+                auto it = topo.node_to_pos.find(edges[ii].get_start_node_id());
+                if (it == topo.node_to_pos.end()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
                 exp_trash_cost[it->second] = e->get_cost();
@@ -809,8 +762,8 @@ public:
                 if (flow > 0)   exp_trash_rev[it->second] = true;
             } else if (const auto* t = std::get_if<TheoreticalTrashEdge>(&et)) {
                 // Source → TheoreticalNode (cost C_theo); end node is in the chain.
-                auto it = node_to_pos.find(edges[ii].get_end_node_id());
-                if (it == node_to_pos.end()) continue;
+                auto it = topo.node_to_pos.find(edges[ii].get_end_node_id());
+                if (it == topo.node_to_pos.end()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
                 theo_trash_cost[it->second] = t->get_cost();
@@ -823,7 +776,7 @@ public:
 
         auto relay = [&]() {
             for (size_t i = 0; i < K; ++i) {
-                const VALUE_TYPE d = dist[chain_order[i]];
+                const VALUE_TYPE d = dist[topo.order[i]];
                 if (d == INF) continue;
                 // Cost-0: reverse SrcToEmpiricalEdge, forward TheoreticalToSinkEdge.
                 if (has_src_rev[i])  update_min(dist[src_id],  d);
@@ -836,23 +789,23 @@ public:
             const VALUE_TYPE ds = dist[src_id], dk = dist[sink_id];
             for (size_t i = 0; i < K; ++i) {
                 // Cost-0: forward SrcToEmpiricalEdge, reverse TheoreticalToSinkEdge.
-                if (ds != INF && has_src_fwd[i])  update_min(dist[chain_order[i]], ds);
-                if (dk != INF && has_sink_rev[i]) update_min(dist[chain_order[i]], dk);
+                if (ds != INF && has_src_fwd[i])  update_min(dist[topo.order[i]], ds);
+                if (dk != INF && has_sink_rev[i]) update_min(dist[topo.order[i]], dk);
                 // Forward TheoreticalTrashEdge (Source→Theo, cost +C_theo).
-                if (ds != INF && theo_trash_fwd[i]) update_min(dist[chain_order[i]], ds + theo_trash_cost[i]);
+                if (ds != INF && theo_trash_fwd[i]) update_min(dist[topo.order[i]], ds + theo_trash_cost[i]);
                 // Reverse EmpiricalTrashEdge (Sink→Emp, cost -C_exp).
-                if (dk != INF && exp_trash_rev[i]) update_min(dist[chain_order[i]], dk - exp_trash_cost[i]);
+                if (dk != INF && exp_trash_rev[i]) update_min(dist[topo.order[i]], dk - exp_trash_cost[i]);
             }
         };
         auto chain_sweep = [&]() {
             for (size_t i = 1; i < K; ++i) {
-                const VALUE_TYPE d = dist[chain_order[i-1]];
-                if (d != INF) update_min(dist[chain_order[i]], d + c_right[i-1]);
+                const VALUE_TYPE d = dist[topo.order[i-1]];
+                if (d != INF) update_min(dist[topo.order[i]], d + c_right[i-1]);
             }
             for (size_t ii = 1; ii < K; ++ii) {
                 const size_t i = K - 1 - ii;
-                const VALUE_TYPE d = dist[chain_order[i+1]];
-                if (d != INF) update_min(dist[chain_order[i]], d + c_left[i]);
+                const VALUE_TYPE d = dist[topo.order[i+1]];
+                if (d != INF) update_min(dist[topo.order[i]], d + c_left[i]);
             }
         };
 
