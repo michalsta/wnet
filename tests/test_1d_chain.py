@@ -18,8 +18,8 @@ from wnet.wnet_cpp import CWassersteinNetworkFactory, DistanceMetric
 
 
 def _run(factory_fn, base, targets, trash_cost, max_dist):
-    vec_base = base.vecdist()
-    vec_targets = [t.vecdist() for t in targets]
+    vec_base = base.vecdist
+    vec_targets = [t.vecdist for t in targets]
     net = factory_fn(vec_base, vec_targets, DistanceMetric.L1, max_dist)
     if trash_cost is not None:
         net.add_simple_trash(trash_cost)
