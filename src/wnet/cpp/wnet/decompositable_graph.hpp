@@ -1022,6 +1022,12 @@ class WassersteinNetwork {
     std::vector<LEMON_INDEX> dead_end_node_ids;
     std::vector<std::unique_ptr<WassersteinNetworkSubgraph<VALUE_TYPE, intensity_type>>> flow_subgraphs;
 
+    intensity_type _isolated_empirical_intensity = 0;
+    std::vector<intensity_type> _isolated_theoretical_intensity;
+    VALUE_TYPE _isolated_exp_trash_cost = 0;
+    VALUE_TYPE _isolated_theo_trash_cost = 0;
+    std::vector<double> _last_point;
+
     bool built = false;
 
 public:
@@ -1170,6 +1176,11 @@ public:
         _theoretical_spectra_sizes(std::move(other._theoretical_spectra_sizes)),
         dead_end_node_ids(std::move(other.dead_end_node_ids)),
         flow_subgraphs(std::move(other.flow_subgraphs)),
+        _isolated_empirical_intensity(other._isolated_empirical_intensity),
+        _isolated_theoretical_intensity(std::move(other._isolated_theoretical_intensity)),
+        _isolated_exp_trash_cost(other._isolated_exp_trash_cost),
+        _isolated_theo_trash_cost(other._isolated_theo_trash_cost),
+        _last_point(std::move(other._last_point)),
         built(other.built)
     {
         other.built = false;
@@ -1304,11 +1315,23 @@ public:
                     _no_theoretical_spectra
             ));
         }
+        _isolated_theoretical_intensity.assign(_no_theoretical_spectra, 0);
+        for (LEMON_INDEX dead_end_id : dead_end_node_ids) {
+            std::visit([&](const auto& t) {
+                using T = std::decay_t<decltype(t)>;
+                if constexpr (std::is_same_v<T, EmpiricalNode<intensity_type>>)
+                    _isolated_empirical_intensity += t.get_intensity();
+                else if constexpr (std::is_same_v<T, TheoreticalNode<intensity_type>>)
+                    _isolated_theoretical_intensity[t.get_spectrum_id()] += t.get_intensity();
+            }, nodes[dead_end_id].get_type());
+        }
     }
 
     void add_simple_trash(VALUE_TYPE cost) {
         if (built)
             throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
+        _isolated_exp_trash_cost = cost;
+        _isolated_theo_trash_cost = cost;
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_simple_trash(cost);
     };
@@ -1316,6 +1339,7 @@ public:
     void add_experimental_trash(VALUE_TYPE cost) {
         if (built)
             throw std::runtime_error("add_experimental_trash() must be called before build().");
+        _isolated_exp_trash_cost = cost;
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_experimental_trash(cost);
     };
@@ -1323,6 +1347,7 @@ public:
     void add_theoretical_trash(VALUE_TYPE cost) {
         if (built)
             throw std::runtime_error("add_theoretical_trash() must be called before build().");
+        _isolated_theo_trash_cost = cost;
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_theoretical_trash(cost);
     };
@@ -1343,15 +1368,19 @@ public:
         if(!built)
             throw std::runtime_error("You must call build() before calling solve().");
 
+        _last_point = point;
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->set_point(point);
     };
 
     VALUE_TYPE total_cost() const {
-        VALUE_TYPE total_cost = 0;
+        VALUE_TYPE cost = 0;
         for (const auto& flow_subgraph : flow_subgraphs)
-            total_cost += flow_subgraph->total_cost();
-        return total_cost;
+            cost += flow_subgraph->total_cost();
+        cost += _isolated_exp_trash_cost * _isolated_empirical_intensity;
+        for (size_t s = 0; s < _no_theoretical_spectra; ++s)
+            cost += static_cast<VALUE_TYPE>(_isolated_theo_trash_cost * _isolated_theoretical_intensity[s] * _last_point[s]);
+        return cost;
     };
 
     size_t no_subgraphs() const {
@@ -1438,6 +1467,10 @@ public:
         for (const auto& sg : flow_subgraphs) {
             for (auto& [spec_id, deriv] : sg->spectrum_proportion_derivatives())
                 accum[spec_id] += deriv;
+        }
+        for (size_t s = 0; s < _no_theoretical_spectra; ++s) {
+            if (_isolated_theoretical_intensity[s] != 0)
+                accum[s] += static_cast<VALUE_TYPE>(_isolated_theo_trash_cost * _isolated_theoretical_intensity[s]);
         }
         return {accum.begin(), accum.end()};
     }
