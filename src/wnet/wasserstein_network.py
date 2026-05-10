@@ -152,6 +152,8 @@ class SubgraphWrapper:
         self._obj = obj
 
     def __getattr__(self, name):
+        if name == '_obj':
+            raise AttributeError('_obj')
         return getattr(self._obj, name)
 
     def as_networkx(self) -> "networkx.DiGraph":
