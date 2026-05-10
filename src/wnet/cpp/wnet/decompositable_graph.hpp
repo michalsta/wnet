@@ -286,7 +286,6 @@ public:
                 else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
                     const auto& theoretical_node_type = std::get<TheoreticalNode<intensity_type>>(edge.get_start_node().get_type());
                     VALUE_TYPE lemon_intensity = (VALUE_TYPE) (theoretical_node_type.get_intensity() * point[theoretical_node_type.get_spectrum_id()]);
-                    lemon_graph.arcFromId(ii);
                     capacities_map[lemon_graph.arcFromId(ii)] = lemon_intensity;
                     lemon_theoretical_intensity += lemon_intensity;
                 }
