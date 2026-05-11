@@ -120,7 +120,9 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_flow_map", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_flow_map)
         .def("is_solved", &WassersteinNetworkSubgraph<int64_t, int64_t>::is_solved)
         .def("signal_part_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::signal_part_derivatives)
-        .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::spectrum_proportion_derivatives);
+        .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::spectrum_proportion_derivatives)
+        .def("warm_start_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::warm_start_count)
+        .def("cold_start_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::cold_start_count);
 
         nb::class_<WassersteinNetworkSubgraph<int64_t, double>>(m, "CWassersteinNetworkSubgraphFloat")
         .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode<double>>&, const std::vector<FlowEdge<double>*>&, size_t>())
@@ -140,7 +142,9 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_flow_map", &WassersteinNetworkSubgraph<int64_t, double>::get_flow_map)
         .def("is_solved", &WassersteinNetworkSubgraph<int64_t, double>::is_solved)
         .def("signal_part_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::signal_part_derivatives)
-        .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::spectrum_proportion_derivatives);
+        .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::spectrum_proportion_derivatives)
+        .def("warm_start_count", &WassersteinNetworkSubgraph<int64_t, double>::warm_start_count)
+        .def("cold_start_count", &WassersteinNetworkSubgraph<int64_t, double>::cold_start_count);
 
     nb::class_<WassersteinNetwork<int64_t, int64_t>>(m, "CWassersteinNetwork")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
@@ -148,8 +152,12 @@ NB_MODULE(wnet_cpp, m) {
         .def("add_experimental_trash", &WassersteinNetwork<int64_t, int64_t>::add_experimental_trash)
         .def("add_theoretical_trash", &WassersteinNetwork<int64_t, int64_t>::add_theoretical_trash)
         .def("build", &WassersteinNetwork<int64_t, int64_t>::build, nb::arg("method") = SolverMethod::NetworkSimplex)
-        .def("solve", nb::overload_cast<>(&WassersteinNetwork<int64_t, int64_t>::solve))
-        .def("solve", nb::overload_cast<const std::vector<double>&>(&WassersteinNetwork<int64_t, int64_t>::solve))
+        .def("solve",
+             [](WassersteinNetwork<int64_t, int64_t>& self, bool warm) { self.solve(warm); },
+             nb::arg("warm") = true)
+        .def("solve",
+             [](WassersteinNetwork<int64_t, int64_t>& self, const std::vector<double>& point, bool warm) { self.solve(point, warm); },
+             nb::arg("point"), nb::arg("warm") = true)
         .def("total_cost", &WassersteinNetwork<int64_t, int64_t>::total_cost)
         .def("get_subgraph", &WassersteinNetwork<int64_t, int64_t>::get_subgraph, nb::rv_policy::reference)
         .def("__str__", &WassersteinNetwork<int64_t, int64_t>::to_string)
@@ -176,7 +184,9 @@ NB_MODULE(wnet_cpp, m) {
         .def_static("max_value", &WassersteinNetwork<int64_t, int64_t>::max_value)
         .def_static("max_index", &WassersteinNetwork<int64_t, int64_t>::max_index)
         .def("signal_part_derivatives", &WassersteinNetwork<int64_t, int64_t>::signal_part_derivatives)
-        .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, int64_t>::spectrum_proportion_derivatives);
+        .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, int64_t>::spectrum_proportion_derivatives)
+        .def("warm_start_count", &WassersteinNetwork<int64_t, int64_t>::warm_start_count)
+        .def("cold_start_count", &WassersteinNetwork<int64_t, int64_t>::cold_start_count);
 
     nb::class_<WassersteinNetwork<int64_t, double>>(m, "CWassersteinNetworkFloat")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
@@ -184,8 +194,12 @@ NB_MODULE(wnet_cpp, m) {
         .def("add_experimental_trash", &WassersteinNetwork<int64_t, double>::add_experimental_trash)
         .def("add_theoretical_trash", &WassersteinNetwork<int64_t, double>::add_theoretical_trash)
         .def("build", &WassersteinNetwork<int64_t, double>::build, nb::arg("method") = SolverMethod::NetworkSimplex)
-        .def("solve", nb::overload_cast<>(&WassersteinNetwork<int64_t, double>::solve))
-        .def("solve", nb::overload_cast<const std::vector<double>&>(&WassersteinNetwork<int64_t, double>::solve))
+        .def("solve",
+             [](WassersteinNetwork<int64_t, double>& self, bool warm) { self.solve(warm); },
+             nb::arg("warm") = true)
+        .def("solve",
+             [](WassersteinNetwork<int64_t, double>& self, const std::vector<double>& point, bool warm) { self.solve(point, warm); },
+             nb::arg("point"), nb::arg("warm") = true)
         .def("total_cost", &WassersteinNetwork<int64_t, double>::total_cost)
         .def("get_subgraph", &WassersteinNetwork<int64_t, double>::get_subgraph, nb::rv_policy::reference)
         .def("__str__", &WassersteinNetwork<int64_t, double>::to_string)
@@ -212,7 +226,9 @@ NB_MODULE(wnet_cpp, m) {
         .def_static("max_value", &WassersteinNetwork<int64_t, double>::max_value)
         .def_static("max_index", &WassersteinNetwork<int64_t, double>::max_index)
         .def("signal_part_derivatives", &WassersteinNetwork<int64_t, double>::signal_part_derivatives)
-        .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, double>::spectrum_proportion_derivatives);
+        .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, double>::spectrum_proportion_derivatives)
+        .def("warm_start_count", &WassersteinNetwork<int64_t, double>::warm_start_count)
+        .def("cold_start_count", &WassersteinNetwork<int64_t, double>::cold_start_count);
 
     nb::class_<Distribution<LEMON_INT>>(m, "CDistribution")
         .def(nb::init<nb::ndarray<nb::shape<-1, -1>>, nb::ndarray<LEMON_INT, nb::shape<-1>>>(), nb::arg().noconvert(), nb::arg().noconvert())

@@ -52,6 +52,7 @@ class WassersteinNetworkSubgraph {
     VALUE_TYPE lemon_theoretical_intensity;
     const size_t no_target_distributions;
     bool built = false;
+    int _cold_starts_via_run = 0;
 
     struct ChainTopology {
         std::vector<LEMON_INDEX> order;
@@ -322,7 +323,7 @@ public:
         build_impl();
     }
 
-    void set_point(const std::vector<double>& point) {
+    void set_point(const std::vector<double>& point, bool warm = true) {
         if(point.size() != no_target_distributions)
             throw std::runtime_error("Point dimension: " + std::to_string(point.size()) + " does not match number of target distributions: " + std::to_string(no_target_distributions));
         lemon_theoretical_intensity = 0;
@@ -395,18 +396,25 @@ public:
         }
         node_supply_map[lemon_graph.nodeFromId(0)] = lemon_total_flow;
         node_supply_map[lemon_graph.nodeFromId(1)] = -lemon_total_flow;
-        // Both solvers cold-start: a fresh instance is created on every call.
-        // NetworkSimplex exposes warm-start accessors (internalFlow, repairTreeFlows)
-        // that could reuse the previous spanning tree when only capacities change
-        // between calls.  CycleCanceling has no equivalent — its init() always
-        // calls Circulation to find a fresh feasible flow.  Any future warm_start()
-        // implementation must therefore throw std::logic_error for CycleCanceling.
         if (_method == SolverMethod::NetworkSimplex) {
-            ns_solver.emplace(lemon_graph);
-            ns_solver->upperMap(capacities_map);
-            ns_solver->costMap(costs_map);
-            ns_solver->supplyMap(node_supply_map);
-            ns_solver->run();
+            if (warm && ns_solver.has_value()) {
+                // Warm start: reuse the existing solver and its spanning-tree
+                // basis.  Only capacities and supplies change between calls
+                // (costs are fixed at build() time), so warmRun() can repair
+                // the previous optimal basis and reach the new optimum with
+                // far fewer pivots.  Falls back to cold start automatically
+                // if the basis becomes infeasible under the new bounds.
+                ns_solver->upperMap(capacities_map);
+                ns_solver->supplyMap(node_supply_map);
+                ns_solver->warmRun();
+            } else {
+                ++_cold_starts_via_run;
+                ns_solver.emplace(lemon_graph);
+                ns_solver->upperMap(capacities_map);
+                ns_solver->costMap(costs_map);
+                ns_solver->supplyMap(node_supply_map);
+                ns_solver->run();
+            }
         } else if (_method == SolverMethod::CycleCanceling) {
             cc_solver.emplace(lemon_graph);
             cc_solver->upperMap(capacities_map);
@@ -432,6 +440,14 @@ public:
         if(!_solver_has_value()) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
         return _solver_total_cost();
     };
+
+    int warm_start_count() const {
+        return ns_solver.has_value() ? ns_solver->warmStartCount() : 0;
+    }
+    int cold_start_count() const {
+        return _cold_starts_via_run +
+               (ns_solver.has_value() ? ns_solver->coldStartCount() : 0);
+    }
 
     std::string to_string() const {
         std::string result;
@@ -1310,19 +1326,19 @@ public:
         built = true;
     };
 
-    void solve()
+    void solve(bool warm = true)
     {
         std::vector<double> point(_no_theoretical_spectra, 1.0);
-        solve(point);
+        solve(point, warm);
     };
 
-    void solve(const std::vector<double>& point) {
+    void solve(const std::vector<double>& point, bool warm = true) {
         if(!built)
             throw std::runtime_error("You must call build() before calling solve().");
 
         _last_point = point;
         for (auto& flow_subgraph : flow_subgraphs)
-            flow_subgraph->set_point(point);
+            flow_subgraph->set_point(point, warm);
     };
 
     VALUE_TYPE total_cost() const {
@@ -1334,6 +1350,19 @@ public:
             cost += static_cast<VALUE_TYPE>(_isolated_theo_trash_cost * _isolated_theoretical_intensity[s] * _last_point[s]);
         return cost;
     };
+
+    int warm_start_count() const {
+        int total = 0;
+        for (const auto& sg : flow_subgraphs)
+            total += sg->warm_start_count();
+        return total;
+    }
+    int cold_start_count() const {
+        int total = 0;
+        for (const auto& sg : flow_subgraphs)
+            total += sg->cold_start_count();
+        return total;
+    }
 
     size_t no_subgraphs() const {
         return flow_subgraphs.size();
