@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from wnet import WassersteinNetwork
 from wnet.distribution import Distribution, Distribution_1D
 from wnet.distances import DistanceMetric
-from wnet.wnet_cpp import CWassersteinNetworkFactory, SolverMethod
+from wnet.wnet_cpp import CWassersteinNetworkFactory, NetworkSimplex
 
 
 # ---------------------------------------------------------------------------
@@ -31,13 +31,12 @@ from wnet.wnet_cpp import CWassersteinNetworkFactory, SolverMethod
 # ---------------------------------------------------------------------------
 
 def warm_solve(net, point=None):
-    """Re-solve from the current solution using a warm restart.
+    """Re-solve using a warm restart.
 
-    Replace the body with the actual warm-restart call once implemented, e.g.:
-        net.warm_restart()
-        net.solve(point)
-    or:
-        net.solve(point, warm=True)
+    NetworkSimplex has warm=True by default, so calling solve() after a prior
+    solve reuses the existing spanning-tree basis via warmRun().  The cold
+    solve is the first call inside _build_and_solve_cpp, where ns_solver has
+    no value yet and the cold branch is taken regardless of the warm flag.
     """
     if point is None:
         net.solve()
@@ -159,7 +158,7 @@ def _build_and_solve_cpp(factory_fn, base, targets, trash_cost, max_dist, point=
     net = factory_fn(vec_base, vec_targets, DistanceMetric.L1, max_dist)
     if trash_cost is not None:
         net.add_simple_trash(trash_cost)
-    net.build(SolverMethod.NetworkSimplex)
+    net.build(NetworkSimplex())
     if point is None:
         net.solve()
     else:
@@ -287,7 +286,7 @@ class TestAsymmetricTrashIdempotency:
         vec_target = [target.vecdist]
         net = CWassersteinNetworkFactory.create_1d(vec_base, vec_target, DistanceMetric.L1, 1000)
         net.add_experimental_trash(30)
-        net.build(SolverMethod.NetworkSimplex)
+        net.build(NetworkSimplex())
         net.solve()
         fresh = _capture_cpp(net, 1)
         warm_solve(net)
@@ -300,7 +299,7 @@ class TestAsymmetricTrashIdempotency:
         vec_target = [target.vecdist]
         net = CWassersteinNetworkFactory.create_1d(vec_base, vec_target, DistanceMetric.L1, 1000)
         net.add_theoretical_trash(30)
-        net.build(SolverMethod.NetworkSimplex)
+        net.build(NetworkSimplex())
         net.solve()
         fresh = _capture_cpp(net, 1)
         warm_solve(net)

@@ -5,7 +5,13 @@ from wnet.wnet_cpp import (
     CWassersteinNetwork,
     CWassersteinNetworkSubgraph,
     CWassersteinNetworkFactory,
-    SolverMethod,
+    NetworkSimplex,
+    CostScaling,
+    CycleCanceling,
+    CapacityScaling,
+    NSPivotRule,
+    CSMethod,
+    CCMethod,
 )
 from wnet.distribution import Distribution
 from wnet.distances import DistanceMetric, Distance
@@ -24,14 +30,14 @@ class WassersteinNetwork:
         distance (DistanceFunction): A callable that computes the distance between points in the distributions.
         max_distance (float | None): The maximum distance to consider. If None or infinity, it defaults to the maximum representable value.
         force_dense_1d (bool): In 1D, force the O(m*n) dense factory instead of the O(m+n) chain factory. Default False uses the chain factory in 1D. Note: max_distance semantics differ between factories — chain only uses it to split the chain into components, while dense also caps per-pair cost.
-        method (str): Min-cost flow algorithm. "network_simplex" (default), "cycle_canceling", "cost_scaling", or "capacity_scaling".
+        solver: Solver configuration object. One of NetworkSimplex(), CostScaling(), CycleCanceling(), or CapacityScaling(). Defaults to NetworkSimplex() (warm restarts, BLOCK_SEARCH pivot).
     """
 
     _SOLVER_METHODS = {
-        "network_simplex": SolverMethod.NetworkSimplex,
-        "cycle_canceling": SolverMethod.CycleCanceling,
-        "cost_scaling": SolverMethod.CostScaling,
-        "capacity_scaling": SolverMethod.CapacityScaling,
+        "network_simplex": NetworkSimplex,
+        "cycle_canceling": CycleCanceling,
+        "cost_scaling": CostScaling,
+        "capacity_scaling": CapacityScaling,
     }
 
     def __init__(
@@ -41,10 +47,15 @@ class WassersteinNetwork:
         distance: Distance,
         max_distance: Optional[float] = None,
         force_dense_1d: bool = False,
-        method: str = "network_simplex",
+        solver=None,
+        method: str = None,
     ) -> None:
-        if method not in self._SOLVER_METHODS:
-            raise ValueError(f"Unknown method {method!r}. Choose from: {list(self._SOLVER_METHODS)}")
+        if solver is None and method is None:
+            solver = NetworkSimplex()
+        elif solver is None:
+            if method not in self._SOLVER_METHODS:
+                raise ValueError(f"Unknown method {method!r}. Choose from: {list(self._SOLVER_METHODS)}")
+            solver = self._SOLVER_METHODS[method]()
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
         vec_base = base_distribution.vecdist
@@ -55,7 +66,6 @@ class WassersteinNetwork:
         else:
             self.wnet = CWassersteinNetworkFactory.create(
                 vec_base, vec_targets, distance, max_distance)
-        _method_enum = self._SOLVER_METHODS[method]
         self.add_simple_trash = self.wnet.add_simple_trash
         self.add_experimental_trash = self.wnet.add_experimental_trash
         self.add_theoretical_trash = self.wnet.add_theoretical_trash
@@ -64,7 +74,8 @@ class WassersteinNetwork:
         # Without this trick, the lambda would hold a reference to self, which holds a reference to the C++ object, which holds a reference back to the lambda, creating a cycle that prevents garbage collection.
         # Without this, the incremental GC introduced in Python3.14 can't collect WassersteinNetwork instances that are no longer needed, leading to memory leaks.
         _wnet = self.wnet  # avoid capturing self in the lambda (reference cycle).
-        self.build = lambda: _wnet.build(_method_enum)
+        _solver = solver
+        self.build = lambda: _wnet.build(_solver)
 
         self.solve = self.wnet.solve
         self.total_cost = self.wnet.total_cost

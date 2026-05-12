@@ -73,11 +73,40 @@ NB_MODULE(wnet_cpp, m) {
         .value("L2", DistanceMetric::L2)
         .value("LINF", DistanceMetric::LINF);
 
-    nb::enum_<SolverMethod>(m, "SolverMethod")
-        .value("NetworkSimplex", SolverMethod::NetworkSimplex)
-        .value("CycleCanceling", SolverMethod::CycleCanceling)
-        .value("CostScaling", SolverMethod::CostScaling)
-        .value("CapacityScaling", SolverMethod::CapacityScaling);
+    nb::enum_<NSPivotRule>(m, "NSPivotRule")
+        .value("FIRST_ELIGIBLE", NSPivotRule::FIRST_ELIGIBLE)
+        .value("BEST_ELIGIBLE",  NSPivotRule::BEST_ELIGIBLE)
+        .value("BLOCK_SEARCH",   NSPivotRule::BLOCK_SEARCH)
+        .value("CANDIDATE_LIST", NSPivotRule::CANDIDATE_LIST)
+        .value("ALTERING_LIST",  NSPivotRule::ALTERING_LIST);
+
+    nb::enum_<CSMethod>(m, "CSMethod")
+        .value("PUSH",            CSMethod::PUSH)
+        .value("AUGMENT",         CSMethod::AUGMENT)
+        .value("PARTIAL_AUGMENT", CSMethod::PARTIAL_AUGMENT);
+
+    nb::enum_<CCMethod>(m, "CCMethod")
+        .value("SIMPLE_CYCLE_CANCELING",       CCMethod::SIMPLE_CYCLE_CANCELING)
+        .value("MINIMUM_MEAN_CYCLE_CANCELING", CCMethod::MINIMUM_MEAN_CYCLE_CANCELING)
+        .value("CANCEL_AND_TIGHTEN",           CCMethod::CANCEL_AND_TIGHTEN);
+
+    nb::class_<NetworkSimplexConfig>(m, "NetworkSimplex")
+        .def(nb::init<>())
+        .def_rw("pivot", &NetworkSimplexConfig::pivot)
+        .def_rw("warm",  &NetworkSimplexConfig::warm);
+
+    nb::class_<CostScalingConfig>(m, "CostScaling")
+        .def(nb::init<>())
+        .def_rw("method", &CostScalingConfig::method)
+        .def_rw("factor", &CostScalingConfig::factor);
+
+    nb::class_<CycleCancelingConfig>(m, "CycleCanceling")
+        .def(nb::init<>())
+        .def_rw("method", &CycleCancelingConfig::method);
+
+    nb::class_<CapacityScalingConfig>(m, "CapacityScaling")
+        .def(nb::init<>())
+        .def_rw("factor", &CapacityScalingConfig::factor);
 
     nb::class_<FlowNode<int64_t>>(m, "FlowNode")
         .def(nb::init<LEMON_INDEX, SourceNode>())
@@ -107,7 +136,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("add_simple_trash", &WassersteinNetworkSubgraph<int64_t, int64_t>::add_simple_trash)
         .def("add_experimental_trash", &WassersteinNetworkSubgraph<int64_t, int64_t>::add_experimental_trash)
         .def("add_theoretical_trash", &WassersteinNetworkSubgraph<int64_t, int64_t>::add_theoretical_trash)
-        .def("build", &WassersteinNetworkSubgraph<int64_t, int64_t>::build, nb::arg("method") = SolverMethod::NetworkSimplex)
+        .def("build", &WassersteinNetworkSubgraph<int64_t, int64_t>::build, nb::arg("config") = NetworkSimplexConfig{})
         .def("set_point", &WassersteinNetworkSubgraph<int64_t, int64_t>::set_point)
         .def("total_cost", &WassersteinNetworkSubgraph<int64_t, int64_t>::total_cost)
         .def("simple_trash_cost", &WassersteinNetworkSubgraph<int64_t, int64_t>::simple_trash_cost)
@@ -129,7 +158,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("add_simple_trash", &WassersteinNetworkSubgraph<int64_t, double>::add_simple_trash)
         .def("add_experimental_trash", &WassersteinNetworkSubgraph<int64_t, double>::add_experimental_trash)
         .def("add_theoretical_trash", &WassersteinNetworkSubgraph<int64_t, double>::add_theoretical_trash)
-        .def("build", &WassersteinNetworkSubgraph<int64_t, double>::build, nb::arg("method") = SolverMethod::NetworkSimplex)
+        .def("build", &WassersteinNetworkSubgraph<int64_t, double>::build, nb::arg("config") = NetworkSimplexConfig{})
         .def("set_point", &WassersteinNetworkSubgraph<int64_t, double>::set_point)
         .def("total_cost", &WassersteinNetworkSubgraph<int64_t, double>::total_cost)
         .def("simple_trash_cost", &WassersteinNetworkSubgraph<int64_t, double>::simple_trash_cost)
@@ -151,13 +180,12 @@ NB_MODULE(wnet_cpp, m) {
         .def("add_simple_trash", &WassersteinNetwork<int64_t, int64_t>::add_simple_trash)
         .def("add_experimental_trash", &WassersteinNetwork<int64_t, int64_t>::add_experimental_trash)
         .def("add_theoretical_trash", &WassersteinNetwork<int64_t, int64_t>::add_theoretical_trash)
-        .def("build", &WassersteinNetwork<int64_t, int64_t>::build, nb::arg("method") = SolverMethod::NetworkSimplex)
+        .def("build", &WassersteinNetwork<int64_t, int64_t>::build, nb::arg("config") = NetworkSimplexConfig{})
         .def("solve",
-             [](WassersteinNetwork<int64_t, int64_t>& self, bool warm) { self.solve(warm); },
-             nb::arg("warm") = true)
+             [](WassersteinNetwork<int64_t, int64_t>& self) { self.solve(); })
         .def("solve",
-             [](WassersteinNetwork<int64_t, int64_t>& self, const std::vector<double>& point, bool warm) { self.solve(point, warm); },
-             nb::arg("point"), nb::arg("warm") = true)
+             [](WassersteinNetwork<int64_t, int64_t>& self, const std::vector<double>& point) { self.solve(point); },
+             nb::arg("point"))
         .def("total_cost", &WassersteinNetwork<int64_t, int64_t>::total_cost)
         .def("get_subgraph", &WassersteinNetwork<int64_t, int64_t>::get_subgraph, nb::rv_policy::reference)
         .def("__str__", &WassersteinNetwork<int64_t, int64_t>::to_string)
@@ -193,13 +221,12 @@ NB_MODULE(wnet_cpp, m) {
         .def("add_simple_trash", &WassersteinNetwork<int64_t, double>::add_simple_trash)
         .def("add_experimental_trash", &WassersteinNetwork<int64_t, double>::add_experimental_trash)
         .def("add_theoretical_trash", &WassersteinNetwork<int64_t, double>::add_theoretical_trash)
-        .def("build", &WassersteinNetwork<int64_t, double>::build, nb::arg("method") = SolverMethod::NetworkSimplex)
+        .def("build", &WassersteinNetwork<int64_t, double>::build, nb::arg("config") = NetworkSimplexConfig{})
         .def("solve",
-             [](WassersteinNetwork<int64_t, double>& self, bool warm) { self.solve(warm); },
-             nb::arg("warm") = true)
+             [](WassersteinNetwork<int64_t, double>& self) { self.solve(); })
         .def("solve",
-             [](WassersteinNetwork<int64_t, double>& self, const std::vector<double>& point, bool warm) { self.solve(point, warm); },
-             nb::arg("point"), nb::arg("warm") = true)
+             [](WassersteinNetwork<int64_t, double>& self, const std::vector<double>& point) { self.solve(point); },
+             nb::arg("point"))
         .def("total_cost", &WassersteinNetwork<int64_t, double>::total_cost)
         .def("get_subgraph", &WassersteinNetwork<int64_t, double>::get_subgraph, nb::rv_policy::reference)
         .def("__str__", &WassersteinNetwork<int64_t, double>::to_string)

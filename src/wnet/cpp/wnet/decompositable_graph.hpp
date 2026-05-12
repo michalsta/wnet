@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <optional>
 #include <deque>
+#include <variant>
 
 
 #define LEMON_ONLY_TEMPLATES
@@ -16,12 +17,37 @@
 #include <lemon/cost_scaling.h>
 #include <lemon/capacity_scaling.h>
 
-// Selects the min-cost flow algorithm used by WassersteinNetworkSubgraph.
-// NetworkSimplex is the default and supports warm-starting (latent — not yet
-// exploited).  CycleCanceling, CostScaling, and CapacityScaling always
-// cold-start; any future warm_start() implementation must throw
-// std::logic_error for those variants.
-enum class SolverMethod { NetworkSimplex, CycleCanceling, CostScaling, CapacityScaling };
+// Pivot rule for NetworkSimplex. Values match lemon::NetworkSimplex::PivotRule.
+enum class NSPivotRule {
+    FIRST_ELIGIBLE, BEST_ELIGIBLE, BLOCK_SEARCH, CANDIDATE_LIST, ALTERING_LIST
+};
+
+// Internal method for CostScaling. Values match lemon::CostScaling::Method.
+enum class CSMethod { PUSH, AUGMENT, PARTIAL_AUGMENT };
+
+// Internal method for CycleCanceling. Values match lemon::CycleCanceling::Method.
+enum class CCMethod {
+    SIMPLE_CYCLE_CANCELING, MINIMUM_MEAN_CYCLE_CANCELING, CANCEL_AND_TIGHTEN
+};
+
+struct NetworkSimplexConfig {
+    NSPivotRule pivot = NSPivotRule::BLOCK_SEARCH;
+    bool warm = true;
+};
+struct CostScalingConfig {
+    CSMethod method = CSMethod::PARTIAL_AUGMENT;
+    int factor = 16;
+};
+struct CycleCancelingConfig {
+    CCMethod method = CCMethod::CANCEL_AND_TIGHTEN;
+};
+struct CapacityScalingConfig {
+    int factor = 4;
+};
+
+using SolverConfig = std::variant<
+    NetworkSimplexConfig, CostScalingConfig,
+    CycleCancelingConfig, CapacityScalingConfig>;
 
 //#include "pylmcf/py_support.h"
 #include "graph_elements.hpp"
@@ -43,7 +69,7 @@ class WassersteinNetworkSubgraph {
     std::optional<lemon::CycleCanceling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cc_solver;
     std::optional<lemon::CostScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cs_solver;
     std::optional<lemon::CapacityScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cap_solver;
-    SolverMethod _method = SolverMethod::NetworkSimplex;
+    SolverConfig _config = NetworkSimplexConfig{};
     LEMON_INDEX simple_trash_idx;
     bool simple_trash_added = false;
     bool experimental_trash_added = false;
@@ -64,21 +90,21 @@ class WassersteinNetworkSubgraph {
     std::optional<ChainTopology> _chain_topo;
 
     bool _solver_has_value() const {
-        if (_method == SolverMethod::NetworkSimplex) return ns_solver.has_value();
-        if (_method == SolverMethod::CycleCanceling) return cc_solver.has_value();
-        if (_method == SolverMethod::CostScaling)    return cs_solver.has_value();
+        if (std::holds_alternative<NetworkSimplexConfig>(_config)) return ns_solver.has_value();
+        if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver.has_value();
+        if (std::holds_alternative<CostScalingConfig>(_config))    return cs_solver.has_value();
         return cap_solver.has_value();
     }
     VALUE_TYPE _solver_flow(lemon::StaticDigraph::Arc arc) const {
-        if (_method == SolverMethod::NetworkSimplex) return ns_solver->flow(arc);
-        if (_method == SolverMethod::CycleCanceling) return cc_solver->flow(arc);
-        if (_method == SolverMethod::CostScaling)    return cs_solver->flow(arc);
+        if (std::holds_alternative<NetworkSimplexConfig>(_config)) return ns_solver->flow(arc);
+        if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver->flow(arc);
+        if (std::holds_alternative<CostScalingConfig>(_config))    return cs_solver->flow(arc);
         return cap_solver->flow(arc);
     }
     VALUE_TYPE _solver_total_cost() const {
-        if (_method == SolverMethod::NetworkSimplex) return ns_solver->totalCost();
-        if (_method == SolverMethod::CycleCanceling) return cc_solver->totalCost();
-        if (_method == SolverMethod::CostScaling)    return cs_solver->totalCost();
+        if (std::holds_alternative<NetworkSimplexConfig>(_config)) return ns_solver->totalCost();
+        if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver->totalCost();
+        if (std::holds_alternative<CostScalingConfig>(_config))    return cs_solver->totalCost();
         return cap_solver->totalCost();
     }
 
@@ -318,12 +344,12 @@ public:
         built = true;
     }
 
-    void build(SolverMethod method = SolverMethod::NetworkSimplex) {
-        _method = method;
+    void build(SolverConfig config = NetworkSimplexConfig{}) {
+        _config = config;
         build_impl();
     }
 
-    void set_point(const std::vector<double>& point, bool warm = true) {
+    void set_point(const std::vector<double>& point) {
         if(point.size() != no_target_distributions)
             throw std::runtime_error("Point dimension: " + std::to_string(point.size()) + " does not match number of target distributions: " + std::to_string(no_target_distributions));
         lemon_theoretical_intensity = 0;
@@ -396,44 +422,52 @@ public:
         }
         node_supply_map[lemon_graph.nodeFromId(0)] = lemon_total_flow;
         node_supply_map[lemon_graph.nodeFromId(1)] = -lemon_total_flow;
-        if (_method == SolverMethod::NetworkSimplex) {
-            if (warm && ns_solver.has_value()) {
-                // Warm start: reuse the existing solver and its spanning-tree
-                // basis.  Only capacities and supplies change between calls
-                // (costs are fixed at build() time), so warmRun() can repair
-                // the previous optimal basis and reach the new optimum with
-                // far fewer pivots.  Falls back to cold start automatically
-                // if the basis becomes infeasible under the new bounds.
-                ns_solver->upperMap(capacities_map);
-                ns_solver->supplyMap(node_supply_map);
-                ns_solver->warmRun();
+        std::visit([&](const auto& cfg) {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, NetworkSimplexConfig>) {
+                using LemonPR = lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PivotRule;
+                const auto pivot = static_cast<LemonPR>(cfg.pivot);
+                if (cfg.warm && ns_solver.has_value()) {
+                    // Warm start: reuse the existing solver and its spanning-tree
+                    // basis.  Only capacities and supplies change between calls
+                    // (costs are fixed at build() time), so warmRun() can repair
+                    // the previous optimal basis and reach the new optimum with
+                    // far fewer pivots.  Falls back to cold start automatically
+                    // if the basis becomes infeasible under the new bounds.
+                    ns_solver->upperMap(capacities_map);
+                    ns_solver->supplyMap(node_supply_map);
+                    ns_solver->warmRun(pivot);
+                } else {
+                    ++_cold_starts_via_run;
+                    ns_solver.emplace(lemon_graph);
+                    ns_solver->upperMap(capacities_map);
+                    ns_solver->costMap(costs_map);
+                    ns_solver->supplyMap(node_supply_map);
+                    ns_solver->run(pivot);
+                }
+            } else if constexpr (std::is_same_v<T, CycleCancelingConfig>) {
+                using LemonM = lemon::CycleCanceling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::Method;
+                cc_solver.emplace(lemon_graph);
+                cc_solver->upperMap(capacities_map);
+                cc_solver->costMap(costs_map);
+                cc_solver->supplyMap(node_supply_map);
+                cc_solver->run(static_cast<LemonM>(cfg.method));
+            } else if constexpr (std::is_same_v<T, CostScalingConfig>) {
+                using LemonM = lemon::CostScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::Method;
+                cs_solver.emplace(lemon_graph);
+                cs_solver->upperMap(capacities_map);
+                cs_solver->costMap(costs_map);
+                cs_solver->supplyMap(node_supply_map);
+                cs_solver->run(static_cast<LemonM>(cfg.method), cfg.factor);
             } else {
-                ++_cold_starts_via_run;
-                ns_solver.emplace(lemon_graph);
-                ns_solver->upperMap(capacities_map);
-                ns_solver->costMap(costs_map);
-                ns_solver->supplyMap(node_supply_map);
-                ns_solver->run();
+                static_assert(std::is_same_v<T, CapacityScalingConfig>);
+                cap_solver.emplace(lemon_graph);
+                cap_solver->upperMap(capacities_map);
+                cap_solver->costMap(costs_map);
+                cap_solver->supplyMap(node_supply_map);
+                cap_solver->run(cfg.factor);
             }
-        } else if (_method == SolverMethod::CycleCanceling) {
-            cc_solver.emplace(lemon_graph);
-            cc_solver->upperMap(capacities_map);
-            cc_solver->costMap(costs_map);
-            cc_solver->supplyMap(node_supply_map);
-            cc_solver->run();
-        } else if (_method == SolverMethod::CostScaling) {
-            cs_solver.emplace(lemon_graph);
-            cs_solver->upperMap(capacities_map);
-            cs_solver->costMap(costs_map);
-            cs_solver->supplyMap(node_supply_map);
-            cs_solver->run();
-        } else {
-            cap_solver.emplace(lemon_graph);
-            cap_solver->upperMap(capacities_map);
-            cap_solver->costMap(costs_map);
-            cap_solver->supplyMap(node_supply_map);
-            cap_solver->run();
-        }
+        }, _config);
     }
 
     VALUE_TYPE total_cost() const {
@@ -1320,25 +1354,25 @@ public:
             flow_subgraph->add_theoretical_trash(cost);
     };
 
-    void build(SolverMethod method = SolverMethod::NetworkSimplex) {
+    void build(SolverConfig config = NetworkSimplexConfig{}) {
         for (auto& flow_subgraph : flow_subgraphs)
-            flow_subgraph->build(method);
+            flow_subgraph->build(config);
         built = true;
     };
 
-    void solve(bool warm = true)
+    void solve()
     {
         std::vector<double> point(_no_theoretical_spectra, 1.0);
-        solve(point, warm);
+        solve(point);
     };
 
-    void solve(const std::vector<double>& point, bool warm = true) {
+    void solve(const std::vector<double>& point) {
         if(!built)
             throw std::runtime_error("You must call build() before calling solve().");
 
         _last_point = point;
         for (auto& flow_subgraph : flow_subgraphs)
-            flow_subgraph->set_point(point, warm);
+            flow_subgraph->set_point(point);
     };
 
     VALUE_TYPE total_cost() const {
