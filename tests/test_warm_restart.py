@@ -700,3 +700,156 @@ class TestLargeIdempotency:
         fresh = _capture_W(W, 1)
         warm_solve(W)
         _assert_exact(fresh, _capture_W(W, 1), f"seed={seed} m={m} n={n}")
+
+
+# ===========================================================================
+# 8.  Cold vs warm parity: successive solve() calls must agree exactly
+# ===========================================================================
+
+class TestColdVsWarmParity:
+    """
+    Builds two identical networks — one fully cold (NetworkSimplex(warm=False)),
+    one warm-whenever-possible (NetworkSimplex() with warm=True default) — then
+    drives both through the same sequence of points.  Cost, flow marginals, and
+    derivatives must agree at every step.
+    """
+
+    @staticmethod
+    def _cpp_pair(factory_fn, base, targets, trash_cost, max_dist):
+        cold_cfg = NetworkSimplex()
+        cold_cfg.warm = False
+
+        def _make(cfg):
+            net = factory_fn(
+                base.vecdist, [t.vecdist for t in targets], DistanceMetric.L1, max_dist
+            )
+            if trash_cost is not None:
+                net.add_simple_trash(trash_cost)
+            net.build(cfg)
+            return net
+
+        return _make(cold_cfg), _make(NetworkSimplex())
+
+    @staticmethod
+    def _W_pair(base, targets, trash_cost, max_dist):
+        cold_cfg = NetworkSimplex()
+        cold_cfg.warm = False
+
+        def _make(solver):
+            W = WassersteinNetwork(
+                base, targets, DistanceMetric.L1, max_distance=max_dist, solver=solver
+            )
+            if trash_cost is not None:
+                W.add_simple_trash(trash_cost)
+            W.build()
+            return W
+
+        return _make(cold_cfg), _make(NetworkSimplex())
+
+    @staticmethod
+    def _drive(cold, warm, points, n_targets, capture_fn):
+        for pt in points:
+            cold.solve(pt)
+            warm.solve(pt)
+            _assert_cost_and_marginals(
+                capture_fn(cold, n_targets),
+                capture_fn(warm, n_targets),
+                f"pt={pt}",
+            )
+
+    def test_1d_chain_single_spectrum(self):
+        base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
+        target = Distribution_1D(np.array([1.0, 6.0]), np.array([4, 6]))
+        cold, warm = self._cpp_pair(
+            CWassersteinNetworkFactory.create_1d, base, [target], 50, 1000
+        )
+        pts = [np.array([0.5]), np.array([1.5]), np.array([2.0]), np.array([0.2]), np.array([1.0])]
+        self._drive(cold, warm, pts, 1, _capture_cpp)
+
+    def test_1d_dense_single_spectrum(self):
+        base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
+        target = Distribution_1D(np.array([1.0, 6.0]), np.array([4, 6]))
+        cold, warm = self._cpp_pair(
+            CWassersteinNetworkFactory.create, base, [target], 50, 1000
+        )
+        pts = [np.array([0.5]), np.array([1.5]), np.array([2.0]), np.array([0.2]), np.array([1.0])]
+        self._drive(cold, warm, pts, 1, _capture_cpp)
+
+    def test_1d_chain_two_spectra(self):
+        base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([10, 10, 10]))
+        t1 = Distribution_1D(np.array([1.0, 6.0]), np.array([5, 5]))
+        t2 = Distribution_1D(np.array([9.5, 11.0]), np.array([5, 5]))
+        cold, warm = self._cpp_pair(
+            CWassersteinNetworkFactory.create_1d, base, [t1, t2], 50, 1000
+        )
+        pts = [
+            np.array([0.3, 0.7]),
+            np.array([0.5, 0.5]),
+            np.array([0.8, 0.2]),
+            np.array([1.2, 0.8]),
+            np.array([0.1, 0.9]),
+            np.array([0.5, 0.5]),
+        ]
+        self._drive(cold, warm, pts, 2, _capture_cpp)
+
+    def test_wrapper_single_spectrum(self):
+        base = Distribution_1D(np.array([0.0, 50.0]), np.array([8, 8]))
+        target = Distribution_1D(np.array([10.0, 40.0, 60.0]), np.array([3, 2, 5]))
+        cold, warm = self._W_pair(base, [target], 100, 200)
+        pts = [np.array([0.5]), np.array([1.5]), np.array([2.0]), np.array([0.3]), np.array([1.0])]
+        self._drive(cold, warm, pts, 1, _capture_W)
+
+    def test_wrapper_two_spectra(self):
+        base = Distribution_1D(np.array([0.0, 50.0]), np.array([10, 10]))
+        t1 = Distribution_1D(np.array([10.0, 40.0]), np.array([5, 5]))
+        t2 = Distribution_1D(np.array([20.0, 60.0]), np.array([5, 5]))
+        cold, warm = self._W_pair(base, [t1, t2], 100, 200)
+        pts = [
+            np.array([0.4, 0.6]),
+            np.array([0.6, 0.4]),
+            np.array([1.0, 1.0]),
+            np.array([0.2, 0.8]),
+            np.array([0.5, 0.5]),
+        ]
+        self._drive(cold, warm, pts, 2, _capture_W)
+
+    @pytest.mark.long
+    @pytest.mark.parametrize("seed", range(15))
+    def test_random_1d_chain(self, seed):
+        rng = np.random.default_rng(seed)
+        m = int(rng.integers(2, 12))
+        n = int(rng.integers(2, 12))
+        e_pos = rng.integers(0, 200, size=m).astype(np.float64)
+        t_pos = rng.integers(0, 200, size=n).astype(np.float64)
+        e_int = rng.integers(1, 10, size=m).astype(np.int64)
+        t_int = rng.integers(1, 10, size=n).astype(np.int64)
+        base = Distribution_1D(e_pos, e_int)
+        target = Distribution_1D(t_pos, t_int)
+        max_dist = int(rng.integers(50, 300))
+        cold, warm = self._cpp_pair(
+            CWassersteinNetworkFactory.create_1d, base, [target], 50, max_dist
+        )
+        pts = [np.array([v]) for v in rng.uniform(0.2, 3.0, size=6)]
+        self._drive(cold, warm, pts, 1, _capture_cpp)
+
+    @pytest.mark.long
+    @pytest.mark.parametrize("seed", range(10))
+    def test_random_1d_two_spectra(self, seed):
+        rng = np.random.default_rng(seed)
+        m = int(rng.integers(2, 10))
+        n1 = int(rng.integers(2, 8))
+        n2 = int(rng.integers(2, 8))
+        e_pos = rng.integers(0, 100, size=m).astype(np.float64)
+        e_int = rng.integers(1, 10, size=m).astype(np.int64)
+        t1_pos = rng.integers(0, 100, size=n1).astype(np.float64)
+        t1_int = rng.integers(1, 10, size=n1).astype(np.int64)
+        t2_pos = rng.integers(0, 100, size=n2).astype(np.float64)
+        t2_int = rng.integers(1, 10, size=n2).astype(np.int64)
+        base = Distribution_1D(e_pos, e_int)
+        t1 = Distribution_1D(t1_pos, t1_int)
+        t2 = Distribution_1D(t2_pos, t2_int)
+        cold, warm = self._cpp_pair(
+            CWassersteinNetworkFactory.create_1d, base, [t1, t2], 100, 300
+        )
+        pts = [rng.uniform(0.2, 1.5, size=2) for _ in range(6)]
+        self._drive(cold, warm, pts, 2, _capture_cpp)
