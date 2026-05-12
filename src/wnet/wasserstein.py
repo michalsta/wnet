@@ -4,6 +4,7 @@ from .distances import Distance
 
 import numpy as np
 
+
 def WassersteinDistance(
     distribution1: Distribution,
     distribution2: Distribution,
@@ -32,8 +33,14 @@ def WassersteinDistance(
     if not np.isclose(distribution1.sum_intensities, distribution2.sum_intensities):
         raise RuntimeError("Distributions must have the same total intensity")
     W = WassersteinNetwork(
-        distribution1, [distribution2], distance, None,
-        force_dense_1d=force_dense_1d, solver=solver, method=method)
+        distribution1,
+        [distribution2],
+        distance,
+        None,
+        force_dense_1d=force_dense_1d,
+        solver=solver,
+        method=method,
+    )
     W.build()
     W.solve()
     return W.total_cost()
@@ -69,8 +76,14 @@ def TruncatedWassersteinDistance(
     if not np.isclose(distribution1.sum_intensities, distribution2.sum_intensities):
         raise RuntimeError("Distributions must have the same total intensity")
     W = WassersteinNetwork(
-        distribution1, [distribution2], distance, max_distance,
-        force_dense_1d=force_dense_1d, solver=solver, method=method)
+        distribution1,
+        [distribution2],
+        distance,
+        max_distance,
+        force_dense_1d=force_dense_1d,
+        solver=solver,
+        method=method,
+    )
     W.add_simple_trash(max_distance)
     W.build()
     W.solve()

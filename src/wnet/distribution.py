@@ -52,7 +52,9 @@ class Distribution:
     @cached_property
     def vecdist(self):
         cfun = globals()[f"CVectorDistribution{self.dimension}"]
-        return cfun(self.positions.astype(np.float64), self.intensities.astype(np.int64))
+        return cfun(
+            self.positions.astype(np.float64), self.intensities.astype(np.int64)
+        )
 
     def scaled(self, scale_factor: float) -> "Distribution":
         """
@@ -144,7 +146,14 @@ class Distribution:
                     ax.plot(pos[i], intensities, "o", markersize=3)
                     ax.set_ylabel("Intensity")
                 else:
-                    sc = ax.scatter(pos[j], pos[i], c=intensities, s=10 + 100 * norm_int, cmap="viridis", alpha=0.7)
+                    sc = ax.scatter(
+                        pos[j],
+                        pos[i],
+                        c=intensities,
+                        s=10 + 100 * norm_int,
+                        cmap="viridis",
+                        alpha=0.7,
+                    )
                 if i == D - 1:
                     ax.set_xlabel(f"dim {j}")
                 if j == 0:

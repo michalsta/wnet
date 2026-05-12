@@ -1,7 +1,6 @@
 from common_testing import create_large_wsdflow_instance, solve_large_wsdflow_instance
 import numpy as np
 
-
 if __name__ == "__main__":
     # params for a middle-sized test
     params = {

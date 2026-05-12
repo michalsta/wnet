@@ -1,7 +1,6 @@
 import importlib.metadata
 from pathlib import Path
 
-
 __version__ = importlib.metadata.version("wnet")
 
 

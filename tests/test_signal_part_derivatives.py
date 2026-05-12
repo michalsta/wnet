@@ -5,24 +5,49 @@ from wnet.distribution import Distribution_1D
 from wnet.distances import DistanceMetric
 
 
-def make_network_and_solve(base_positions, base_intensities, target_positions, target_intensities, max_distance):
+def make_network_and_solve(
+    base_positions, base_intensities, target_positions, target_intensities, max_distance
+):
     """Build a truncated Wasserstein network with simple trash, solve it, and return the network."""
-    base = Distribution_1D(np.array(base_positions, dtype=np.float64), np.array(base_intensities, dtype=np.int64))
-    target = Distribution_1D(np.array(target_positions, dtype=np.float64), np.array(target_intensities, dtype=np.int64))
-    W = WassersteinNetwork(base, [target], distance=DistanceMetric.L1, max_distance=int(max_distance))
+    base = Distribution_1D(
+        np.array(base_positions, dtype=np.float64),
+        np.array(base_intensities, dtype=np.int64),
+    )
+    target = Distribution_1D(
+        np.array(target_positions, dtype=np.float64),
+        np.array(target_intensities, dtype=np.int64),
+    )
+    W = WassersteinNetwork(
+        base, [target], distance=DistanceMetric.L1, max_distance=int(max_distance)
+    )
     W.add_simple_trash(int(max_distance))
     W.build()
     W.solve()
     return W
 
 
-def perturb_and_solve(base_positions, base_intensities, target_positions, target_intensities, max_distance, signal_index, delta):
+def perturb_and_solve(
+    base_positions,
+    base_intensities,
+    target_positions,
+    target_intensities,
+    max_distance,
+    signal_index,
+    delta,
+):
     """Rebuild the network with one target signal increased by delta, return total cost."""
     new_intensities = np.array(target_intensities, dtype=np.int64).copy()
     new_intensities[signal_index] += delta
-    base = Distribution_1D(np.array(base_positions, dtype=np.float64), np.array(base_intensities, dtype=np.int64))
-    target = Distribution_1D(np.array(target_positions, dtype=np.float64), new_intensities)
-    W = WassersteinNetwork(base, [target], distance=DistanceMetric.L1, max_distance=int(max_distance))
+    base = Distribution_1D(
+        np.array(base_positions, dtype=np.float64),
+        np.array(base_intensities, dtype=np.int64),
+    )
+    target = Distribution_1D(
+        np.array(target_positions, dtype=np.float64), new_intensities
+    )
+    W = WassersteinNetwork(
+        base, [target], distance=DistanceMetric.L1, max_distance=int(max_distance)
+    )
     W.add_simple_trash(int(max_distance))
     W.build()
     W.solve()
@@ -167,9 +192,9 @@ def test_excess_theo_slack_node_cheaper_than_trash():
 
     for i in range(2):
         new_cost = perturb_and_solve([0], [5], [10, 20], [5, 5], 100, i, 1)
-        assert derivs[0][i] == new_cost - original, (
-            f"peak {i}: predicted={derivs[0][i]}, actual={new_cost - original}"
-        )
+        assert (
+            derivs[0][i] == new_cost - original
+        ), f"peak {i}: predicted={derivs[0][i]}, actual={new_cost - original}"
 
 
 def test_excess_base_slack_node_derivative_zero():
@@ -188,9 +213,9 @@ def test_excess_base_slack_node_derivative_zero():
 
     for i in range(2):
         new_cost = perturb_and_solve([0], [10], [5, 90], [3, 1], 100, i, 1)
-        assert derivs[0][i] == new_cost - original, (
-            f"peak {i}: predicted={derivs[0][i]}, actual={new_cost - original}"
-        )
+        assert (
+            derivs[0][i] == new_cost - original
+        ), f"peak {i}: predicted={derivs[0][i]}, actual={new_cost - original}"
 
 
 def test_equal_supply_demand_multiple_nodes():
@@ -206,9 +231,9 @@ def test_equal_supply_demand_multiple_nodes():
 
     for i in range(2):
         new_cost = perturb_and_solve([0, 50], [5, 5], [10, 40], [5, 5], 100, i, 1)
-        assert derivs[0][i] == new_cost - original, (
-            f"peak {i}: predicted={derivs[0][i]}, actual={new_cost - original}"
-        )
+        assert (
+            derivs[0][i] == new_cost - original
+        ), f"peak {i}: predicted={derivs[0][i]}, actual={new_cost - original}"
 
 
 def test_single_unit_intensities():
@@ -235,9 +260,9 @@ def test_many_targets_one_base():
 
     for i in range(5):
         new_cost = perturb_and_solve([0], [15], positions, intensities, 100, i, 1)
-        assert derivs[0][i] == new_cost - original, (
-            f"peak {i}: predicted={derivs[0][i]}, actual={new_cost - original}"
-        )
+        assert (
+            derivs[0][i] == new_cost - original
+        ), f"peak {i}: predicted={derivs[0][i]}, actual={new_cost - original}"
 
 
 def test_many_bases_one_target():
@@ -276,7 +301,13 @@ def test_signal_part_derivatives_predict_cost_change(seed):
 
     max_distance = 50000
 
-    W = make_network_and_solve(base_positions, base_intensities, target_positions, target_intensities, max_distance)
+    W = make_network_and_solve(
+        base_positions,
+        base_intensities,
+        target_positions,
+        target_intensities,
+        max_distance,
+    )
     original_cost = W.total_cost()
 
     # Collect derivatives across all subgraphs
@@ -295,9 +326,13 @@ def test_signal_part_derivatives_predict_cost_change(seed):
             continue
         predicted_derivative = derivatives[0][peak_idx]
         new_cost = perturb_and_solve(
-            base_positions, base_intensities,
-            target_positions, target_intensities,
-            max_distance, peak_idx, delta,
+            base_positions,
+            base_intensities,
+            target_positions,
+            target_intensities,
+            max_distance,
+            peak_idx,
+            delta,
         )
         actual_change = new_cost - original_cost
         assert actual_change == predicted_derivative * delta, (
@@ -372,7 +407,9 @@ def test_derivatives_stable_after_repeated_set_point():
 
     # Build once, solve at various points, then come back to point=1
     base = Distribution_1D(np.array(bp, dtype=np.float64), np.array(bi, dtype=np.int64))
-    target = Distribution_1D(np.array(tp, dtype=np.float64), np.array(ti, dtype=np.int64))
+    target = Distribution_1D(
+        np.array(tp, dtype=np.float64), np.array(ti, dtype=np.int64)
+    )
     W = WassersteinNetwork(base, [target], distance=DistanceMetric.L1, max_distance=md)
     W.add_simple_trash(md)
     W.build()
@@ -409,13 +446,17 @@ def test_derivatives_stable_after_set_point_random(seed):
     md = 50000
 
     # Fresh solve at point=1
-    W_fresh = make_network_and_solve(bp.tolist(), bi.tolist(), tp.tolist(), ti.tolist(), md)
+    W_fresh = make_network_and_solve(
+        bp.tolist(), bi.tolist(), tp.tolist(), ti.tolist(), md
+    )
     fresh_cost = W_fresh.total_cost()
     fresh_derivs = W_fresh.signal_part_derivatives()
 
     # Build once, solve at various points, then return to point=1
     base = Distribution_1D(np.array(bp, dtype=np.float64), np.array(bi, dtype=np.int64))
-    target = Distribution_1D(np.array(tp, dtype=np.float64), np.array(ti, dtype=np.int64))
+    target = Distribution_1D(
+        np.array(tp, dtype=np.float64), np.array(ti, dtype=np.int64)
+    )
     W = WassersteinNetwork(base, [target], distance=DistanceMetric.L1, max_distance=md)
     W.add_simple_trash(md)
     W.build()

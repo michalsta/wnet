@@ -33,6 +33,7 @@ def _solve(wnet, point=None):
 # Basic correctness
 # ---------------------------------------------------------------------------
 
+
 def test_experimental_trash_excess_empirical():
     # emp=7, theo=4, dist=1 → 4 match + 3 exp-trash
     # cost = 4*1 + 3*10 = 34
@@ -93,7 +94,7 @@ def test_all_trash_matching_too_expensive():
     theo = _dist1d([1000], [5])
     W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 10_000)
     W.add_experimental_trash(10)
-    W.add_theoretical_trash(20)   # more expensive, should not be used
+    W.add_theoretical_trash(20)  # more expensive, should not be used
     assert _solve(W) == 50
 
 
@@ -113,6 +114,7 @@ def test_theoretical_trash_preferred_when_cheaper():
 # ---------------------------------------------------------------------------
 # Cross-validation against simple trash
 # ---------------------------------------------------------------------------
+
 
 def test_exp_trash_equals_simple_trash_excess_empirical():
     # When E > T, experimental trash and simple trash with equal cost should agree.
@@ -173,6 +175,7 @@ def test_both_trash_equals_simple_trash_two_components():
 # Multiple theoretical spectra
 # ---------------------------------------------------------------------------
 
+
 def test_two_theoretical_spectra_experimental_trash():
     # emp=5 @ 0, theo_A=4 @ 1, theo_B=2 @ 1
     # point=[0.5, 0.5] → integer-scaled intensities: A=2, B=1, total=3
@@ -190,6 +193,7 @@ def test_two_theoretical_spectra_experimental_trash():
 # ---------------------------------------------------------------------------
 # Guard / error handling
 # ---------------------------------------------------------------------------
+
 
 def test_experimental_trash_after_build_raises():
     emp = _dist1d([0], [5])
@@ -297,6 +301,7 @@ def test_signal_part_derivatives_theo_trash_excess_theoretical():
 # Derivatives — chain factory (1D without force_dense_1d)
 # ---------------------------------------------------------------------------
 
+
 def test_signal_part_derivatives_exp_trash_chain_single_pair():
     # Chain factory. Same setup as the dense test: emp=7@0, theo=4@1, C_exp=10.
     # Derivative = match cost (1) - trash cost (10) = -9.
@@ -326,10 +331,14 @@ def test_signal_part_derivatives_chain_matches_dense_exp_trash():
     theo = _dist1d([1], [4])
     W_chain = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
     W_chain.add_experimental_trash(10)
-    W_chain.build(); W_chain.solve()
-    W_dense = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True)
+    W_chain.build()
+    W_chain.solve()
+    W_dense = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True
+    )
     W_dense.add_experimental_trash(10)
-    W_dense.build(); W_dense.solve()
+    W_dense.build()
+    W_dense.solve()
     assert W_chain.signal_part_derivatives() == W_dense.signal_part_derivatives()
 
 
@@ -338,10 +347,14 @@ def test_signal_part_derivatives_chain_matches_dense_theo_trash():
     theo = _dist1d([1], [7])
     W_chain = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
     W_chain.add_theoretical_trash(10)
-    W_chain.build(); W_chain.solve()
-    W_dense = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True)
+    W_chain.build()
+    W_chain.solve()
+    W_dense = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True
+    )
     W_dense.add_theoretical_trash(10)
-    W_dense.build(); W_dense.solve()
+    W_dense.build()
+    W_dense.solve()
     assert W_chain.signal_part_derivatives() == W_dense.signal_part_derivatives()
 
 
@@ -350,9 +363,11 @@ def test_signal_part_derivatives_exp_trash_three_node_chain():
     # E=7 > T=2. Optimal: 2 match (dist=5) + 5 exp-trash = 110.
     # Cheapest Sink→theo cycle: Sink → emp@? (cost -20) → theo@5 (chain, cost +5) = -15.
     emp = Distribution(
-        np.array([[0, 10]], dtype=np.float64), np.array([3, 4], dtype=np.int64))
+        np.array([[0, 10]], dtype=np.float64), np.array([3, 4], dtype=np.int64)
+    )
     theo = Distribution(
-        np.array([[5]], dtype=np.float64), np.array([2], dtype=np.int64))
+        np.array([[5]], dtype=np.float64), np.array([2], dtype=np.int64)
+    )
     W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
     W.add_experimental_trash(20)
     W.build()
@@ -365,10 +380,10 @@ def test_signal_part_derivatives_theo_trash_three_node_chain():
     # Chain order: theo@0 — emp@5 — theo@10.  C_theo = 20.
     # T=7 > E=2. Optimal: 2 match (dist=5) + 5 theo-trash = 110.
     # Extra Source unit goes via theo-trash for either node → derivative = 20.
-    emp = Distribution(
-        np.array([[5]], dtype=np.float64), np.array([2], dtype=np.int64))
+    emp = Distribution(np.array([[5]], dtype=np.float64), np.array([2], dtype=np.int64))
     theo = Distribution(
-        np.array([[0, 10]], dtype=np.float64), np.array([3, 4], dtype=np.int64))
+        np.array([[0, 10]], dtype=np.float64), np.array([3, 4], dtype=np.int64)
+    )
     W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
     W.add_theoretical_trash(20)
     W.build()
@@ -382,7 +397,9 @@ def test_signal_part_derivatives_matches_simple_trash_excess_empirical():
     emp = _dist1d([0], [7])
     theo = _dist1d([1], [4])
 
-    W_asym = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True)
+    W_asym = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True
+    )
     W_asym.add_experimental_trash(10)
     W_asym.build()
     W_asym.solve()
@@ -400,7 +417,9 @@ def test_signal_part_derivatives_matches_simple_trash_excess_theoretical():
     emp = _dist1d([0], [3])
     theo = _dist1d([1], [7])
 
-    W_asym = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True)
+    W_asym = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True
+    )
     W_asym.add_theoretical_trash(10)
     W_asym.build()
     W_asym.solve()

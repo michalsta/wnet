@@ -25,10 +25,10 @@ from wnet.distribution import Distribution, Distribution_1D
 from wnet.distances import DistanceMetric
 from wnet.wnet_cpp import CWassersteinNetworkFactory, NetworkSimplex
 
-
 # ---------------------------------------------------------------------------
 # Warm-restart shim — replace the body when the API is ready
 # ---------------------------------------------------------------------------
+
 
 def warm_solve(net, point=None):
     """Re-solve using a warm restart.
@@ -48,11 +48,13 @@ def warm_solve(net, point=None):
 # Result capture
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SolveResults:
     """Snapshot of every observable quantity after a solve."""
+
     total_cost: int
-    flows: dict        # {target_id: sorted list of (emp_idx, theo_idx, flow)}
+    flows: dict  # {target_id: sorted list of (emp_idx, theo_idx, flow)}
     peak_derivs: dict  # {(spec_id, peak_idx): deriv}
     spec_derivs: dict  # {spec_id: deriv}
 
@@ -102,7 +104,9 @@ def _capture_W(W, n_targets: int) -> SolveResults:
         for pk, d in peaks.items():
             peak_derivs[(int(spec_id), int(pk))] = int(d)
 
-    spec_derivs = {int(k): int(v) for k, v in W.spectrum_proportion_derivatives().items()}
+    spec_derivs = {
+        int(k): int(v) for k, v in W.spectrum_proportion_derivatives().items()
+    }
 
     return SolveResults(
         total_cost=W.total_cost(),
@@ -115,9 +119,9 @@ def _capture_W(W, n_targets: int) -> SolveResults:
 def _assert_exact(fresh: SolveResults, warm: SolveResults, tag: str = "") -> None:
     """All quantities must match exactly (same point, same basis expected)."""
     prefix = f"[{tag}] " if tag else ""
-    assert fresh.total_cost == warm.total_cost, (
-        f"{prefix}cost: fresh={fresh.total_cost} warm={warm.total_cost}"
-    )
+    assert (
+        fresh.total_cost == warm.total_cost
+    ), f"{prefix}cost: fresh={fresh.total_cost} warm={warm.total_cost}"
     assert fresh.flows == warm.flows, f"{prefix}flows differ"
     assert fresh.peak_derivs == warm.peak_derivs, f"{prefix}peak_derivs differ"
     assert fresh.spec_derivs == warm.spec_derivs, f"{prefix}spec_derivs differ"
@@ -133,12 +137,14 @@ def _marginals(flow_list):
     return row, col
 
 
-def _assert_cost_and_marginals(r1: SolveResults, r2: SolveResults, tag: str = "") -> None:
+def _assert_cost_and_marginals(
+    r1: SolveResults, r2: SolveResults, tag: str = ""
+) -> None:
     """Cost and flow marginals must match; exact decomposition may differ."""
     prefix = f"[{tag}] " if tag else ""
-    assert r1.total_cost == r2.total_cost, (
-        f"{prefix}cost: {r1.total_cost} vs {r2.total_cost}"
-    )
+    assert (
+        r1.total_cost == r2.total_cost
+    ), f"{prefix}cost: {r1.total_cost} vs {r2.total_cost}"
     for t_id in set(r1.flows) | set(r2.flows):
         row1, col1 = _marginals(r1.flows.get(t_id, []))
         row2, col2 = _marginals(r2.flows.get(t_id, []))
@@ -151,6 +157,7 @@ def _assert_cost_and_marginals(r1: SolveResults, r2: SolveResults, tag: str = ""
 # ---------------------------------------------------------------------------
 # Helpers: build and solve (C++ layer)
 # ---------------------------------------------------------------------------
+
 
 def _build_and_solve_cpp(factory_fn, base, targets, trash_cost, max_dist, point=None):
     vec_base = base.vecdist
@@ -166,7 +173,9 @@ def _build_and_solve_cpp(factory_fn, base, targets, trash_cost, max_dist, point=
     return net
 
 
-def _build_and_solve_W(base, targets, trash_cost, max_dist, point=None, distance=DistanceMetric.L1, **kw):
+def _build_and_solve_W(
+    base, targets, trash_cost, max_dist, point=None, distance=DistanceMetric.L1, **kw
+):
     W = WassersteinNetwork(base, targets, distance, max_distance=max_dist, **kw)
     if trash_cost is not None:
         W.add_simple_trash(trash_cost)
@@ -182,6 +191,7 @@ def _build_and_solve_W(base, targets, trash_cost, max_dist, point=None, distance
 # 1.  Idempotency: solve() → warm_solve() at same point
 # ===========================================================================
 
+
 class TestIdempotency:
     """warm_solve() at the same point must reproduce all results exactly."""
 
@@ -189,7 +199,9 @@ class TestIdempotency:
         """Balanced 1D — trash is required by the solver but stays at zero flow."""
         base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([3, 6, 3]))
         target = Distribution_1D(np.array([1.0, 6.0, 9.0]), np.array([3, 6, 3]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [target], 1000, 1000)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [target], 1000, 1000
+        )
         fresh = _capture_cpp(net, 1)
         warm_solve(net)
         _assert_exact(fresh, _capture_cpp(net, 1), "1d_chain_balanced_masses")
@@ -197,7 +209,9 @@ class TestIdempotency:
     def test_1d_chain_simple_trash(self):
         base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
         target = Distribution_1D(np.array([1.0, 6.0]), np.array([4, 6]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [target], 50, 1000)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [target], 50, 1000
+        )
         fresh = _capture_cpp(net, 1)
         warm_solve(net)
         _assert_exact(fresh, _capture_cpp(net, 1), "1d_chain_simple_trash")
@@ -205,7 +219,9 @@ class TestIdempotency:
     def test_1d_dense_simple_trash(self):
         base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
         target = Distribution_1D(np.array([1.0, 6.0]), np.array([4, 6]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create, base, [target], 50, 1000)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create, base, [target], 50, 1000
+        )
         fresh = _capture_cpp(net, 1)
         warm_solve(net)
         _assert_exact(fresh, _capture_cpp(net, 1), "1d_dense_simple_trash")
@@ -224,7 +240,9 @@ class TestIdempotency:
         """More empirical than theoretical — excess goes to trash."""
         base = Distribution_1D(np.array([0.0]), np.array([10]))
         target = Distribution_1D(np.array([10.0]), np.array([5]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [target], 100, 1000)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [target], 100, 1000
+        )
         fresh = _capture_cpp(net, 1)
         warm_solve(net)
         _assert_exact(fresh, _capture_cpp(net, 1), "1d_chain_excess_base")
@@ -233,16 +251,22 @@ class TestIdempotency:
         """More theoretical than empirical — excess goes to trash."""
         base = Distribution_1D(np.array([0.0]), np.array([5]))
         target = Distribution_1D(np.array([10.0]), np.array([10]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [target], 100, 1000)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [target], 100, 1000
+        )
         fresh = _capture_cpp(net, 1)
         warm_solve(net)
         _assert_exact(fresh, _capture_cpp(net, 1), "1d_chain_excess_theo")
 
     def test_1d_chain_with_truncation(self):
         """max_distance splits the problem into components."""
-        base = Distribution_1D(np.array([0.0, 1.0, 100.0, 101.0]), np.array([3, 3, 5, 5]))
+        base = Distribution_1D(
+            np.array([0.0, 1.0, 100.0, 101.0]), np.array([3, 3, 5, 5])
+        )
         target = Distribution_1D(np.array([2.0]), np.array([6]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [target], 20, 5)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [target], 20, 5
+        )
         fresh = _capture_cpp(net, 1)
         warm_solve(net)
         _assert_exact(fresh, _capture_cpp(net, 1), "1d_chain_truncation")
@@ -265,7 +289,9 @@ class TestIdempotency:
         """Multiple successive warm restarts must not drift from the first result."""
         base = Distribution_1D(np.array([0.0, 5.0, 10.0, 15.0]), np.array([4, 6, 2, 3]))
         target = Distribution_1D(np.array([1.0, 6.0, 14.0]), np.array([4, 6, 5]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [target], 50, 1000)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [target], 50, 1000
+        )
         fresh = _capture_cpp(net, 1)
         for _ in range(n_repeats):
             warm_solve(net)
@@ -276,6 +302,7 @@ class TestIdempotency:
 # 2.  Asymmetric trash: idempotency under warm restart
 # ===========================================================================
 
+
 class TestAsymmetricTrashIdempotency:
     """Results with experimental/theoretical trash must be stable after warm restart."""
 
@@ -284,7 +311,9 @@ class TestAsymmetricTrashIdempotency:
         target = Distribution_1D(np.array([5.0]), np.array([10]))
         vec_base = base.vecdist
         vec_target = [target.vecdist]
-        net = CWassersteinNetworkFactory.create_1d(vec_base, vec_target, DistanceMetric.L1, 1000)
+        net = CWassersteinNetworkFactory.create_1d(
+            vec_base, vec_target, DistanceMetric.L1, 1000
+        )
         net.add_experimental_trash(30)
         net.build(NetworkSimplex())
         net.solve()
@@ -297,7 +326,9 @@ class TestAsymmetricTrashIdempotency:
         target = Distribution_1D(np.array([10.0, 20.0]), np.array([5, 5]))
         vec_base = base.vecdist
         vec_target = [target.vecdist]
-        net = CWassersteinNetworkFactory.create_1d(vec_base, vec_target, DistanceMetric.L1, 1000)
+        net = CWassersteinNetworkFactory.create_1d(
+            vec_base, vec_target, DistanceMetric.L1, 1000
+        )
         net.add_theoretical_trash(30)
         net.build(NetworkSimplex())
         net.solve()
@@ -310,6 +341,7 @@ class TestAsymmetricTrashIdempotency:
 # 3.  Multi-spectrum idempotency
 # ===========================================================================
 
+
 class TestMultiSpectrumIdempotency:
     """Warm restart must preserve results for networks with multiple target spectra."""
 
@@ -318,7 +350,9 @@ class TestMultiSpectrumIdempotency:
         base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
         t1 = Distribution_1D(np.array([1.0, 6.0]), np.array([4, 6]))
         t2 = Distribution_1D(np.array([9.5]), np.array([2]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [t1, t2], 50, 1000)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [t1, t2], 50, 1000
+        )
         fresh = _capture_cpp(net, 2)
         warm_solve(net)
         _assert_exact(fresh, _capture_cpp(net, 2), "two_spectra_no_point")
@@ -328,7 +362,9 @@ class TestMultiSpectrumIdempotency:
         base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([4, 6, 2]))
         t1 = Distribution_1D(np.array([1.0, 6.0]), np.array([4, 6]))
         t2 = Distribution_1D(np.array([9.5]), np.array([2]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [t1, t2], 50, 1000)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [t1, t2], 50, 1000
+        )
         net.solve(np.array([0.5, 0.5]))
         fresh = _capture_cpp(net, 2)
         warm_solve(net, np.array([0.5, 0.5]))
@@ -339,7 +375,9 @@ class TestMultiSpectrumIdempotency:
         base = Distribution_1D(np.array([0.0, 5.0, 10.0]), np.array([10, 10, 10]))
         t1 = Distribution_1D(np.array([1.0, 6.0]), np.array([5, 5]))
         t2 = Distribution_1D(np.array([9.5, 11.0]), np.array([5, 5]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [t1, t2], 50, 1000)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [t1, t2], 50, 1000
+        )
         pt = np.array([0.7, 0.3])
         net.solve(pt)
         fresh = _capture_cpp(net, 2)
@@ -352,7 +390,9 @@ class TestMultiSpectrumIdempotency:
         t2 = Distribution_1D(np.array([9.5]), np.array([4]))
         t3 = Distribution_1D(np.array([14.0, 16.0]), np.array([3, 3]))
         pt = np.array([0.4, 0.3, 0.3])
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [t1, t2, t3], 80, 1000)
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [t1, t2, t3], 80, 1000
+        )
         net.solve(pt)
         fresh = _capture_cpp(net, 3)
         warm_solve(net, pt)
@@ -363,6 +403,7 @@ class TestMultiSpectrumIdempotency:
 # 4.  Point-cycling: solve(p1) → solve(p2) → … → warm_solve(p1)
 #     Results must match a fresh cold solve at p1.
 # ===========================================================================
+
 
 class TestPointCycling:
     """
@@ -378,7 +419,11 @@ class TestPointCycling:
     def _fresh_at_point(self, base, targets, trash_cost, max_dist, point):
         """Build a brand-new network and solve at point."""
         net = _build_and_solve_cpp(
-            CWassersteinNetworkFactory.create_1d, base, targets, trash_cost, max_dist,
+            CWassersteinNetworkFactory.create_1d,
+            base,
+            targets,
+            trash_cost,
+            max_dist,
             point=point,
         )
         return net, _capture_cpp(net, len(targets))
@@ -392,7 +437,12 @@ class TestPointCycling:
         fresh_net, fresh = self._fresh_at_point(base, [target], 50, 1000, orig_pt)
 
         net = _build_and_solve_cpp(
-            CWassersteinNetworkFactory.create_1d, base, [target], 50, 1000, point=orig_pt
+            CWassersteinNetworkFactory.create_1d,
+            base,
+            [target],
+            50,
+            1000,
+            point=orig_pt,
         )
         for pt in other_pts:
             net.solve(pt)
@@ -410,7 +460,12 @@ class TestPointCycling:
         fresh_net, fresh = self._fresh_at_point(base, [t1, t2], 50, 1000, orig_pt)
 
         net = _build_and_solve_cpp(
-            CWassersteinNetworkFactory.create_1d, base, [t1, t2], 50, 1000, point=orig_pt
+            CWassersteinNetworkFactory.create_1d,
+            base,
+            [t1, t2],
+            50,
+            1000,
+            point=orig_pt,
         )
         for pt in [np.array([0.3, 0.7]), np.array([1.5, 0.5]), np.array([0.8, 1.2])]:
             net.solve(pt)
@@ -456,10 +511,17 @@ class TestPointCycling:
         max_dist = int(rng.integers(50, 300))
         orig_pt = np.array([1.0])
 
-        fresh_net, fresh = self._fresh_at_point(base, [target], trash_cost, max_dist, orig_pt)
+        fresh_net, fresh = self._fresh_at_point(
+            base, [target], trash_cost, max_dist, orig_pt
+        )
 
         net = _build_and_solve_cpp(
-            CWassersteinNetworkFactory.create_1d, base, [target], trash_cost, max_dist, point=orig_pt
+            CWassersteinNetworkFactory.create_1d,
+            base,
+            [target],
+            trash_cost,
+            max_dist,
+            point=orig_pt,
         )
         n_other = int(rng.integers(3, 8))
         for pt_val in rng.uniform(0.2, 3.0, size=n_other):
@@ -468,8 +530,7 @@ class TestPointCycling:
 
         warm = _capture_cpp(net, 1)
         _assert_cost_and_marginals(
-            fresh, warm,
-            f"seed={seed} m={m} n={n} max_dist={max_dist}"
+            fresh, warm, f"seed={seed} m={m} n={n} max_dist={max_dist}"
         )
 
     @pytest.mark.long
@@ -493,10 +554,17 @@ class TestPointCycling:
         max_dist = 300
         orig_pt = np.array([0.5, 0.5])
 
-        fresh_net, fresh = self._fresh_at_point(base, [t1, t2], trash_cost, max_dist, orig_pt)
+        fresh_net, fresh = self._fresh_at_point(
+            base, [t1, t2], trash_cost, max_dist, orig_pt
+        )
 
         net = _build_and_solve_cpp(
-            CWassersteinNetworkFactory.create_1d, base, [t1, t2], trash_cost, max_dist, point=orig_pt
+            CWassersteinNetworkFactory.create_1d,
+            base,
+            [t1, t2],
+            trash_cost,
+            max_dist,
+            point=orig_pt,
         )
         for _ in range(5):
             p = rng.uniform(0.2, 1.5, size=2)
@@ -504,15 +572,13 @@ class TestPointCycling:
         warm_solve(net, orig_pt)
 
         warm = _capture_cpp(net, 2)
-        _assert_cost_and_marginals(
-            fresh, warm,
-            f"seed={seed} m={m} n1={n1} n2={n2}"
-        )
+        _assert_cost_and_marginals(fresh, warm, f"seed={seed} m={m} n1={n1} n2={n2}")
 
 
 # ===========================================================================
 # 5.  Chain vs dense factory: both must be stable after warm restart
 # ===========================================================================
+
 
 class TestFactoryParity:
     """After warm restart, chain and dense factories must still agree on cost."""
@@ -559,21 +625,30 @@ class TestFactoryParity:
         chain_cost_1 = chain_net.total_cost()
         dense_cost_1 = dense_net.total_cost()
         if chain_cost_1 != dense_cost_1:
-            pytest.skip(f"seed={seed}: cost divergence before restart (max_dist truncation)")
+            pytest.skip(
+                f"seed={seed}: cost divergence before restart (max_dist truncation)"
+            )
 
         warm_solve(chain_net)
         warm_solve(dense_net)
 
         chain_cost_2 = chain_net.total_cost()
         dense_cost_2 = dense_net.total_cost()
-        assert chain_cost_1 == chain_cost_2, f"seed={seed}: chain cost changed after warm restart"
-        assert dense_cost_1 == dense_cost_2, f"seed={seed}: dense cost changed after warm restart"
-        assert chain_cost_2 == dense_cost_2, f"seed={seed}: parity lost after warm restart"
+        assert (
+            chain_cost_1 == chain_cost_2
+        ), f"seed={seed}: chain cost changed after warm restart"
+        assert (
+            dense_cost_1 == dense_cost_2
+        ), f"seed={seed}: dense cost changed after warm restart"
+        assert (
+            chain_cost_2 == dense_cost_2
+        ), f"seed={seed}: parity lost after warm restart"
 
 
 # ===========================================================================
 # 6.  Derivative stability
 # ===========================================================================
+
 
 class TestDerivativeStability:
     """Derivatives must be identical before and after warm restart."""
@@ -581,14 +656,20 @@ class TestDerivativeStability:
     def test_peak_derivatives_stable(self):
         base = Distribution_1D(np.array([0.0]), np.array([10]))
         target = Distribution_1D(np.array([10.0]), np.array([5]))
-        net = _build_and_solve_cpp(CWassersteinNetworkFactory.create_1d, base, [target], 100, 1000)
-        d_before = {(int(s), int(p)): int(d)
-                    for i in range(net.no_subgraphs())
-                    for s, p, d in net.get_subgraph(i).signal_part_derivatives()}
+        net = _build_and_solve_cpp(
+            CWassersteinNetworkFactory.create_1d, base, [target], 100, 1000
+        )
+        d_before = {
+            (int(s), int(p)): int(d)
+            for i in range(net.no_subgraphs())
+            for s, p, d in net.get_subgraph(i).signal_part_derivatives()
+        }
         warm_solve(net)
-        d_after = {(int(s), int(p)): int(d)
-                   for i in range(net.no_subgraphs())
-                   for s, p, d in net.get_subgraph(i).signal_part_derivatives()}
+        d_after = {
+            (int(s), int(p)): int(d)
+            for i in range(net.no_subgraphs())
+            for s, p, d in net.get_subgraph(i).signal_part_derivatives()
+        }
         assert d_before == d_after
 
     def test_spectrum_proportion_derivatives_stable(self):
@@ -630,9 +711,17 @@ class TestDerivativeStability:
         rng = np.random.default_rng(seed)
         n_base = int(rng.integers(2, 8))
         n_target = int(rng.integers(2, 8))
-        bp = (rng.uniform(0, 100, size=n_base) * 1000).astype(np.int64).astype(np.float64)
+        bp = (
+            (rng.uniform(0, 100, size=n_base) * 1000)
+            .astype(np.int64)
+            .astype(np.float64)
+        )
         bi = rng.integers(1, 20, size=n_base).astype(np.int64)
-        tp = (rng.uniform(0, 100, size=n_target) * 1000).astype(np.int64).astype(np.float64)
+        tp = (
+            (rng.uniform(0, 100, size=n_target) * 1000)
+            .astype(np.int64)
+            .astype(np.float64)
+        )
         ti = rng.integers(1, 20, size=n_target).astype(np.int64)
         md = 50000
 
@@ -652,12 +741,15 @@ class TestDerivativeStability:
 
         assert W.total_cost() == fresh_cost, f"seed={seed}: cost"
         assert W.signal_part_derivatives() == fresh_peak, f"seed={seed}: peak_derivs"
-        assert W.spectrum_proportion_derivatives() == fresh_spec, f"seed={seed}: spec_derivs"
+        assert (
+            W.spectrum_proportion_derivatives() == fresh_spec
+        ), f"seed={seed}: spec_derivs"
 
 
 # ===========================================================================
 # 7.  Large randomized idempotency
 # ===========================================================================
+
 
 class TestLargeIdempotency:
     """Warm-restart idempotency on larger random networks."""
@@ -705,6 +797,7 @@ class TestLargeIdempotency:
 # ===========================================================================
 # 8.  Cold vs warm parity: successive solve() calls must agree exactly
 # ===========================================================================
+
 
 class TestColdVsWarmParity:
     """
@@ -763,7 +856,13 @@ class TestColdVsWarmParity:
         cold, warm = self._cpp_pair(
             CWassersteinNetworkFactory.create_1d, base, [target], 50, 1000
         )
-        pts = [np.array([0.5]), np.array([1.5]), np.array([2.0]), np.array([0.2]), np.array([1.0])]
+        pts = [
+            np.array([0.5]),
+            np.array([1.5]),
+            np.array([2.0]),
+            np.array([0.2]),
+            np.array([1.0]),
+        ]
         self._drive(cold, warm, pts, 1, _capture_cpp)
 
     def test_1d_dense_single_spectrum(self):
@@ -772,7 +871,13 @@ class TestColdVsWarmParity:
         cold, warm = self._cpp_pair(
             CWassersteinNetworkFactory.create, base, [target], 50, 1000
         )
-        pts = [np.array([0.5]), np.array([1.5]), np.array([2.0]), np.array([0.2]), np.array([1.0])]
+        pts = [
+            np.array([0.5]),
+            np.array([1.5]),
+            np.array([2.0]),
+            np.array([0.2]),
+            np.array([1.0]),
+        ]
         self._drive(cold, warm, pts, 1, _capture_cpp)
 
     def test_1d_chain_two_spectra(self):
@@ -796,7 +901,13 @@ class TestColdVsWarmParity:
         base = Distribution_1D(np.array([0.0, 50.0]), np.array([8, 8]))
         target = Distribution_1D(np.array([10.0, 40.0, 60.0]), np.array([3, 2, 5]))
         cold, warm = self._W_pair(base, [target], 100, 200)
-        pts = [np.array([0.5]), np.array([1.5]), np.array([2.0]), np.array([0.3]), np.array([1.0])]
+        pts = [
+            np.array([0.5]),
+            np.array([1.5]),
+            np.array([2.0]),
+            np.array([0.3]),
+            np.array([1.0]),
+        ]
         self._drive(cold, warm, pts, 1, _capture_W)
 
     def test_wrapper_two_spectra(self):

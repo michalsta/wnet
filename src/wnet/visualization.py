@@ -1,8 +1,7 @@
-
-
 def show_graph(G):
     import matplotlib.pyplot as plt
     import networkx as nx
+
     pos = nx.multipartite_layout(G, subset_key="layer")
     node_colors = []
     for _, data in G.nodes(data=True):
@@ -15,7 +14,8 @@ def show_graph(G):
         else:
             node_colors.append("lightblue")
     edge_labels = {
-        (u, v): f"cost: {d['weight']}\n capacity: {d['capacity']}" + (f"\n flow: {d['flow']}" if "flow" in d else "")
+        (u, v): f"cost: {d['weight']}\n capacity: {d['capacity']}"
+        + (f"\n flow: {d['flow']}" if "flow" in d else "")
         for u, v, d in G.edges(data=True)
     }
     nx.draw(
@@ -31,6 +31,7 @@ def show_graph(G):
 
 def print_graph(G):
     import networkx as nx
+
     for node in G.nodes(data=True):
         print(f"Node {node[0]}: {node[1]}")
     for edge in G.edges(data=True):

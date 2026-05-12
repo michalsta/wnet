@@ -54,7 +54,9 @@ class WassersteinNetwork:
             solver = NetworkSimplex()
         elif solver is None:
             if method not in self._SOLVER_METHODS:
-                raise ValueError(f"Unknown method {method!r}. Choose from: {list(self._SOLVER_METHODS)}")
+                raise ValueError(
+                    f"Unknown method {method!r}. Choose from: {list(self._SOLVER_METHODS)}"
+                )
             solver = self._SOLVER_METHODS[method]()
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
@@ -62,10 +64,12 @@ class WassersteinNetwork:
         vec_targets = [t.vecdist for t in target_distributions]
         if base_distribution.dimension == 1 and not force_dense_1d:
             self.wnet = CWassersteinNetworkFactory.create_1d(
-                vec_base, vec_targets, distance, max_distance)
+                vec_base, vec_targets, distance, max_distance
+            )
         else:
             self.wnet = CWassersteinNetworkFactory.create(
-                vec_base, vec_targets, distance, max_distance)
+                vec_base, vec_targets, distance, max_distance
+            )
         self.add_simple_trash = self.wnet.add_simple_trash
         self.add_experimental_trash = self.wnet.add_experimental_trash
         self.add_theoretical_trash = self.wnet.add_theoretical_trash
@@ -163,8 +167,8 @@ class SubgraphWrapper:
         self._obj = obj
 
     def __getattr__(self, name):
-        if name == '_obj':
-            raise AttributeError('_obj')
+        if name == "_obj":
+            raise AttributeError("_obj")
         return getattr(self._obj, name)
 
     def as_networkx(self) -> "networkx.DiGraph":
