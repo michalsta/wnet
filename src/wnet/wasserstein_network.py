@@ -94,6 +94,7 @@ class WassersteinNetwork:
         self.count_theoretical_to_sink_edges = self.wnet.count_theoretical_to_sink_edges
         self.count_src_to_empirical_edges = self.wnet.count_src_to_empirical_edges
         self.count_simple_trash_edges = self.wnet.count_simple_trash_edges
+        self.count_chain_edges = self.wnet.count_chain_edges
         self.no_theoretical_spectra = self.wnet.no_theoretical_spectra
         self.theoretical_spectra_sizes = self.wnet.theoretical_spectra_sizes
 

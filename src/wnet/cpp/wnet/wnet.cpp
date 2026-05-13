@@ -151,7 +151,16 @@ NB_MODULE(wnet_cpp, m) {
         .def("signal_part_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::signal_part_derivatives)
         .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::spectrum_proportion_derivatives)
         .def("warm_start_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::warm_start_count)
-        .def("cold_start_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::cold_start_count);
+        .def("cold_start_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::cold_start_count)
+        .def("count_empirical_nodes", &WassersteinNetworkSubgraph<int64_t, int64_t>::count_nodes_of_type<EmpiricalNode<int64_t>>)
+        .def("count_theoretical_nodes", &WassersteinNetworkSubgraph<int64_t, int64_t>::count_nodes_of_type<TheoreticalNode<int64_t>>)
+        .def("count_matching_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::count_edges_of_type<MatchingEdge>)
+        .def("count_chain_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::count_edges_of_type<ChainEdge>)
+        .def("count_src_to_empirical_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::count_edges_of_type<SrcToEmpiricalEdge>)
+        .def("count_theoretical_to_sink_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::count_edges_of_type<TheoreticalToSinkEdge>)
+        .def("count_simple_trash_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::count_edges_of_type<SimpleTrashEdge>)
+        .def("matching_density", &WassersteinNetworkSubgraph<int64_t, int64_t>::matching_density)
+        .def("theoretical_spectra_involved", &WassersteinNetworkSubgraph<int64_t, int64_t>::theoretical_spectra_involved);
 
         nb::class_<WassersteinNetworkSubgraph<int64_t, double>>(m, "CWassersteinNetworkSubgraphFloat")
         .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode<double>>&, const std::vector<FlowEdge<double>*>&, size_t>())
@@ -173,7 +182,16 @@ NB_MODULE(wnet_cpp, m) {
         .def("signal_part_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::signal_part_derivatives)
         .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::spectrum_proportion_derivatives)
         .def("warm_start_count", &WassersteinNetworkSubgraph<int64_t, double>::warm_start_count)
-        .def("cold_start_count", &WassersteinNetworkSubgraph<int64_t, double>::cold_start_count);
+        .def("cold_start_count", &WassersteinNetworkSubgraph<int64_t, double>::cold_start_count)
+        .def("count_empirical_nodes", &WassersteinNetworkSubgraph<int64_t, double>::count_nodes_of_type<EmpiricalNode<double>>)
+        .def("count_theoretical_nodes", &WassersteinNetworkSubgraph<int64_t, double>::count_nodes_of_type<TheoreticalNode<double>>)
+        .def("count_matching_edges", &WassersteinNetworkSubgraph<int64_t, double>::count_edges_of_type<MatchingEdge>)
+        .def("count_chain_edges", &WassersteinNetworkSubgraph<int64_t, double>::count_edges_of_type<ChainEdge>)
+        .def("count_src_to_empirical_edges", &WassersteinNetworkSubgraph<int64_t, double>::count_edges_of_type<SrcToEmpiricalEdge>)
+        .def("count_theoretical_to_sink_edges", &WassersteinNetworkSubgraph<int64_t, double>::count_edges_of_type<TheoreticalToSinkEdge>)
+        .def("count_simple_trash_edges", &WassersteinNetworkSubgraph<int64_t, double>::count_edges_of_type<SimpleTrashEdge>)
+        .def("matching_density", &WassersteinNetworkSubgraph<int64_t, double>::matching_density)
+        .def("theoretical_spectra_involved", &WassersteinNetworkSubgraph<int64_t, double>::theoretical_spectra_involved);
 
     nb::class_<WassersteinNetwork<int64_t, int64_t>>(m, "CWassersteinNetwork")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
