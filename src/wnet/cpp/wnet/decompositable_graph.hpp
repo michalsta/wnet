@@ -713,7 +713,7 @@ public:
     }
 
     double matching_density() const {
-        const double nominator = count_edges_of_type<MatchingEdge>();
+        const double nominator = count_edges_of_type<MatchingEdge>() + count_edges_of_type<ChainEdge>() / 2.0;
         const double denominator = count_nodes_of_type<EmpiricalNode<intensity_type>>() * count_nodes_of_type<TheoreticalNode<intensity_type>>();
         return nominator / denominator;
     }
@@ -1461,7 +1461,7 @@ public:
     }
 
     double matching_density() const {
-        const double nominator = count_edges_of_type<MatchingEdge>();
+        const double nominator = count_edges_of_type<MatchingEdge>() + count_edges_of_type<ChainEdge>() / 2.0;
         double denominator = 0;
         for (const auto& flow_subgraph : flow_subgraphs)
             denominator += flow_subgraph->template count_nodes_of_type<EmpiricalNode<intensity_type>>() * flow_subgraph->template count_nodes_of_type<TheoreticalNode<intensity_type>>();
