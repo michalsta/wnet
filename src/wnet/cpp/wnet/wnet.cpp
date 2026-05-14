@@ -1,4 +1,5 @@
 #include <iostream>
+#include <memory>
 #include <vector>
 #include <array>
 #include <unordered_map>
@@ -208,6 +209,43 @@ NB_MODULE(wnet_cpp, m) {
          { self.update_positions_and_solve(new_emp, new_theo, metric); }, \
          nb::arg("new_empirical"), nb::arg("new_theoretical"), nb::arg("metric"))
 
+// Bind update_positions_and_get_gradient for one triple.
+// Returns (emp_grad [N_emp, DIM], list of theo_grad [N_k, DIM]) as numpy arrays.
+#define BIND_UPDATE_AND_GET_GRADIENT(NET_ALIAS, INTENSITY_TYPE, DIM) \
+    .def("update_positions_and_get_gradient", \
+         [](NET_ALIAS& self, \
+            const VectorDistribution<DIM, double, INTENSITY_TYPE>* new_emp, \
+            const std::vector<VectorDistribution<DIM, double, INTENSITY_TYPE>*>& new_theo, \
+            DistanceMetric metric) { \
+             const size_t n_emp = new_emp->size(); \
+             std::unique_ptr<double[]> emp_buf(new double[n_emp * DIM]()); \
+             std::span<double> emp_span(emp_buf.get(), n_emp * DIM); \
+             std::vector<std::unique_ptr<double[]>> theo_bufs; \
+             std::vector<std::span<double>> theo_spans; \
+             std::vector<size_t> theo_sizes; \
+             for (auto* t : new_theo) { \
+                 const size_t n_k = t->size(); \
+                 theo_bufs.push_back(std::unique_ptr<double[]>(new double[n_k * DIM]())); \
+                 theo_spans.emplace_back(theo_bufs.back().get(), n_k * DIM); \
+                 theo_sizes.push_back(n_k); \
+             } \
+             self.update_positions_and_get_gradient<VectorDistribution<DIM, double, INTENSITY_TYPE>>( \
+                 new_emp, new_theo, emp_span, theo_spans, metric); \
+             double* emp_raw = emp_buf.release(); \
+             nb::capsule emp_cap(emp_raw, [](void* p) noexcept { delete[] static_cast<double*>(p); }); \
+             size_t emp_shape[2] = {n_emp, (size_t)DIM}; \
+             auto emp_arr = nb::ndarray<nb::numpy, double, nb::ndim<2>>(emp_raw, 2, emp_shape, emp_cap); \
+             nb::list theo_list; \
+             for (size_t s = 0; s < theo_bufs.size(); ++s) { \
+                 double* raw = theo_bufs[s].release(); \
+                 nb::capsule cap(raw, [](void* p) noexcept { delete[] static_cast<double*>(p); }); \
+                 size_t theo_shape[2] = {theo_sizes[s], (size_t)DIM}; \
+                 theo_list.append(nb::ndarray<nb::numpy, double, nb::ndim<2>>(raw, 2, theo_shape, cap)); \
+             } \
+             return nb::make_tuple(std::move(emp_arr), std::move(theo_list)); \
+         }, \
+         nb::arg("new_empirical"), nb::arg("new_theoretical"), nb::arg("metric"))
+
     nb::class_<WNetII>(m, "CWassersteinNetwork")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
         .def("add_simple_trash", &WassersteinNetwork<int64_t, int64_t>::add_simple_trash)
@@ -267,7 +305,27 @@ NB_MODULE(wnet_cpp, m) {
         BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 17)
         BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 18)
         BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 19)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 20);
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 20)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  1)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  2)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  3)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  4)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  5)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  6)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  7)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  8)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  9)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 10)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 11)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 12)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 13)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 14)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 15)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 16)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 17)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 18)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 19)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 20);
 
     nb::class_<WassersteinNetwork<int64_t, double>>(m, "CWassersteinNetworkFloat")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
@@ -308,7 +366,27 @@ NB_MODULE(wnet_cpp, m) {
         .def("signal_part_derivatives", &WassersteinNetwork<int64_t, double>::signal_part_derivatives)
         .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, double>::spectrum_proportion_derivatives)
         .def("warm_start_count", &WassersteinNetwork<int64_t, double>::warm_start_count)
-        .def("cold_start_count", &WassersteinNetwork<int64_t, double>::cold_start_count);
+        .def("cold_start_count", &WassersteinNetwork<int64_t, double>::cold_start_count)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  1)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  2)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  3)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  4)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  5)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  6)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  7)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  8)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  9)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 10)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 11)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 12)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 13)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 14)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 15)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 16)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 17)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 18)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 19)
+        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 20);
 
     nb::class_<Distribution<LEMON_INT>>(m, "CDistribution")
         .def(nb::init<nb::ndarray<nb::shape<-1, -1>>, nb::ndarray<LEMON_INT, nb::shape<-1>>>(), nb::arg().noconvert(), nb::arg().noconvert())

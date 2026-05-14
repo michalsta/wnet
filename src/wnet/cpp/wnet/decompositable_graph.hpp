@@ -893,6 +893,38 @@ public:
         return _chain_topo.has_value() ? _chain_topo->order : empty;
     }
 
+    // Accumulate position gradients from this subgraph into caller-owned spans.
+    // emp_grad is flat [N_emp * DIM] row-major; theo_grads[s] is [N_s * DIM] row-major.
+    // Caller must zero both before the first call (multiple subgraphs accumulate additively).
+    // Only MatchingEdge arcs with nonzero flow contribute.  Allocates nothing.
+    template<typename Distribution_t, typename DistMetric>
+    void accumulate_position_gradients(
+        const Distribution_t* new_empirical,
+        const std::vector<Distribution_t*>& new_theoretical,
+        std::span<double> emp_grad,
+        std::vector<std::span<double>>& theo_grads
+    ) const {
+        static constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            const auto& edge = edges[ii];
+            if (!std::holds_alternative<MatchingEdge>(edge.get_type())) continue;
+            const VALUE_TYPE flow = _solver_flow(lemon_graph.arcFromId(ii));
+            if (flow == 0) continue;
+            const auto& emp_t  = std::get<EmpiricalNode<intensity_type>>(edge.get_start_node().get_type());
+            const auto& theo_t = std::get<TheoreticalNode<intensity_type>>(edge.get_end_node().get_type());
+            const size_t emp_idx  = emp_t.get_peak_index();
+            const size_t theo_idx = theo_t.get_peak_index();
+            const size_t spec_id  = theo_t.get_spectrum_id();
+            const auto g = DistMetric::grad_x(
+                new_empirical->get_point(emp_idx),
+                new_theoretical[spec_id]->get_point(theo_idx));
+            for (size_t d = 0; d < DIM; ++d) {
+                emp_grad[emp_idx * DIM + d]             += static_cast<double>(flow) * g[d];
+                theo_grads[spec_id][theo_idx * DIM + d] -= static_cast<double>(flow) * g[d];
+            }
+        }
+    }
+
     // Update MatchingEdge and ChainEdge costs in the already-built LEMON graph,
     // then immediately re-run the solver (warm-restarting for NetworkSimplex).
     // new_costs_per_edge_idx[i] is the new cost for edge i; entries for other
@@ -1535,6 +1567,73 @@ public:
             update_positions_and_solve<Distribution_t, LinfMetric>(new_empirical, new_theoretical);
         else
             throw std::runtime_error("update_positions_and_solve(): unsupported distance metric.");
+    }
+
+    // Layer 1 (span sink): update positions, re-solve, accumulate gradients into
+    // caller-owned zero-initialised spans.  emp_grad is [N_emp * DIM] row-major;
+    // theo_grads[s] is [N_s * DIM] row-major.  Chain (1D) subgraphs not supported.
+    template<typename Distribution_t, typename DistMetric>
+    void update_positions_and_get_gradient(
+        const Distribution_t* new_empirical,
+        const std::vector<Distribution_t*>& new_theoretical,
+        std::span<double> emp_grad,
+        std::vector<std::span<double>> theo_grads
+    ) {
+        update_positions_and_solve<Distribution_t, DistMetric>(new_empirical, new_theoretical);
+        for (auto& sg_ptr : flow_subgraphs) {
+            if (sg_ptr->has_chain_edges())
+                throw std::logic_error(
+                    "update_positions_and_get_gradient: not implemented for 1D chain networks");
+            sg_ptr->template accumulate_position_gradients<Distribution_t, DistMetric>(
+                new_empirical, new_theoretical, emp_grad, theo_grads);
+        }
+    }
+
+    // Runtime-dispatch variant.
+    template<typename Distribution_t>
+    void update_positions_and_get_gradient(
+        const Distribution_t* new_empirical,
+        const std::vector<Distribution_t*>& new_theoretical,
+        std::span<double> emp_grad,
+        std::vector<std::span<double>> theo_grads,
+        DistanceMetric metric
+    ) {
+        if (metric == DistanceMetric::L1)
+            update_positions_and_get_gradient<Distribution_t, L1Metric>(
+                new_empirical, new_theoretical, emp_grad, theo_grads);
+        else if (metric == DistanceMetric::L2)
+            update_positions_and_get_gradient<Distribution_t, L2Metric>(
+                new_empirical, new_theoretical, emp_grad, theo_grads);
+        else if (metric == DistanceMetric::LINF)
+            update_positions_and_get_gradient<Distribution_t, LinfMetric>(
+                new_empirical, new_theoretical, emp_grad, theo_grads);
+        else
+            throw std::runtime_error(
+                "update_positions_and_get_gradient(): unsupported distance metric.");
+    }
+
+    // Layer 2 (vector wrapper): allocates, calls Layer 1, returns by move.
+    template<typename Distribution_t, typename DistMetric>
+    std::pair<std::vector<double>, std::vector<std::vector<double>>>
+    update_positions_and_get_gradient(
+        const Distribution_t* new_empirical,
+        const std::vector<Distribution_t*>& new_theoretical
+    ) {
+        static constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
+        std::vector<double> emp_grad(new_empirical->size() * DIM, 0.0);
+        std::vector<std::vector<double>> theo_grads;
+        theo_grads.reserve(new_theoretical.size());
+        for (const auto* t : new_theoretical)
+            theo_grads.emplace_back(t->size() * DIM, 0.0);
+        std::vector<std::span<double>> theo_spans;
+        theo_spans.reserve(new_theoretical.size());
+        for (auto& v : theo_grads)
+            theo_spans.emplace_back(v.data(), v.size());
+        update_positions_and_get_gradient<Distribution_t, DistMetric>(
+            new_empirical, new_theoretical,
+            std::span<double>(emp_grad.data(), emp_grad.size()),
+            theo_spans);
+        return {std::move(emp_grad), std::move(theo_grads)};
     }
 };
 

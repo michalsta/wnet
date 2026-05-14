@@ -121,6 +121,37 @@ class WassersteinNetwork:
         """
         return dict(self.wnet.spectrum_proportion_derivatives())
 
+    def update_positions_and_get_gradient(
+        self,
+        new_base: Distribution,
+        new_targets: Sequence[Distribution],
+    ):
+        """Update peak positions, re-solve, and return position gradients.
+
+        Returns
+        -------
+        emp_grad : np.ndarray, shape [N_emp, DIM], dtype float64
+            Gradient of total cost w.r.t. each empirical peak position.
+        theo_grads : list of np.ndarray, each shape [N_k, DIM], dtype float64
+            Gradient w.r.t. each theoretical spectrum's peak positions.
+
+        Raises
+        ------
+        logic_error
+            If the network was built with the 1D chain factory (use force_dense_1d=True
+            or DIM >= 2 to get gradients in 1D).
+        """
+        import numpy as np
+
+        new_vec_base = new_base.vecdist
+        new_vec_targets = [t.vecdist for t in new_targets]
+        emp_grad_raw, theo_grads_raw = self.wnet.update_positions_and_get_gradient(
+            new_vec_base, new_vec_targets, self._distance
+        )
+        emp_grad = np.asarray(emp_grad_raw)
+        theo_grads = [np.asarray(g) for g in theo_grads_raw]
+        return emp_grad, theo_grads
+
     def update_positions_and_solve(
         self,
         new_base: Distribution,
