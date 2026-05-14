@@ -1540,12 +1540,6 @@ public:
             const auto& sg_nodes = sg.get_nodes();
             const auto& sg_edges = sg.get_edges();
 
-            // Build node_id -> node* map for chain-order validation.
-            std::unordered_map<LEMON_INDEX, const FlowNode<intensity_type>*> node_map;
-            node_map.reserve(sg_nodes.size());
-            for (const auto& n : sg_nodes)
-                node_map[n.get_id()] = &n;
-
             // Option B: reject position updates that would reorder chain nodes.
             // _build_chain_topology() may walk the chain in either direction
             // (ascending or descending), depending on which endpoint is found
@@ -1554,6 +1548,11 @@ public:
             // have genuinely crossed and the topology is no longer valid.
             const auto& chain_order = sg.get_chain_order();
             if (chain_order.size() >= 2) {
+                // Build node_id -> node* map for chain-order validation.
+                std::unordered_map<LEMON_INDEX, const FlowNode<intensity_type>*> node_map;
+                node_map.reserve(sg_nodes.size());
+                for (const auto& n : sg_nodes)
+                    node_map[n.get_id()] = &n;
                 std::vector<double> chain_pos;
                 chain_pos.reserve(chain_order.size());
                 for (LEMON_INDEX nid : chain_order) {
