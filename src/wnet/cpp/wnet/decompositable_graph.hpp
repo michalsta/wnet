@@ -1481,6 +1481,10 @@ public:
             auto sg_derivs = sg->signal_part_derivatives();
             result.insert(result.end(), sg_derivs.begin(), sg_derivs.end());
         }
+        for (LEMON_INDEX dead_end_id : dead_end_node_ids) {
+            if (auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&nodes[dead_end_id].get_type()))
+                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), _isolated_theo_trash_cost);
+        }
         return result;
     }
 

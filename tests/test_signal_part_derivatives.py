@@ -428,6 +428,51 @@ def test_derivatives_stable_after_repeated_set_point():
         assert actual == predicted
 
 
+def test_signal_part_derivatives_includes_isolated_peaks():
+    """
+    A theoretical peak outside max_distance becomes an isolated dead-end node —
+    no matching edges, always sent to trash.  Its signal_part_derivative must be
+    present and equal to the trash cost, not silently absent.
+    """
+    trash = 20
+    max_dist = 20
+    base = Distribution_1D(np.array([0.0], dtype=np.float64), np.array([5], dtype=np.int64))
+    # peak 0 at pos=10 is within max_dist=20; peak 1 at pos=1000 is isolated
+    target = Distribution_1D(np.array([10.0, 1000.0], dtype=np.float64), np.array([3, 4], dtype=np.int64))
+    W = WassersteinNetwork(base, [target], distance=DistanceMetric.L1, max_distance=max_dist)
+    W.add_simple_trash(trash)
+    W.build()
+    W.solve()
+
+    # 3 matched at cost 10, 2 excess base to trash at 20, isolated peak1 (4 units) to trash at 20
+    assert W.total_cost() == 3 * 10 + 2 * 20 + 4 * 20  # 150
+
+    derivs = W.signal_part_derivatives()
+    # peak 0 (connected): emp(5) > theo(3), derivative = distance - trash = 10 - 20 = -10
+    assert derivs[0][0] == -10
+    # peak 1 (isolated): only route is trash
+    assert 1 in derivs[0], "isolated peak must appear in signal_part_derivatives"
+    assert derivs[0][1] == trash
+
+    # proportion derivative must be consistent: sum(deriv_i * base_intensity_i)
+    # = -10*3 + 20*4 = 50
+    assert W.spectrum_proportion_derivatives() == {0: 50}
+
+    # verify both derivatives by perturbation
+    def perturb(peak_idx, delta):
+        new_int = [3, 4]
+        new_int[peak_idx] += delta
+        t2 = Distribution_1D(np.array([10.0, 1000.0], dtype=np.float64), np.array(new_int, dtype=np.int64))
+        W2 = WassersteinNetwork(base, [t2], distance=DistanceMetric.L1, max_distance=max_dist)
+        W2.add_simple_trash(trash)
+        W2.build()
+        W2.solve()
+        return W2.total_cost()
+
+    assert perturb(0, 1) - 150 == -10
+    assert perturb(1, 1) - 150 == trash  # extra isolated unit goes straight to trash
+
+
 @pytest.mark.long
 @pytest.mark.parametrize("seed", range(20))
 def test_derivatives_stable_after_set_point_random(seed):
