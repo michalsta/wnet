@@ -33,10 +33,11 @@ def build_dense(base, targets, metric, trash=TRASH):
     return W
 
 
-def cost_at(base_pos, tgt_pos_list, base_int, tgt_int_list, metric, trash=TRASH):
+def cost_at(base_pos, tgt_pos_list, base_int, tgt_int_list, metric,
+            trash=TRASH, force_dense_1d=True):
     base    = make_dist(base_pos, base_int)
     targets = [make_dist(tp, ti) for tp, ti in zip(tgt_pos_list, tgt_int_list)]
-    W = WassersteinNetwork(base, targets, metric, force_dense_1d=True)
+    W = WassersteinNetwork(base, targets, metric, force_dense_1d=force_dense_1d)
     W.add_simple_trash(trash)
     W.build()
     W.solve()
@@ -191,16 +192,128 @@ class TestGradient1DDense:
 
 
 # ---------------------------------------------------------------------------
-# 1D chain network — must raise
+# 1D chain network — gradient via FD against chain-network total_cost()
 # ---------------------------------------------------------------------------
 
-class TestChainRaises:
-    def test_chain_raises_logic_error(self):
-        base   = make_dist(np.array([[1000., 3000., 5000.]]), np.array([10, 10, 10]))
-        target = make_dist(np.array([[2000., 4000., 6000.]]), np.array([10, 10, 10]))
-        W = WassersteinNetwork(base, [target], DistanceMetric.L2)
-        W.add_simple_trash(20000)
-        W.build()
-        W.solve()
-        with pytest.raises(Exception):
-            W.update_positions_and_get_gradient(base, [target])
+def _build_chain(base, targets, trash=TRASH):
+    W = WassersteinNetwork(base, targets, DistanceMetric.L2)
+    W.add_simple_trash(trash)
+    W.build()
+    W.solve()
+    return W
+
+
+class TestGradient1DChain:
+    """Gradient tests for the default 1D chain factory (force_dense_1d=False)."""
+
+    def setup_method(self):
+        self.base_pos = np.array([[300., 5700.]], dtype=np.float64)
+        self.tgt_pos  = np.array([[2100., 7400.]], dtype=np.float64)
+        self.base_int = np.array([100, 100], dtype=np.int64)
+        self.tgt_int  = np.array([100, 100], dtype=np.int64)
+
+    def _get_gradient(self):
+        base   = make_dist(self.base_pos, self.base_int)
+        target = make_dist(self.tgt_pos,  self.tgt_int)
+        W = _build_chain(base, [target])
+        emp_grad, theo_grads = W.update_positions_and_get_gradient(base, [target])
+        return emp_grad, theo_grads
+
+    def test_emp_grad_fd(self):
+        emp_grad, _ = self._get_gradient()
+        assert emp_grad.shape == (2, 1)
+
+        for i in range(2):
+            pos_p = self.base_pos.copy(); pos_p[0, i] += EPS
+            pos_m = self.base_pos.copy(); pos_m[0, i] -= EPS
+            cp = cost_at(pos_p, [self.tgt_pos], self.base_int, [self.tgt_int],
+                         DistanceMetric.L2, force_dense_1d=False)
+            cm = cost_at(pos_m, [self.tgt_pos], self.base_int, [self.tgt_int],
+                         DistanceMetric.L2, force_dense_1d=False)
+            fd = (cp - cm) / (2.0 * EPS)
+            assert abs(emp_grad[i, 0] - fd) < ATOL, (
+                f"chain emp peak {i}: grad={emp_grad[i,0]:.4f}, fd={fd:.4f}"
+            )
+
+    def test_theo_grad_fd(self):
+        _, theo_grads = self._get_gradient()
+        assert len(theo_grads) == 1
+        assert theo_grads[0].shape == (2, 1)
+
+        for i in range(2):
+            pos_p = self.tgt_pos.copy(); pos_p[0, i] += EPS
+            pos_m = self.tgt_pos.copy(); pos_m[0, i] -= EPS
+            cp = cost_at(self.base_pos, [pos_p], self.base_int, [self.tgt_int],
+                         DistanceMetric.L2, force_dense_1d=False)
+            cm = cost_at(self.base_pos, [pos_m], self.base_int, [self.tgt_int],
+                         DistanceMetric.L2, force_dense_1d=False)
+            fd = (cp - cm) / (2.0 * EPS)
+            assert abs(theo_grads[0][i, 0] - fd) < ATOL, (
+                f"chain theo peak {i}: grad={theo_grads[0][i,0]:.4f}, fd={fd:.4f}"
+            )
+
+    def test_output_dtype_and_shape(self):
+        emp_grad, theo_grads = self._get_gradient()
+        assert emp_grad.dtype == np.float64
+        assert theo_grads[0].dtype == np.float64
+        assert emp_grad.shape == (2, 1)
+        assert theo_grads[0].shape == (2, 1)
+
+    def test_chain_matches_dense(self):
+        """Chain and dense networks must produce identical gradients."""
+        base   = make_dist(self.base_pos, self.base_int)
+        target = make_dist(self.tgt_pos,  self.tgt_int)
+
+        W_chain = _build_chain(base, [target])
+        emp_chain, theo_chain = W_chain.update_positions_and_get_gradient(base, [target])
+
+        W_dense = build_dense(base, [target], DistanceMetric.L2)
+        emp_dense, theo_dense = W_dense.update_positions_and_get_gradient(base, [target])
+
+        np.testing.assert_allclose(emp_chain,    emp_dense,    atol=ATOL)
+        np.testing.assert_allclose(theo_chain[0], theo_dense[0], atol=ATOL)
+
+    def test_two_targets(self):
+        """Chain gradient with two targets, each base peak matches one target peak."""
+        base_pos = np.array([[300., 5700.]], dtype=np.float64)
+        t1_pos   = np.array([[2100., 7400.]], dtype=np.float64)
+        t2_pos   = np.array([[-500., 4000.]], dtype=np.float64)
+        base_int = np.array([200, 200], dtype=np.int64)
+        t1_int   = np.array([100, 100], dtype=np.int64)
+        t2_int   = np.array([100, 100], dtype=np.int64)
+
+        base    = make_dist(base_pos, base_int)
+        target1 = make_dist(t1_pos, t1_int)
+        target2 = make_dist(t2_pos, t2_int)
+        W = _build_chain(base, [target1, target2])
+        emp_grad, theo_grads = W.update_positions_and_get_gradient(base, [target1, target2])
+
+        assert emp_grad.shape == (2, 1)
+        assert theo_grads[0].shape == (2, 1)
+        assert theo_grads[1].shape == (2, 1)
+
+        tgt_pos_list = [t1_pos, t2_pos]
+        tgt_int_list = [t1_int, t2_int]
+
+        for i in range(2):
+            pos_p = base_pos.copy(); pos_p[0, i] += EPS
+            pos_m = base_pos.copy(); pos_m[0, i] -= EPS
+            cp = cost_at(pos_p, tgt_pos_list, base_int, tgt_int_list,
+                         DistanceMetric.L2, force_dense_1d=False)
+            cm = cost_at(pos_m, tgt_pos_list, base_int, tgt_int_list,
+                         DistanceMetric.L2, force_dense_1d=False)
+            fd = (cp - cm) / (2.0 * EPS)
+            assert abs(emp_grad[i, 0] - fd) < ATOL
+
+        for s, (tgt_pos, tgt_int) in enumerate(zip(tgt_pos_list, tgt_int_list)):
+            for i in range(2):
+                pos_p = tgt_pos.copy(); pos_p[0, i] += EPS
+                pos_m = tgt_pos.copy(); pos_m[0, i] -= EPS
+                tgt_p = tgt_pos_list[:s] + [pos_p] + tgt_pos_list[s+1:]
+                tgt_m = tgt_pos_list[:s] + [pos_m] + tgt_pos_list[s+1:]
+                cp = cost_at(base_pos, tgt_p, base_int, tgt_int_list,
+                             DistanceMetric.L2, force_dense_1d=False)
+                cm = cost_at(base_pos, tgt_m, base_int, tgt_int_list,
+                             DistanceMetric.L2, force_dense_1d=False)
+                fd = (cp - cm) / (2.0 * EPS)
+                assert abs(theo_grads[s][i, 0] - fd) < ATOL

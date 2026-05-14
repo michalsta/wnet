@@ -925,6 +925,61 @@ public:
         }
     }
 
+    // Accumulate position gradients for a chain (1D) subgraph.
+    // Total cost = sum_g (R[g]+L[g])*gap_g.  Moving a peak at chain position k
+    // changes gap_{k-1} by +delta and gap_k by -delta, so the gradient is
+    // dir_sign*(left_total - right_total).  dir_sign is +1 for an ascending
+    // chain (pos[0] < pos[1]) and -1 for descending.
+    // DistMetric is accepted for API symmetry but unused (all 1D metrics agree).
+    template<typename Distribution_t, typename DistMetric>
+    void accumulate_position_gradients_chain(
+        const Distribution_t* new_empirical,
+        const std::vector<Distribution_t*>& new_theoretical,
+        std::span<double> emp_grad,
+        std::vector<std::span<double>>& theo_grads
+    ) const {
+        static constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
+        static_assert(DIM == 1,
+            "accumulate_position_gradients_chain requires 1D distributions");
+
+        if (!_chain_topo.has_value()) return;
+        const auto& topo = *_chain_topo;
+        const size_t K = topo.order.size();
+        if (K < 2) return;
+
+        std::vector<VALUE_TYPE> R(K - 1), L(K - 1);
+        for (size_t g = 0; g < K - 1; ++g) {
+            R[g] = _solver_flow(lemon_graph.arcFromId(topo.right_arc_ids[g]));
+            L[g] = _solver_flow(lemon_graph.arcFromId(topo.left_arc_ids[g]));
+        }
+
+        auto get_node_pos = [&](LEMON_INDEX nid) -> double {
+            const auto& ntype = nodes[nid].get_type();
+            if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&ntype))
+                return new_empirical->get_point(emp->get_peak_index())[0];
+            if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&ntype))
+                return new_theoretical[theo->get_spectrum_id()]->get_point(theo->get_peak_index())[0];
+            return 0.0;
+        };
+        const double dir_sign =
+            (get_node_pos(topo.order[1]) > get_node_pos(topo.order[0])) ? 1.0 : -1.0;
+
+        for (size_t k = 0; k < K; ++k) {
+            const VALUE_TYPE left_total  = (k > 0)     ? R[k-1] + L[k-1] : 0;
+            const VALUE_TYPE right_total = (k < K - 1) ? R[k]   + L[k]   : 0;
+            const double grad_val =
+                dir_sign * static_cast<double>(left_total - right_total);
+
+            const LEMON_INDEX nid = topo.order[k];
+            const auto& ntype = nodes[nid].get_type();
+            if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&ntype)) {
+                emp_grad[emp->get_peak_index()] += grad_val;
+            } else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&ntype)) {
+                theo_grads[theo->get_spectrum_id()][theo->get_peak_index()] += grad_val;
+            }
+        }
+    }
+
     // Update MatchingEdge and ChainEdge costs in the already-built LEMON graph,
     // then immediately re-run the solver (warm-restarting for NetworkSimplex).
     // new_costs_per_edge_idx[i] is the new cost for edge i; entries for other
@@ -1579,13 +1634,20 @@ public:
         std::span<double> emp_grad,
         std::vector<std::span<double>> theo_grads
     ) {
+        static constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
         update_positions_and_solve<Distribution_t, DistMetric>(new_empirical, new_theoretical);
         for (auto& sg_ptr : flow_subgraphs) {
-            if (sg_ptr->has_chain_edges())
-                throw std::logic_error(
-                    "update_positions_and_get_gradient: not implemented for 1D chain networks");
-            sg_ptr->template accumulate_position_gradients<Distribution_t, DistMetric>(
-                new_empirical, new_theoretical, emp_grad, theo_grads);
+            if (sg_ptr->has_chain_edges()) {
+                if constexpr (DIM == 1)
+                    sg_ptr->template accumulate_position_gradients_chain<Distribution_t, DistMetric>(
+                        new_empirical, new_theoretical, emp_grad, theo_grads);
+                else
+                    throw std::logic_error(
+                        "update_positions_and_get_gradient: chain edges require DIM == 1");
+            } else {
+                sg_ptr->template accumulate_position_gradients<Distribution_t, DistMetric>(
+                    new_empirical, new_theoretical, emp_grad, theo_grads);
+            }
         }
     }
 
