@@ -60,6 +60,7 @@ class WassersteinNetwork:
             solver = self._SOLVER_METHODS[method]()
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
+        self._distance = distance
         vec_base = base_distribution.vecdist
         vec_targets = [t.vecdist for t in target_distributions]
         if base_distribution.dimension == 1 and not force_dense_1d:
@@ -119,6 +120,23 @@ class WassersteinNetwork:
         Aggregates across all subgraphs.  Returns spectrum_id -> derivative.
         """
         return dict(self.wnet.spectrum_proportion_derivatives())
+
+    def update_positions_and_solve(
+        self,
+        new_base: Distribution,
+        new_targets: Sequence[Distribution],
+    ) -> None:
+        """Update peak positions and immediately re-solve (warm-restarting if possible).
+
+        Keeps graph topology and intensities fixed; only edge costs change.
+        The new distributions must have the same number of peaks as the originals.
+
+        For 1D (chain) networks, peak sorted order must be preserved — raises
+        ValueError if any peak has crossed another since construction.
+        """
+        new_vec_base = new_base.vecdist
+        new_vec_targets = [t.vecdist for t in new_targets]
+        self.wnet.update_positions_and_solve(new_vec_base, new_vec_targets, self._distance)
 
     def subgraphs(self) -> list["SubgraphWrapper"]:
         """

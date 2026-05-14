@@ -193,7 +193,22 @@ NB_MODULE(wnet_cpp, m) {
         .def("matching_density", &WassersteinNetworkSubgraph<int64_t, double>::matching_density)
         .def("theoretical_spectra_involved", &WassersteinNetworkSubgraph<int64_t, double>::theoretical_spectra_involved);
 
-    nb::class_<WassersteinNetwork<int64_t, int64_t>>(m, "CWassersteinNetwork")
+    // Type aliases avoid commas inside macro arguments (which the preprocessor
+    // would miscount as argument separators).
+    using WNetII = WassersteinNetwork<int64_t, int64_t>;
+    using WNetIF = WassersteinNetwork<int64_t, double>;
+
+// Bind update_positions_and_solve for one (network alias, intensity type, dimension) triple.
+#define BIND_UPDATE_AND_SOLVE(NET_ALIAS, INTENSITY_TYPE, DIM) \
+    .def("update_positions_and_solve", \
+         [](NET_ALIAS& self, \
+            const VectorDistribution<DIM, double, INTENSITY_TYPE>* new_emp, \
+            const std::vector<VectorDistribution<DIM, double, INTENSITY_TYPE>*>& new_theo, \
+            DistanceMetric metric) \
+         { self.update_positions_and_solve(new_emp, new_theo, metric); }, \
+         nb::arg("new_empirical"), nb::arg("new_theoretical"), nb::arg("metric"))
+
+    nb::class_<WNetII>(m, "CWassersteinNetwork")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
         .def("add_simple_trash", &WassersteinNetwork<int64_t, int64_t>::add_simple_trash)
         .def("add_experimental_trash", &WassersteinNetwork<int64_t, int64_t>::add_experimental_trash)
@@ -232,7 +247,27 @@ NB_MODULE(wnet_cpp, m) {
         .def("signal_part_derivatives", &WassersteinNetwork<int64_t, int64_t>::signal_part_derivatives)
         .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, int64_t>::spectrum_proportion_derivatives)
         .def("warm_start_count", &WassersteinNetwork<int64_t, int64_t>::warm_start_count)
-        .def("cold_start_count", &WassersteinNetwork<int64_t, int64_t>::cold_start_count);
+        .def("cold_start_count", &WassersteinNetwork<int64_t, int64_t>::cold_start_count)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t,  1)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t,  2)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 3)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 4)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 5)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 6)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 7)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 8)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 9)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 10)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 11)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 12)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 13)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 14)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 15)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 16)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 17)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 18)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 19)
+        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 20);
 
     nb::class_<WassersteinNetwork<int64_t, double>>(m, "CWassersteinNetworkFloat")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())

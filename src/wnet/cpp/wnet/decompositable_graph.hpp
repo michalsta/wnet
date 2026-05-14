@@ -885,6 +885,37 @@ public:
         return false;
     }
 
+    // Returns the node IDs of the chain in sorted position order, or an empty
+    // vector if this subgraph has no chain topology.  Used by update_positions_and_solve
+    // to validate that new positions don't change the chain's sorted order.
+    const std::vector<LEMON_INDEX>& get_chain_order() const {
+        static const std::vector<LEMON_INDEX> empty;
+        return _chain_topo.has_value() ? _chain_topo->order : empty;
+    }
+
+    // Update MatchingEdge and ChainEdge costs in the already-built LEMON graph,
+    // then immediately re-run the solver (warm-restarting for NetworkSimplex).
+    // new_costs_per_edge_idx[i] is the new cost for edge i; entries for other
+    // edge types (SrcToEmpirical, TheoreticalToSink, trash, ...) are ignored.
+    // Precondition: build() and at least one solve() must have been called.
+    void apply_new_costs(const std::vector<VALUE_TYPE>& new_costs_per_edge_idx) {
+        if (!built)
+            throw std::runtime_error("apply_new_costs() must be called after build().");
+        if (new_costs_per_edge_idx.size() != edges.size())
+            throw std::runtime_error("apply_new_costs(): cost vector size mismatch.");
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            const auto& etype = edges[ii].get_type();
+            if (std::holds_alternative<MatchingEdge>(etype) || std::holds_alternative<ChainEdge>(etype))
+                costs_map[lemon_graph.arcFromId(ii)] = new_costs_per_edge_idx[ii];
+        }
+        // Re-sync gap_cost from costs_map so chain_residual_distances stays correct.
+        if (_chain_topo.has_value()) {
+            for (size_t g = 0; g < _chain_topo->right_arc_ids.size(); ++g)
+                _chain_topo->gap_cost[g] = costs_map[lemon_graph.arcFromId(_chain_topo->right_arc_ids[g])];
+        }
+        _run_solver(/*costs_changed=*/true);
+    }
+
     // Compute single-source shortest distances on the implicit residual graph
     // (excluding the trash edge). For each arc:
     //   forward residual if flow < capacity (cost = original)
@@ -1393,6 +1424,117 @@ public:
 
     static constexpr size_t max_index() {
         return std::numeric_limits<LEMON_INDEX>::max();
+    }
+
+    // Update positions of empirical and theoretical peaks and immediately
+    // re-solve each subgraph (warm-restarting NetworkSimplex if possible).
+    //
+    // Graph topology is fixed: only edge costs change.  Intensities are not
+    // touched.  The new distributions must have the same number of peaks as
+    // the originals (same peak_index range).
+    //
+    // For chain subgraphs (1D) the sorted position order of peaks in the
+    // chain must be preserved; otherwise an exception is thrown.  If peaks
+    // have genuinely crossed, rebuild the network from scratch instead.
+    template<typename Distribution_t, typename DistMetric>
+    void update_positions_and_solve(
+        const Distribution_t* new_empirical,
+        const std::vector<Distribution_t*>& new_theoretical
+    ) {
+        if (!built)
+            throw std::runtime_error("update_positions_and_solve() must be called after build().");
+
+        for (auto& sg_ptr : flow_subgraphs) {
+            auto& sg = *sg_ptr;
+            const auto& sg_nodes = sg.get_nodes();
+            const auto& sg_edges = sg.get_edges();
+
+            // Build node_id -> node* map for chain-order validation.
+            std::unordered_map<LEMON_INDEX, const FlowNode<intensity_type>*> node_map;
+            node_map.reserve(sg_nodes.size());
+            for (const auto& n : sg_nodes)
+                node_map[n.get_id()] = &n;
+
+            // Option B: reject position updates that would reorder chain nodes.
+            // _build_chain_topology() may walk the chain in either direction
+            // (ascending or descending), depending on which endpoint is found
+            // first in unordered_map iteration.  Valid updates keep the sequence
+            // monotone in the same direction; a non-monotone result means peaks
+            // have genuinely crossed and the topology is no longer valid.
+            const auto& chain_order = sg.get_chain_order();
+            if (chain_order.size() >= 2) {
+                std::vector<double> chain_pos;
+                chain_pos.reserve(chain_order.size());
+                for (LEMON_INDEX nid : chain_order) {
+                    const auto& ntype = node_map.at(nid)->get_type();
+                    if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&ntype))
+                        chain_pos.push_back(new_empirical->get_point(emp->get_peak_index())[0]);
+                    else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&ntype))
+                        chain_pos.push_back(new_theoretical[theo->get_spectrum_id()]->get_point(theo->get_peak_index())[0]);
+                    // source/sink never appear in chain_order; skip anything else
+                }
+                bool all_nondec = true, all_noninc = true;
+                for (size_t k = 1; k < chain_pos.size(); ++k) {
+                    if (chain_pos[k] < chain_pos[k - 1]) all_nondec = false;
+                    if (chain_pos[k] > chain_pos[k - 1]) all_noninc = false;
+                }
+                if (!all_nondec && !all_noninc)
+                    throw std::invalid_argument(
+                        "update_positions_and_solve(): new positions violate the chain's sorted "
+                        "order (peaks have crossed). Rebuild the network for the new positions.");
+            }
+
+            // Compute new edge costs.
+            std::vector<VALUE_TYPE> new_costs(sg_edges.size(), 0);
+            for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(sg_edges.size()); ++ii) {
+                const auto& edge = sg_edges[ii];
+                if (std::holds_alternative<MatchingEdge>(edge.get_type())) {
+                    const auto& emp_t  = std::get<EmpiricalNode<intensity_type>>(edge.get_start_node().get_type());
+                    const auto& theo_t = std::get<TheoreticalNode<intensity_type>>(edge.get_end_node().get_type());
+                    const double d = DistMetric::dist(
+                        new_empirical->get_point(emp_t.get_peak_index()),
+                        new_theoretical[theo_t.get_spectrum_id()]->get_point(theo_t.get_peak_index()));
+                    if (d > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
+                        throw std::overflow_error("update_positions_and_solve(): distance overflows VALUE_TYPE.");
+                    new_costs[ii] = static_cast<VALUE_TYPE>(d);
+                } else if (std::holds_alternative<ChainEdge>(edge.get_type())) {
+                    auto get_pos_1d = [&](const FlowNode<intensity_type>& n) -> double {
+                        const auto& nt = n.get_type();
+                        if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&nt))
+                            return new_empirical->get_point(emp->get_peak_index())[0];
+                        if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&nt))
+                            return new_theoretical[theo->get_spectrum_id()]->get_point(theo->get_peak_index())[0];
+                        throw std::runtime_error("update_positions_and_solve(): chain edge connects non-peak node.");
+                    };
+                    const double gap = std::abs(get_pos_1d(edge.get_start_node()) - get_pos_1d(edge.get_end_node()));
+                    if (gap > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
+                        throw std::overflow_error("update_positions_and_solve(): chain gap overflows VALUE_TYPE.");
+                    new_costs[ii] = static_cast<VALUE_TYPE>(gap);
+                }
+                // All other edge types (SrcToEmpirical, TheoreticalToSink, trash, …)
+                // have position-independent costs; apply_new_costs ignores them (new_costs[ii] = 0).
+            }
+
+            sg.apply_new_costs(new_costs);
+        }
+        // _last_point (spectrum proportions) is unchanged — intensities are fixed.
+    }
+
+    // Runtime-dispatch variant: selects the metric policy at run time.
+    template<typename Distribution_t>
+    void update_positions_and_solve(
+        const Distribution_t* new_empirical,
+        const std::vector<Distribution_t*>& new_theoretical,
+        DistanceMetric metric
+    ) {
+        if (metric == DistanceMetric::L1)
+            update_positions_and_solve<Distribution_t, L1Metric>(new_empirical, new_theoretical);
+        else if (metric == DistanceMetric::L2)
+            update_positions_and_solve<Distribution_t, L2Metric>(new_empirical, new_theoretical);
+        else if (metric == DistanceMetric::LINF)
+            update_positions_and_solve<Distribution_t, LinfMetric>(new_empirical, new_theoretical);
+        else
+            throw std::runtime_error("update_positions_and_solve(): unsupported distance metric.");
     }
 };
 
