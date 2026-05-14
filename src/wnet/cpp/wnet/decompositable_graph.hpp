@@ -111,19 +111,21 @@ class WassersteinNetworkSubgraph {
     }
 
     void _build_chain_topology() {
-        std::unordered_map<LEMON_INDEX, std::vector<std::pair<LEMON_INDEX, LEMON_INDEX>>> chain_adj;
+        std::vector<std::vector<std::pair<LEMON_INDEX, LEMON_INDEX>>> chain_adj(nodes.size());
+        bool any_chain = false;
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             if (std::holds_alternative<ChainEdge>(edges[ii].get_type())) {
                 const LEMON_INDEX u = edges[ii].get_start_node_id();
                 const LEMON_INDEX v = edges[ii].get_end_node_id();
                 chain_adj[u].push_back({v, ii});
+                any_chain = true;
             }
         }
-        if (chain_adj.empty()) return;
+        if (!any_chain) return;
 
         LEMON_INDEX start_node = -1;
-        for (const auto& [node_id, adj] : chain_adj) {
-            if (adj.size() == 1) { start_node = node_id; break; }
+        for (LEMON_INDEX node_id = 0; node_id < static_cast<LEMON_INT>(chain_adj.size()); ++node_id) {
+            if (chain_adj[node_id].size() == 1) { start_node = node_id; break; }
         }
         if (start_node == -1)
             throw std::runtime_error("Chain subgraph has no endpoint — malformed chain.");
@@ -1129,7 +1131,7 @@ public:
         auto peak_derivs = signal_part_derivatives();
 
         // Build lookup: (spectrum_id, peak_index) -> derivative
-        std::unordered_map<size_t, std::unordered_map<LEMON_INDEX, VALUE_TYPE>> deriv_map;
+        std::vector<std::unordered_map<LEMON_INDEX, VALUE_TYPE>> deriv_map(no_target_distributions);
         for (auto& [spec_id, peak_idx, deriv] : peak_derivs)
             deriv_map[spec_id][peak_idx] = deriv;
 
@@ -1554,11 +1556,10 @@ public:
             const auto& sg_edges = sg.get_edges();
 
             // Option B: reject position updates that would reorder chain nodes.
-            // _build_chain_topology() may walk the chain in either direction
-            // (ascending or descending), depending on which endpoint is found
-            // first in unordered_map iteration.  Valid updates keep the sequence
-            // monotone in the same direction; a non-monotone result means peaks
-            // have genuinely crossed and the topology is no longer valid.
+            // _build_chain_topology() walks from the lowest-ID endpoint, so the
+            // chain order is deterministic.  Valid updates keep the sequence
+            // monotone; a non-monotone result means peaks have genuinely crossed
+            // and the topology is no longer valid.
             const auto& chain_order = sg.get_chain_order();
             if (chain_order.size() >= 2) {
                 // Build node_id -> node* map for chain-order validation.
