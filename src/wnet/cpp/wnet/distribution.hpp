@@ -3,6 +3,7 @@
 
 #include <array>
 #include <functional>
+#include <limits>
 #include <vector>
 #include <stdexcept>
 #include <random>
@@ -205,7 +206,7 @@ public:
             other_distribution(other_distribution_),
             max_dist(max_dist_),
             current_index(0),
-            other_current_index(-1),
+            other_current_index(std::numeric_limits<size_t>::max()),
             last_window_start_index(0)
         {}
         inline bool advance() {
