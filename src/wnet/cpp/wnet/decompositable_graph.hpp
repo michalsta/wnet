@@ -152,6 +152,61 @@ class WassersteinNetworkSubgraph {
         _chain_topo = std::move(topo);
     }
 
+    // Run (or warm-restart) the configured solver using the current
+    // capacities_map, costs_map and node_supply_map.
+    // costs_changed=true: costs were updated since the last solve (e.g.
+    // after update_positions); for NetworkSimplex the cost map must be
+    // re-pushed before warmRun so that the dual variables are consistent.
+    void _run_solver(bool costs_changed = false) {
+        std::visit([&](const auto& cfg) {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, NetworkSimplexConfig>) {
+                using LemonPR = lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PivotRule;
+                const auto pivot = static_cast<LemonPR>(cfg.pivot);
+                if (cfg.warm && ns_solver.has_value()) {
+                    // Warm start: reuse the existing solver and its spanning-tree
+                    // basis.  Only capacities and supplies change between calls
+                    // (costs are fixed at build() time), so warmRun() can repair
+                    // the previous optimal basis and reach the new optimum with
+                    // far fewer pivots.  Falls back to cold start automatically
+                    // if the basis becomes infeasible under the new bounds.
+                    ns_solver->upperMap(capacities_map);
+                    ns_solver->supplyMap(node_supply_map);
+                    if (costs_changed) ns_solver->costMap(costs_map);
+                    ns_solver->warmRun(pivot);
+                } else {
+                    ++_cold_starts_via_run;
+                    ns_solver.emplace(lemon_graph);
+                    ns_solver->upperMap(capacities_map);
+                    ns_solver->costMap(costs_map);
+                    ns_solver->supplyMap(node_supply_map);
+                    ns_solver->run(pivot);
+                }
+            } else if constexpr (std::is_same_v<T, CycleCancelingConfig>) {
+                using LemonM = lemon::CycleCanceling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::Method;
+                cc_solver.emplace(lemon_graph);
+                cc_solver->upperMap(capacities_map);
+                cc_solver->costMap(costs_map);
+                cc_solver->supplyMap(node_supply_map);
+                cc_solver->run(static_cast<LemonM>(cfg.method));
+            } else if constexpr (std::is_same_v<T, CostScalingConfig>) {
+                using LemonM = lemon::CostScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::Method;
+                cs_solver.emplace(lemon_graph);
+                cs_solver->upperMap(capacities_map);
+                cs_solver->costMap(costs_map);
+                cs_solver->supplyMap(node_supply_map);
+                cs_solver->run(static_cast<LemonM>(cfg.method), cfg.factor);
+            } else {
+                static_assert(std::is_same_v<T, CapacityScalingConfig>);
+                cap_solver.emplace(lemon_graph);
+                cap_solver->upperMap(capacities_map);
+                cap_solver->costMap(costs_map);
+                cap_solver->supplyMap(node_supply_map);
+                cap_solver->run(cfg.factor);
+            }
+        }, _config);
+    }
+
 public:
     WassersteinNetworkSubgraph(
         const std::vector<LEMON_INDEX>& subgraph_node_ids,
@@ -422,52 +477,7 @@ public:
         }
         node_supply_map[lemon_graph.nodeFromId(0)] = lemon_total_flow;
         node_supply_map[lemon_graph.nodeFromId(1)] = -lemon_total_flow;
-        std::visit([&](const auto& cfg) {
-            using T = std::decay_t<decltype(cfg)>;
-            if constexpr (std::is_same_v<T, NetworkSimplexConfig>) {
-                using LemonPR = lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PivotRule;
-                const auto pivot = static_cast<LemonPR>(cfg.pivot);
-                if (cfg.warm && ns_solver.has_value()) {
-                    // Warm start: reuse the existing solver and its spanning-tree
-                    // basis.  Only capacities and supplies change between calls
-                    // (costs are fixed at build() time), so warmRun() can repair
-                    // the previous optimal basis and reach the new optimum with
-                    // far fewer pivots.  Falls back to cold start automatically
-                    // if the basis becomes infeasible under the new bounds.
-                    ns_solver->upperMap(capacities_map);
-                    ns_solver->supplyMap(node_supply_map);
-                    ns_solver->warmRun(pivot);
-                } else {
-                    ++_cold_starts_via_run;
-                    ns_solver.emplace(lemon_graph);
-                    ns_solver->upperMap(capacities_map);
-                    ns_solver->costMap(costs_map);
-                    ns_solver->supplyMap(node_supply_map);
-                    ns_solver->run(pivot);
-                }
-            } else if constexpr (std::is_same_v<T, CycleCancelingConfig>) {
-                using LemonM = lemon::CycleCanceling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::Method;
-                cc_solver.emplace(lemon_graph);
-                cc_solver->upperMap(capacities_map);
-                cc_solver->costMap(costs_map);
-                cc_solver->supplyMap(node_supply_map);
-                cc_solver->run(static_cast<LemonM>(cfg.method));
-            } else if constexpr (std::is_same_v<T, CostScalingConfig>) {
-                using LemonM = lemon::CostScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::Method;
-                cs_solver.emplace(lemon_graph);
-                cs_solver->upperMap(capacities_map);
-                cs_solver->costMap(costs_map);
-                cs_solver->supplyMap(node_supply_map);
-                cs_solver->run(static_cast<LemonM>(cfg.method), cfg.factor);
-            } else {
-                static_assert(std::is_same_v<T, CapacityScalingConfig>);
-                cap_solver.emplace(lemon_graph);
-                cap_solver->upperMap(capacities_map);
-                cap_solver->costMap(costs_map);
-                cap_solver->supplyMap(node_supply_map);
-                cap_solver->run(cfg.factor);
-            }
-        }, _config);
+        _run_solver();
     }
 
     VALUE_TYPE total_cost() const {
