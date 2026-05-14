@@ -62,8 +62,141 @@ jobs:
           python -m pytest . -v -m "long or not long"
 
   sanitize:
-    name: "[asan+ubsan] ubuntu-latest / py3.14"
+    name: "[sanitize] ${{ matrix.label }}"
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── GCC ──────────────────────────────────────────────────────────
+          - label: "gcc asan+ubsan"
+            cc: gcc
+            cxx: g++
+            apt_extra: ""
+            build_type: Debug
+            # Debug build type activates WNET_DO_ASSERTS + -Og -g in CMakeLists.
+            # _GLIBCXX_SANITIZE_VECTOR poisons vector storage for ASan;
+            # _GLIBCXX_DEBUG is intentionally omitted here: it conflicts with ASan
+            # (different allocator hooks, false positives).
+            cxx_flags: >-
+              -fsanitize=address,undefined
+              -fno-sanitize=vptr
+              -fno-sanitize-recover=all
+              -fno-omit-frame-pointer
+              -D_GLIBCXX_ASSERTIONS
+              -D_GLIBCXX_SANITIZE_VECTOR
+            link_flags: ""
+            pythonmalloc: malloc
+            asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
+            ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
+            dump_logs: true
+
+          - label: "gcc hardened"
+            cc: gcc
+            cxx: g++
+            apt_extra: ""
+            # RelWithDebInfo = -O2 -g -DNDEBUG; pass internal macros explicitly
+            # since the CMakeLists Debug block does not fire.
+            # _GLIBCXX_DEBUG: full iterator-validity checking (safe here: whole .so
+            # compiled consistently; no STL objects cross the Python C-API boundary).
+            # _FORTIFY_SOURCE=3 requires -O2 (unavailable at -Og used in Debug mode).
+            build_type: RelWithDebInfo
+            cxx_flags: >-
+              -DWNET_DO_ASSERTS
+              -DDEBUG_MODE
+              -D_GLIBCXX_ASSERTIONS
+              -D_GLIBCXX_DEBUG
+              -D_FORTIFY_SOURCE=3
+              -fstack-protector-strong
+              -fstack-clash-protection
+              -fcf-protection=full
+            link_flags: ""
+            pythonmalloc: ""
+            asan_opts: ""
+            ubsan_opts: ""
+            dump_logs: false
+
+          # ── Clang + libstdc++ ─────────────────────────────────────────────
+          - label: "clang libstdc++ asan+ubsan"
+            cc: clang
+            cxx: clang++
+            apt_extra: clang
+            build_type: Debug
+            cxx_flags: >-
+              -fsanitize=address,undefined
+              -fno-sanitize=vptr
+              -fno-sanitize-recover=all
+              -fno-omit-frame-pointer
+              -D_GLIBCXX_ASSERTIONS
+              -D_GLIBCXX_SANITIZE_VECTOR
+            link_flags: ""
+            pythonmalloc: malloc
+            asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
+            ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
+            dump_logs: true
+
+          - label: "clang libstdc++ hardened"
+            cc: clang
+            cxx: clang++
+            apt_extra: clang
+            build_type: RelWithDebInfo
+            cxx_flags: >-
+              -DWNET_DO_ASSERTS
+              -DDEBUG_MODE
+              -D_GLIBCXX_ASSERTIONS
+              -D_GLIBCXX_DEBUG
+              -D_FORTIFY_SOURCE=3
+              -fstack-protector-strong
+              -fstack-clash-protection
+              -fcf-protection=full
+            link_flags: ""
+            pythonmalloc: ""
+            asan_opts: ""
+            ubsan_opts: ""
+            dump_logs: false
+
+          # ── Clang + libc++ ────────────────────────────────────────────────
+          # ubuntu-latest ships LLVM 18; libc++ 18 supports _LIBCPP_HARDENING_MODE.
+          # _LIBCPP_ENABLE_ASSERTIONS is intentionally absent: in LLVM 18 it is
+          # deprecated and hard-errors when combined with _LIBCPP_HARDENING_MODE.
+          - label: "clang libc++ asan+ubsan"
+            cc: clang
+            cxx: clang++
+            apt_extra: clang libc++-dev libc++abi-dev
+            build_type: Debug
+            cxx_flags: >-
+              -fsanitize=address,undefined
+              -fno-sanitize=vptr
+              -fno-sanitize-recover=all
+              -fno-omit-frame-pointer
+              -stdlib=libc++
+              -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE
+            link_flags: "-stdlib=libc++"
+            pythonmalloc: malloc
+            asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
+            ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
+            dump_logs: true
+
+          - label: "clang libc++ hardened"
+            cc: clang
+            cxx: clang++
+            apt_extra: clang libc++-dev libc++abi-dev
+            build_type: RelWithDebInfo
+            cxx_flags: >-
+              -stdlib=libc++
+              -DWNET_DO_ASSERTS
+              -DDEBUG_MODE
+              -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG
+              -D_FORTIFY_SOURCE=3
+              -fstack-protector-strong
+              -fstack-clash-protection
+              -fcf-protection=full
+            link_flags: "-stdlib=libc++"
+            pythonmalloc: ""
+            asan_opts: ""
+            ubsan_opts: ""
+            dump_logs: false
+
     steps:
       - uses: actions/checkout@v5
       - name: Set up Python 3.14
@@ -71,34 +204,44 @@ jobs:
         with:
           python-version: "3.14"
       - name: Install dependencies
+        run: python -m pip install --upgrade pip
+      - name: Install system packages
+        if: matrix.apt_extra != ''
+        run: sudo apt-get install -y ${{ matrix.apt_extra }}
+      - name: Set up Clang as compiler
+        if: matrix.cc == 'clang'
         run: |
-          python -m pip install --upgrade pip
-      - name: Install package with ASan+UBSan
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+          echo "CMAKE_ARGS=-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++" >> $GITHUB_ENV
+      - name: Install package
+        env:
+          VERBOSE: '1'
+          CXX_FLAGS: ${{ matrix.cxx_flags }}
+          LINK_FLAGS: ${{ matrix.link_flags }}
         run: |
-          # address:       heap/stack/global buffer overflows, use-after-free
-          # undefined:     all UB (signed overflow, null deref, bad shift, bounds, ...)
-          # -fno-sanitize=vptr: skip vtable checks (needs RTTI, causes false positives)
-          # -shared-libasan: link libasan as a dynamic .so dependency instead of
-          #   embedding it statically. This means libasan is loaded when Python imports
-          #   wnet (not at Python startup via LD_PRELOAD), so libstdc++ is already
-          #   in memory and ASan can intercept __cxa_throw correctly.
-          SAN_FLAGS="-fsanitize=address,undefined -fno-sanitize=vptr -fno-sanitize-recover=all -fno-omit-frame-pointer -Og -g"
-          VERBOSE=1 python -m pip install -v .[pytest] \
-            --config-settings="cmake.build-type=Debug" \
-            --config-settings="cmake.define.CMAKE_CXX_FLAGS=${SAN_FLAGS}"
-      - name: Test with pytest (ASan+UBSan)
+          # No LD_PRELOAD: libasan is a NEEDED entry in wnet_cpp.so, so it loads
+          # when Python imports wnet (after libstdc++/libc++, so ASan's __cxa_throw
+          # interceptor finds the real symbol). verify_asan_link_order=0 suppresses
+          # the "ASan not first" warning for the Python host process.
+          LINK_ARGS=()
+          if [ -n "$LINK_FLAGS" ]; then
+            LINK_ARGS=(--config-settings="cmake.define.CMAKE_SHARED_LINKER_FLAGS=${LINK_FLAGS}")
+          fi
+          python -m pip install -v .[pytest] \
+            --config-settings="cmake.build-type=${{ matrix.build_type }}" \
+            --config-settings="cmake.define.CMAKE_CXX_FLAGS=${CXX_FLAGS}" \
+            "${LINK_ARGS[@]}"
+      - name: Test with pytest
         working-directory: ./tests
         env:
-          # No LD_PRELOAD: libasan.so.8 is a NEEDED entry in wnet_cpp.so.
-          # It loads when Python imports wnet, which is after numpy is imported
-          # (numpy loads libstdc++.so.6 first, so ASan's __cxa_throw interceptor
-          # can find the real function). verify_asan_link_order=0 suppresses the
-          # "ASan not first" check since the Python process started without ASan.
-          PYTHONMALLOC: malloc
-          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
-          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
+          PYTHONMALLOC: ${{ matrix.pythonmalloc }}
+          ASAN_OPTIONS: ${{ matrix.asan_opts }}
+          UBSAN_OPTIONS: ${{ matrix.ubsan_opts }}
+        run: python -m pytest . -v -m "not long"
+      - name: Dump sanitizer logs
+        if: always() && matrix.dump_logs
         run: |
-          python -m pytest . -v -m "not long" || true
           echo "=== ASan logs ==="
           cat /tmp/asan.* 2>/dev/null || echo "(no asan log files)"
           echo "=== UBSan logs ==="
