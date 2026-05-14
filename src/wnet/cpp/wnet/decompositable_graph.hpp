@@ -1391,7 +1391,7 @@ public:
 template <typename VALUE_TYPE>
 class WassersteinNetworkFactory {
 public:
-    template<typename Distribution_t, DistanceMetric dist_fun>
+    template<typename Distribution_t, typename DistMetric>
     static WassersteinNetwork<VALUE_TYPE, typename Distribution_t::intensity_type> create(
         const Distribution_t* empirical_spectrum,
         const std::vector<Distribution_t*>& theoretical_spectra,
@@ -1457,7 +1457,7 @@ public:
             }
 
             // Calculate the distances between the empirical and theoretical peaks
-            auto it = empirical_spectrum->template closer_than_iter<dist_fun>(*theoretical_spectrum, max_dist);
+            auto it = empirical_spectrum->template closer_than_iter<DistMetric>(*theoretical_spectrum, max_dist);
             while(it.advance())
             {
                 auto [empirical_idx, theoretical_peak_idx] = it.get_indices();
@@ -1500,11 +1500,11 @@ public:
         VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
     ) {
         if (distance_metric == DistanceMetric::L1) {
-            return create<Distribution_t, DistanceMetric::L1>(empirical_spectrum, theoretical_spectra, max_dist);
+            return create<Distribution_t, L1Metric>(empirical_spectrum, theoretical_spectra, max_dist);
         } else if (distance_metric == DistanceMetric::L2) {
-            return create<Distribution_t, DistanceMetric::L2>(empirical_spectrum, theoretical_spectra, max_dist);
+            return create<Distribution_t, L2Metric>(empirical_spectrum, theoretical_spectra, max_dist);
         } else if (distance_metric == DistanceMetric::LINF) {
-            return create<Distribution_t, DistanceMetric::LINF>(empirical_spectrum, theoretical_spectra, max_dist);
+            return create<Distribution_t, LinfMetric>(empirical_spectrum, theoretical_spectra, max_dist);
         } else {
             throw std::runtime_error("Unsupported distance metric.");
         }

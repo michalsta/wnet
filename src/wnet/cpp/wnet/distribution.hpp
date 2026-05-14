@@ -138,7 +138,7 @@ public:
         return {indices, distances};
     }*/
 
-    template<DistanceMetric dist_fun>
+    template<typename DistMetric>
     class CloserThanIteratorPoint {
         const VectorDistribution<DIM, position_type, intensity_type>& distribution;
         const Point_t& point;
@@ -159,15 +159,7 @@ public:
         inline bool advance() {
             current_index++;
             while (current_index < distribution.size()) [[likely]] {
-                if constexpr(dist_fun == DistanceMetric::L1) {
-                    current_distance = l1_distance<DIM, position_type>(point, distribution.get_point(current_index));
-                } else if constexpr(dist_fun == DistanceMetric::L2) {
-                    current_distance = l2_distance<DIM, position_type>(point, distribution.get_point(current_index));
-                } else if constexpr(dist_fun == DistanceMetric::LINF) {
-                    current_distance = linf_distance<DIM, position_type>(point, distribution.get_point(current_index));
-                } else {
-                    throw std::runtime_error("Unsupported distance metric.");
-                }
+                current_distance = DistMetric::dist(point, distribution.get_point(current_index));
                 if (current_distance <= max_dist) [[likely]] {
                     return true;
                 }
@@ -183,19 +175,19 @@ public:
         }
     };
 
-    template<DistanceMetric dist_fun>
-    CloserThanIteratorPoint<dist_fun> closer_than_iter_point(
+    template<typename DistMetric>
+    CloserThanIteratorPoint<DistMetric> closer_than_iter_point(
         const Point_t& point,
         intensity_type max_dist
     ) const {
-        return CloserThanIteratorPoint<dist_fun>(
+        return CloserThanIteratorPoint<DistMetric>(
             *this,
             point,
             max_dist
         );
     };
 
-    template<DistanceMetric dist_fun>
+    template<typename DistMetric>
     class CloserThanIter {
         const VectorDistribution<DIM, position_type, intensity_type>& distribution;
         const VectorDistribution<DIM, position_type, intensity_type>& other_distribution;
@@ -242,15 +234,9 @@ public:
                     other_current_index = last_window_start_index - 1;
                     continue;
                 }
-                if constexpr(dist_fun == DistanceMetric::L1) {
-                    current_distance = l1_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
-                } else if constexpr(dist_fun == DistanceMetric::L2) {
-                    current_distance = l2_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
-                } else if constexpr(dist_fun == DistanceMetric::LINF) {
-                    current_distance = linf_distance<DIM, position_type>(distribution.get_point(distribution.sorted_indices[current_index]), other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
-                } else {
-                    throw std::runtime_error("Unsupported distance metric.");
-                }
+                current_distance = DistMetric::dist(
+                    distribution.get_point(distribution.sorted_indices[current_index]),
+                    other_distribution.get_point(other_distribution.sorted_indices[other_current_index]));
                 if (current_distance <= max_dist) [[likely]] {
                     return true;
                 }
@@ -264,12 +250,12 @@ public:
         }
     };
 
-    template<DistanceMetric dist_fun>
-    CloserThanIter<dist_fun> closer_than_iter(
+    template<typename DistMetric>
+    CloserThanIter<DistMetric> closer_than_iter(
         const VectorDistribution<DIM, position_type, intensity_type>& other_distribution,
         intensity_type max_dist
     ) const {
-        return CloserThanIter<dist_fun>(*this, other_distribution, max_dist);
+        return CloserThanIter<DistMetric>(*this, other_distribution, max_dist);
     };
 
     static VectorDistribution CreateRandom(size_t no_points,
