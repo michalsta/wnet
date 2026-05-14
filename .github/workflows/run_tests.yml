@@ -129,7 +129,7 @@ jobs:
               -fno-omit-frame-pointer
               -D_GLIBCXX_ASSERTIONS
               -D_GLIBCXX_SANITIZE_VECTOR
-            link_flags: ""
+            link_flags: "-shared-libasan"
             pythonmalloc: malloc
             asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
             ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
@@ -171,7 +171,7 @@ jobs:
               -fno-omit-frame-pointer
               -stdlib=libc++
               -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE
-            link_flags: "-stdlib=libc++"
+            link_flags: "-stdlib=libc++ -shared-libasan"
             pythonmalloc: malloc
             asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
             ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
