@@ -87,7 +87,7 @@ class WassersteinNetworkSubgraph {
         std::vector<LEMON_INDEX> right_arc_ids;
         std::vector<LEMON_INDEX> left_arc_ids;
         std::vector<VALUE_TYPE>  gap_cost;
-        std::unordered_map<LEMON_INDEX, size_t> node_to_pos;
+        std::vector<size_t> node_to_pos;
     };
     std::optional<ChainTopology> _chain_topo;
 
@@ -149,6 +149,7 @@ class WassersteinNetworkSubgraph {
             topo.gap_cost.push_back(costs_map[lemon_graph.arcFromId(out_arc)]);
             prev = curr; curr = next;
         }
+        topo.node_to_pos.assign(nodes.size(), std::numeric_limits<size_t>::max());
         for (size_t i = 0; i < topo.order.size(); ++i)
             topo.node_to_pos[topo.order[i]] = i;
         _chain_topo = std::move(topo);
@@ -231,7 +232,7 @@ public:
         auto& source_node = nodes[0];
         auto& sink_node = nodes[1];
 
-        std::unordered_map<LEMON_INDEX, LEMON_INDEX> node_id_map;
+        std::vector<LEMON_INDEX> node_id_map(all_nodes.size(), -1);
 
         for (const auto& node_id : subgraph_node_ids)
         {
@@ -263,15 +264,15 @@ public:
         for (const FlowEdge<intensity_type>* edge : my_edges)
         {
             const FlowNode<intensity_type>& start_node = edge->get_start_node();
-            const auto start_node_it = node_id_map.find(start_node.get_id());
-            if (start_node_it == node_id_map.end()) throw std::runtime_error("Start node of edge not found in subgraph nodes.");
+            const LEMON_INDEX start_local = node_id_map[start_node.get_id()];
+            if (start_local == -1) throw std::runtime_error("Start node of edge not found in subgraph nodes.");
             const FlowNode<intensity_type>& end_node = edge->get_end_node();
-            const auto end_node_it = node_id_map.find(end_node.get_id());
-            if (end_node_it == node_id_map.end()) throw std::runtime_error("End node of edge not found in subgraph nodes.");
+            const LEMON_INDEX end_local = node_id_map[end_node.get_id()];
+            if (end_local == -1) throw std::runtime_error("End node of edge not found in subgraph nodes.");
             edges.emplace_back(
                     edges.size(),
-                    nodes[start_node_it->second],
-                    nodes[end_node_it->second],
+                    nodes[start_local],
+                    nodes[end_local],
                     edge->get_type()
             );
         }
@@ -801,37 +802,37 @@ public:
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             const auto& et = edges[ii].get_type();
             if (std::holds_alternative<SrcToEmpiricalEdge>(et)) {
-                auto it = topo.node_to_pos.find(edges[ii].get_end_node_id());
-                if (it == topo.node_to_pos.end()) continue;
+                const size_t pos = topo.node_to_pos[edges[ii].get_end_node_id()];
+                if (pos == std::numeric_limits<size_t>::max()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
-                if (flow < cap) has_src_fwd[it->second] = true;
-                if (flow > 0) has_src_rev[it->second] = true;
+                if (flow < cap) has_src_fwd[pos] = true;
+                if (flow > 0) has_src_rev[pos] = true;
             } else if (std::holds_alternative<TheoreticalToSinkEdge>(et)) {
-                auto it = topo.node_to_pos.find(edges[ii].get_start_node_id());
-                if (it == topo.node_to_pos.end()) continue;
+                const size_t pos = topo.node_to_pos[edges[ii].get_start_node_id()];
+                if (pos == std::numeric_limits<size_t>::max()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
-                if (flow < cap) has_sink_fwd[it->second] = true;
-                if (flow > 0) has_sink_rev[it->second] = true;
+                if (flow < cap) has_sink_fwd[pos] = true;
+                if (flow > 0) has_sink_rev[pos] = true;
             } else if (const auto* e = std::get_if<EmpiricalTrashEdge>(&et)) {
                 // EmpiricalNode → Sink (cost C_exp); start node is in the chain.
-                auto it = topo.node_to_pos.find(edges[ii].get_start_node_id());
-                if (it == topo.node_to_pos.end()) continue;
+                const size_t pos = topo.node_to_pos[edges[ii].get_start_node_id()];
+                if (pos == std::numeric_limits<size_t>::max()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
-                exp_trash_cost[it->second] = e->get_cost();
-                if (flow < cap) exp_trash_fwd[it->second] = true;
-                if (flow > 0)   exp_trash_rev[it->second] = true;
+                exp_trash_cost[pos] = e->get_cost();
+                if (flow < cap) exp_trash_fwd[pos] = true;
+                if (flow > 0)   exp_trash_rev[pos] = true;
             } else if (const auto* t = std::get_if<TheoreticalTrashEdge>(&et)) {
                 // Source → TheoreticalNode (cost C_theo); end node is in the chain.
-                auto it = topo.node_to_pos.find(edges[ii].get_end_node_id());
-                if (it == topo.node_to_pos.end()) continue;
+                const size_t pos = topo.node_to_pos[edges[ii].get_end_node_id()];
+                if (pos == std::numeric_limits<size_t>::max()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
-                theo_trash_cost[it->second] = t->get_cost();
-                if (flow < cap) theo_trash_fwd[it->second] = true;
-                if (flow > 0)   theo_trash_rev[it->second] = true;
+                theo_trash_cost[pos] = t->get_cost();
+                if (flow < cap) theo_trash_fwd[pos] = true;
+                if (flow > 0)   theo_trash_rev[pos] = true;
             }
         }
 
@@ -1082,7 +1083,7 @@ public:
         }
 
         // Build theo->sink slack: capacity - flow.
-        std::unordered_map<LEMON_INDEX, VALUE_TYPE> theo_sink_slack;
+        std::vector<VALUE_TYPE> theo_sink_slack(nodes.size(), VALUE_TYPE(-1));
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INDEX>(edges.size()); ++ii) {
             if (std::holds_alternative<TheoreticalToSinkEdge>(edges[ii].get_type())) {
                 auto arc = lemon_graph.arcFromId(ii);
@@ -1098,8 +1099,8 @@ public:
             LEMON_INDEX node_id = node.get_id();
 
             // Slack > 0 with excess empirical: adding capacity does nothing.
-            auto slack_it = theo_sink_slack.find(node_id);
-            if (slack_it != theo_sink_slack.end() && slack_it->second > 0 && supply_fixed) {
+            const VALUE_TYPE slack = theo_sink_slack[node_id];
+            if (slack != VALUE_TYPE(-1) && slack > 0 && supply_fixed) {
                 result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), 0);
                 continue;
             }
@@ -1132,7 +1133,7 @@ public:
         for (auto& [spec_id, peak_idx, deriv] : peak_derivs)
             deriv_map[spec_id][peak_idx] = deriv;
 
-        std::unordered_map<size_t, VALUE_TYPE> accum;
+        std::vector<VALUE_TYPE> accum(no_target_distributions, VALUE_TYPE(0));
         for (const auto& node : nodes) {
             auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
             if (!theo) continue;
@@ -1140,7 +1141,11 @@ public:
                 deriv_map[theo->get_spectrum_id()][theo->get_peak_index()]
                 * static_cast<VALUE_TYPE>(theo->get_intensity());
         }
-        return {accum.begin(), accum.end()};
+        std::vector<std::pair<size_t, VALUE_TYPE>> result;
+        result.reserve(no_target_distributions);
+        for (size_t s = 0; s < no_target_distributions; ++s)
+            result.emplace_back(s, accum[s]);
+        return result;
     }
 };
 
@@ -1493,7 +1498,7 @@ public:
     }
 
     std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
-        std::unordered_map<size_t, VALUE_TYPE> accum;
+        std::vector<VALUE_TYPE> accum(_no_theoretical_spectra, VALUE_TYPE(0));
         for (const auto& sg : flow_subgraphs) {
             for (auto& [spec_id, deriv] : sg->spectrum_proportion_derivatives())
                 accum[spec_id] += deriv;
@@ -1502,7 +1507,11 @@ public:
             if (_isolated_theoretical_intensity[s] != 0)
                 accum[s] += static_cast<VALUE_TYPE>(_isolated_theo_trash_cost * _isolated_theoretical_intensity[s]);
         }
-        return {accum.begin(), accum.end()};
+        std::vector<std::pair<size_t, VALUE_TYPE>> result;
+        result.reserve(_no_theoretical_spectra);
+        for (size_t s = 0; s < _no_theoretical_spectra; ++s)
+            result.emplace_back(s, accum[s]);
+        return result;
     }
 
     static constexpr size_t value_type_size() {
@@ -1553,14 +1562,13 @@ public:
             const auto& chain_order = sg.get_chain_order();
             if (chain_order.size() >= 2) {
                 // Build node_id -> node* map for chain-order validation.
-                std::unordered_map<LEMON_INDEX, const FlowNode<intensity_type>*> node_map;
-                node_map.reserve(sg_nodes.size());
+                std::vector<const FlowNode<intensity_type>*> node_map(sg_nodes.size(), nullptr);
                 for (const auto& n : sg_nodes)
                     node_map[n.get_id()] = &n;
                 std::vector<double> chain_pos;
                 chain_pos.reserve(chain_order.size());
                 for (LEMON_INDEX nid : chain_order) {
-                    const auto& ntype = node_map.at(nid)->get_type();
+                    const auto& ntype = node_map[nid]->get_type();
                     if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&ntype))
                         chain_pos.push_back(new_empirical->get_point(emp->get_peak_index())[0]);
                     else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&ntype))
