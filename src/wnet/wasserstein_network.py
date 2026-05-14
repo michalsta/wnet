@@ -14,7 +14,7 @@ from wnet.wnet_cpp import (
     CCMethod,
 )
 from wnet.distribution import Distribution
-from wnet.distances import DistanceMetric, Distance
+from wnet.distances import DistanceMetric
 from wnet.visualization import show_graph
 
 
@@ -44,7 +44,7 @@ class WassersteinNetwork:
         self,
         base_distribution: Distribution,
         target_distributions: Sequence[Distribution],
-        distance: Distance,
+        distance: DistanceMetric,
         max_distance: Optional[float] = None,
         force_dense_1d: bool = False,
         solver=None,

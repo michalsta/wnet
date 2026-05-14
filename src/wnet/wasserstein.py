@@ -1,6 +1,6 @@
 from .wasserstein_network import WassersteinNetwork
 from .distribution import Distribution
-from .distances import Distance
+from .distances import DistanceMetric
 
 import numpy as np
 
@@ -8,7 +8,7 @@ import numpy as np
 def WassersteinDistance(
     distribution1: Distribution,
     distribution2: Distribution,
-    distance: Distance,
+    distance: DistanceMetric,
     force_dense_1d: bool = False,
     solver=None,
     method: str = None,
@@ -19,7 +19,7 @@ def WassersteinDistance(
     Args:
         distribution1 (Distribution): The first distribution.
         distribution2 (Distribution): The second distribution.
-        distance (Distance): The distance metric to use. Must be a subclass of wnet.distances.Distance
+        distance (DistanceMetric): The distance metric to use (e.g. DistanceMetric.L1, DistanceMetric.L2).
         force_dense_1d (bool): In 1D, force the dense factory. See WassersteinNetwork for details.
         solver: Solver config object (e.g. NetworkSimplex(), CostScaling()). Defaults to NetworkSimplex().
         method (str): Deprecated. Use solver= instead.
@@ -49,7 +49,7 @@ def WassersteinDistance(
 def TruncatedWassersteinDistance(
     distribution1: Distribution,
     distribution2: Distribution,
-    distance: Distance,
+    distance: DistanceMetric,
     max_distance: float,
     force_dense_1d: bool = False,
     solver=None,
@@ -61,7 +61,7 @@ def TruncatedWassersteinDistance(
     Args:
         distribution1 (Distribution): The first distribution.
         distribution2 (Distribution): The second distribution.
-        distance (Distance): The distance metric to use. Must be a subclass of wnet.distances.Distance
+        distance (DistanceMetric): The distance metric to use (e.g. DistanceMetric.L1, DistanceMetric.L2).
         max_distance (float): The maximum allowed transport cost.
         force_dense_1d (bool): In 1D, force the dense factory. See WassersteinNetwork for details.
         solver: Solver config object (e.g. NetworkSimplex(), CostScaling()). Defaults to NetworkSimplex().
