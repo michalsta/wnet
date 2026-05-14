@@ -82,6 +82,20 @@ class WassersteinNetworkSubgraph {
     bool built = false;
     int _cold_starts_via_run = 0;
 
+    struct MatchingEdgeInfo {
+        lemon::StaticDigraph::Arc arc;
+        intensity_type emp_intensity;
+        intensity_type theo_intensity;
+        size_t spectrum_id;
+    };
+    struct TheoSinkEdgeInfo {
+        lemon::StaticDigraph::Arc arc;
+        intensity_type theo_intensity;
+        size_t spectrum_id;
+    };
+    std::vector<MatchingEdgeInfo> _matching_edge_cache;
+    std::vector<TheoSinkEdgeInfo> _theo_sink_edge_cache;
+
     struct ChainTopology {
         std::vector<LEMON_INDEX> order;
         std::vector<LEMON_INDEX> right_arc_ids;
@@ -401,6 +415,21 @@ public:
         ns_solver.reset();
         cc_solver.reset();
         _build_chain_topology();
+        _matching_edge_cache.clear();
+        _theo_sink_edge_cache.clear();
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            std::visit([&](const auto& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, MatchingEdge>) {
+                    const auto& theo = std::get<TheoreticalNode<intensity_type>>(edges[ii].get_end_node().get_type());
+                    const auto& emp  = std::get<EmpiricalNode<intensity_type>>(edges[ii].get_start_node().get_type());
+                    _matching_edge_cache.push_back({lemon_graph.arcFromId(ii), emp.get_intensity(), theo.get_intensity(), theo.get_spectrum_id()});
+                } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
+                    const auto& theo = std::get<TheoreticalNode<intensity_type>>(edges[ii].get_start_node().get_type());
+                    _theo_sink_edge_cache.push_back({lemon_graph.arcFromId(ii), theo.get_intensity(), theo.get_spectrum_id()});
+                }
+            }, edges[ii].get_type());
+        }
         built = true;
     }
 
@@ -413,31 +442,15 @@ public:
         if(point.size() != no_target_distributions)
             throw std::runtime_error("Point dimension: " + std::to_string(point.size()) + " does not match number of target distributions: " + std::to_string(no_target_distributions));
         lemon_theoretical_intensity = 0;
-        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
-        {
-            const FlowEdge<intensity_type>& edge = edges[ii];
-            std::visit([&](const auto& arg) {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr (std::is_same_v<T, MatchingEdge>) {
-                    const auto& theoretical_node_type = std::get<TheoreticalNode<intensity_type>>(edge.get_end_node().get_type());
-                    capacities_map[lemon_graph.arcFromId(ii)] = (VALUE_TYPE) std::min<double>(
-                        theoretical_node_type.get_intensity() * point[theoretical_node_type.get_spectrum_id()],
-                        std::get<EmpiricalNode<intensity_type>>(edge.get_start_node().get_type()).get_intensity());
-                    }
-                else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
-                    const auto& theoretical_node_type = std::get<TheoreticalNode<intensity_type>>(edge.get_start_node().get_type());
-                    VALUE_TYPE lemon_intensity = (VALUE_TYPE) (theoretical_node_type.get_intensity() * point[theoretical_node_type.get_spectrum_id()]);
-                    capacities_map[lemon_graph.arcFromId(ii)] = lemon_intensity;
-                    lemon_theoretical_intensity += lemon_intensity;
-                }
-                else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {}
-                else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {}
-                else if constexpr (std::is_same_v<T, ChainEdge>) {}
-                // Capacity fixed at max/2 in build(); no update needed (see comment there).
-                else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) {}
-                else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) {}
-                else { throw std::runtime_error("Invalid FlowEdgeType"); };
-            }, edge.get_type());
+        for (const auto& e : _matching_edge_cache) {
+            capacities_map[e.arc] = (VALUE_TYPE) std::min<double>(
+                e.theo_intensity * point[e.spectrum_id],
+                e.emp_intensity);
+        }
+        for (const auto& e : _theo_sink_edge_cache) {
+            VALUE_TYPE lemon_intensity = (VALUE_TYPE) (e.theo_intensity * point[e.spectrum_id]);
+            capacities_map[e.arc] = lemon_intensity;
+            lemon_theoretical_intensity += lemon_intensity;
         }
         // Determine how many units to push from source to sink.
         // When both sides can absorb excess (simple trash, or both asymmetric
