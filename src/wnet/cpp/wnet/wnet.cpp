@@ -91,6 +91,13 @@ NB_MODULE(wnet_cpp, m) {
         .value("MINIMUM_MEAN_CYCLE_CANCELING", CCMethod::MINIMUM_MEAN_CYCLE_CANCELING)
         .value("CANCEL_AND_TIGHTEN",           CCMethod::CANCEL_AND_TIGHTEN);
 
+    // Python keyword `None` cannot be an attribute name, so the None mode is
+    // exposed as WarmMode.NONE.
+    nb::enum_<NSWarmMode>(m, "WarmMode")
+        .value("NONE",   NSWarmMode::None)
+        .value("Simple", NSWarmMode::Simple)
+        .value("Dual",   NSWarmMode::Dual);
+
     nb::class_<NetworkSimplexConfig>(m, "NetworkSimplex")
         .def(nb::init<>())
         .def_rw("pivot", &NetworkSimplexConfig::pivot)
@@ -153,6 +160,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::spectrum_proportion_derivatives)
         .def("warm_start_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::warm_start_count)
         .def("cold_start_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::cold_start_count)
+        .def("dual_repair_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::dual_repair_count)
         .def("count_empirical_nodes", &WassersteinNetworkSubgraph<int64_t, int64_t>::count_nodes_of_type<EmpiricalNode<int64_t>>)
         .def("count_theoretical_nodes", &WassersteinNetworkSubgraph<int64_t, int64_t>::count_nodes_of_type<TheoreticalNode<int64_t>>)
         .def("count_matching_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::count_edges_of_type<MatchingEdge>)
@@ -184,6 +192,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::spectrum_proportion_derivatives)
         .def("warm_start_count", &WassersteinNetworkSubgraph<int64_t, double>::warm_start_count)
         .def("cold_start_count", &WassersteinNetworkSubgraph<int64_t, double>::cold_start_count)
+        .def("dual_repair_count", &WassersteinNetworkSubgraph<int64_t, double>::dual_repair_count)
         .def("count_empirical_nodes", &WassersteinNetworkSubgraph<int64_t, double>::count_nodes_of_type<EmpiricalNode<double>>)
         .def("count_theoretical_nodes", &WassersteinNetworkSubgraph<int64_t, double>::count_nodes_of_type<TheoreticalNode<double>>)
         .def("count_matching_edges", &WassersteinNetworkSubgraph<int64_t, double>::count_edges_of_type<MatchingEdge>)
@@ -286,6 +295,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, int64_t>::spectrum_proportion_derivatives)
         .def("warm_start_count", &WassersteinNetwork<int64_t, int64_t>::warm_start_count)
         .def("cold_start_count", &WassersteinNetwork<int64_t, int64_t>::cold_start_count)
+        .def("dual_repair_count", &WassersteinNetwork<int64_t, int64_t>::dual_repair_count)
         BIND_UPDATE_AND_SOLVE(WNetII, int64_t,  1)
         BIND_UPDATE_AND_SOLVE(WNetII, int64_t,  2)
         BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 3)
@@ -367,6 +377,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, double>::spectrum_proportion_derivatives)
         .def("warm_start_count", &WassersteinNetwork<int64_t, double>::warm_start_count)
         .def("cold_start_count", &WassersteinNetwork<int64_t, double>::cold_start_count)
+        .def("dual_repair_count", &WassersteinNetwork<int64_t, double>::dual_repair_count)
         BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  1)
         BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  2)
         BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  3)
