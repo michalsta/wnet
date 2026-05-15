@@ -1,4 +1,4 @@
 #!/bin/bash
 
 pip uninstall -y wnet
-VERBOSE=1 pip install -v -e .
+SKBUILD_BUILD_DIR=_skbuild_$(hostname -s) VERBOSE=1 pip install -v -e . --no-build-isolation
