@@ -124,7 +124,7 @@ jobs:
           - label: "clang libstdc++ asan+ubsan"
             cc: clang
             cxx: clang++
-            apt_extra: clang
+            apt_extra: clang libclang-rt-18-dev
             build_type: Debug
             cxx_flags: >-
               -fsanitize=address,undefined
@@ -168,7 +168,7 @@ jobs:
           - label: "clang libc++ asan+ubsan"
             cc: clang
             cxx: clang++
-            apt_extra: clang libc++-dev libc++abi-dev
+            apt_extra: clang libclang-rt-18-dev libc++-dev libc++abi-dev
             build_type: Debug
             cxx_flags: >-
               -fsanitize=address,undefined
@@ -180,7 +180,13 @@ jobs:
             link_flags: "-stdlib=libc++"
             preload_asan: true
             pythonmalloc: malloc
-            asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
+            # alloc_dealloc_mismatch=0: suppress a false positive caused by an ODR
+            # mismatch between libc++ and libc++abi on Ubuntu LLVM 18. libc++.so.1
+            # allocates __libcpp_refstring (used in std::logic_error and its subclasses)
+            # with operator new, but libc++abi.so.1 destroys it with free. This is a
+            # system library packaging issue, not a bug in wnet. All other ASan checks
+            # remain active.
+            asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0:alloc_dealloc_mismatch=0"
             ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
             dump_logs: true
 
