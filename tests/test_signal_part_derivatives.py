@@ -436,10 +436,16 @@ def test_signal_part_derivatives_includes_isolated_peaks():
     """
     trash = 20
     max_dist = 20
-    base = Distribution_1D(np.array([0.0], dtype=np.float64), np.array([5], dtype=np.int64))
+    base = Distribution_1D(
+        np.array([0.0], dtype=np.float64), np.array([5], dtype=np.int64)
+    )
     # peak 0 at pos=10 is within max_dist=20; peak 1 at pos=1000 is isolated
-    target = Distribution_1D(np.array([10.0, 1000.0], dtype=np.float64), np.array([3, 4], dtype=np.int64))
-    W = WassersteinNetwork(base, [target], distance=DistanceMetric.L1, max_distance=max_dist)
+    target = Distribution_1D(
+        np.array([10.0, 1000.0], dtype=np.float64), np.array([3, 4], dtype=np.int64)
+    )
+    W = WassersteinNetwork(
+        base, [target], distance=DistanceMetric.L1, max_distance=max_dist
+    )
     W.add_simple_trash(trash)
     W.build()
     W.solve()
@@ -462,8 +468,13 @@ def test_signal_part_derivatives_includes_isolated_peaks():
     def perturb(peak_idx, delta):
         new_int = [3, 4]
         new_int[peak_idx] += delta
-        t2 = Distribution_1D(np.array([10.0, 1000.0], dtype=np.float64), np.array(new_int, dtype=np.int64))
-        W2 = WassersteinNetwork(base, [t2], distance=DistanceMetric.L1, max_distance=max_dist)
+        t2 = Distribution_1D(
+            np.array([10.0, 1000.0], dtype=np.float64),
+            np.array(new_int, dtype=np.int64),
+        )
+        W2 = WassersteinNetwork(
+            base, [t2], distance=DistanceMetric.L1, max_distance=max_dist
+        )
         W2.add_simple_trash(trash)
         W2.build()
         W2.solve()

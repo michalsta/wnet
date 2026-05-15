@@ -167,7 +167,9 @@ class WassersteinNetwork:
         """
         new_vec_base = new_base.vecdist
         new_vec_targets = [t.vecdist for t in new_targets]
-        self.wnet.update_positions_and_solve(new_vec_base, new_vec_targets, self._distance)
+        self.wnet.update_positions_and_solve(
+            new_vec_base, new_vec_targets, self._distance
+        )
 
     def subgraphs(self) -> list["SubgraphWrapper"]:
         """
