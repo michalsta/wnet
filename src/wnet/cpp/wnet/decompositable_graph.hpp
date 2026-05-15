@@ -412,7 +412,12 @@ public:
                         return lemon_intensity;
                     }
                     else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
-                    else if constexpr (std::is_same_v<T, SimpleTrashEdge>) return (VALUE_TYPE) 0;
+                    // Simple trash carries flow up to lemon_total_flow (the supply set on
+                    // source/sink). A tight cap = lemon_total_flow is redundant — flow is
+                    // already bounded by supply — and causes warm-restart to fail whenever
+                    // lemon_total_flow shrinks below the previous trash flow. Use max/2 like
+                    // ChainEdge so the cap is non-binding and never needs updating.
+                    else if constexpr (std::is_same_v<T, SimpleTrashEdge>) return std::numeric_limits<VALUE_TYPE>::max() / 2;
                     // Chain edges carry unlimited flow; max/2 avoids any
                     // accidental overflow when LEMON internals sum caps.
                     else if constexpr (std::is_same_v<T, ChainEdge>) return std::numeric_limits<VALUE_TYPE>::max() / 2;
@@ -520,11 +525,9 @@ public:
                 "Call add_simple_trash() before build() to fix this."
             );
         }
-        if(simple_trash_idx != std::numeric_limits<LEMON_INDEX>::max())
-        {
-            capacities_map[lemon_graph.arcFromId(simple_trash_idx)] = lemon_total_flow;
-            costs_map[lemon_graph.arcFromId(simple_trash_idx)] = std::get<SimpleTrashEdge>(edges[simple_trash_idx].get_type()).get_cost();
-        }
+        // Trash cap/cost are fixed at build time (cap = max/2, cost = SimpleTrashEdge.cost);
+        // touching them here would force a warm-restart cold fallback whenever lemon_total_flow
+        // changes between solves. Flow on the trash arc is already bounded by source supply.
         node_supply_map[lemon_graph.nodeFromId(0)] = lemon_total_flow;
         node_supply_map[lemon_graph.nodeFromId(1)] = -lemon_total_flow;
         _run_solver();
