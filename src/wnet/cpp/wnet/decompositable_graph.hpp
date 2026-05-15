@@ -104,6 +104,11 @@ class WassersteinNetworkSubgraph {
     mutable std::vector<VALUE_TYPE> _chain_L_buf;    // K-1; reused for L/c_left in chain functions
     mutable std::vector<VALUE_TYPE> _chain_dist_buf; // n nodes; reused by chain_residual_distances
     std::vector<double> _chain_pos_buf;              // K; reused by update_positions_and_solve
+    mutable std::vector<uint8_t>    _chain_has_src_fwd,  _chain_has_src_rev;
+    mutable std::vector<uint8_t>    _chain_has_sink_fwd, _chain_has_sink_rev;
+    mutable std::vector<VALUE_TYPE> _chain_exp_trash_cost, _chain_theo_trash_cost;
+    mutable std::vector<uint8_t>    _chain_exp_trash_fwd, _chain_exp_trash_rev;
+    mutable std::vector<uint8_t>    _chain_theo_trash_fwd, _chain_theo_trash_rev;
 
     struct ChainTopology {
         std::vector<LEMON_INDEX> order;
@@ -451,6 +456,11 @@ public:
             _chain_L_buf.resize(Km1);
             _chain_pos_buf.resize(K);
             _chain_dist_buf.resize(nodes.size());
+            _chain_has_src_fwd.resize(K);   _chain_has_src_rev.resize(K);
+            _chain_has_sink_fwd.resize(K);  _chain_has_sink_rev.resize(K);
+            _chain_exp_trash_cost.resize(K); _chain_theo_trash_cost.resize(K);
+            _chain_exp_trash_fwd.resize(K); _chain_exp_trash_rev.resize(K);
+            _chain_theo_trash_fwd.resize(K); _chain_theo_trash_rev.resize(K);
         }
         built = true;
     }
@@ -813,11 +823,21 @@ public:
         // Cost-0 arcs (SrcToEmpiricalEdge, TheoreticalToSinkEdge) use bool flags.
         // Non-zero trash arcs (EmpiricalTrashEdge, TheoreticalTrashEdge) store the
         // arc cost per position (INF = absent) plus forward/reverse availability.
-        std::vector<bool> has_src_fwd(K, false), has_src_rev(K, false);
-        std::vector<bool> has_sink_fwd(K, false), has_sink_rev(K, false);
-        std::vector<VALUE_TYPE> exp_trash_cost(K, INF), theo_trash_cost(K, INF);
-        std::vector<bool> exp_trash_fwd(K, false), exp_trash_rev(K, false);
-        std::vector<bool> theo_trash_fwd(K, false), theo_trash_rev(K, false);
+        auto& has_src_fwd    = _chain_has_src_fwd;   auto& has_src_rev    = _chain_has_src_rev;
+        auto& has_sink_fwd   = _chain_has_sink_fwd;  auto& has_sink_rev   = _chain_has_sink_rev;
+        auto& exp_trash_cost = _chain_exp_trash_cost; auto& theo_trash_cost = _chain_theo_trash_cost;
+        auto& exp_trash_fwd  = _chain_exp_trash_fwd;  auto& exp_trash_rev  = _chain_exp_trash_rev;
+        auto& theo_trash_fwd = _chain_theo_trash_fwd; auto& theo_trash_rev = _chain_theo_trash_rev;
+        std::fill(has_src_fwd.begin(),     has_src_fwd.end(),     uint8_t(0));
+        std::fill(has_src_rev.begin(),     has_src_rev.end(),     uint8_t(0));
+        std::fill(has_sink_fwd.begin(),    has_sink_fwd.end(),    uint8_t(0));
+        std::fill(has_sink_rev.begin(),    has_sink_rev.end(),    uint8_t(0));
+        std::fill(exp_trash_cost.begin(),  exp_trash_cost.end(),  INF);
+        std::fill(theo_trash_cost.begin(), theo_trash_cost.end(), INF);
+        std::fill(exp_trash_fwd.begin(),   exp_trash_fwd.end(),   uint8_t(0));
+        std::fill(exp_trash_rev.begin(),   exp_trash_rev.end(),   uint8_t(0));
+        std::fill(theo_trash_fwd.begin(),  theo_trash_fwd.end(),  uint8_t(0));
+        std::fill(theo_trash_rev.begin(),  theo_trash_rev.end(),  uint8_t(0));
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             const auto& et = edges[ii].get_type();
             if (std::holds_alternative<SrcToEmpiricalEdge>(et)) {
@@ -1140,12 +1160,17 @@ public:
         const bool supply_fixed = (lemon_empirical_intensity > lemon_theoretical_intensity);
         const bool use_chain = has_chain_edges();
         const bool use_dijkstra = !use_chain && ns_solver.has_value();
-        auto dist_src  = use_chain   ? chain_residual_distances(0)
-                       : use_dijkstra ? dijkstra_residual(0)
-                       : bellman_ford_residual(0);
-        auto dist_sink = use_chain   ? chain_residual_distances(sink_id)
-                       : use_dijkstra ? dijkstra_residual(sink_id)
-                       : bellman_ford_residual(sink_id);
+        const bool asymmetric = experimental_trash_added || theoretical_trash_added;
+        const bool need_src  = !asymmetric || !supply_fixed;
+        const bool need_sink = !asymmetric ||  supply_fixed;
+        auto compute_dist = [&](LEMON_INDEX id) -> std::vector<VALUE_TYPE> {
+            return use_chain    ? chain_residual_distances(id)
+                 : use_dijkstra ? dijkstra_residual(id)
+                 : bellman_ford_residual(id);
+        };
+        std::vector<VALUE_TYPE> dist_src, dist_sink;
+        if (need_src)  dist_src  = compute_dist(0);
+        if (need_sink) dist_sink = compute_dist(sink_id);
 
         // Pre-compute simple-trash adjustments (unused in asymmetric path).
         VALUE_TYPE trash_cost = 0, src_adjust = 0, sink_adjust = 0;
