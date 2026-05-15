@@ -168,7 +168,13 @@ jobs:
           - label: "clang libc++ asan+ubsan"
             cc: clang
             cxx: clang++
-            apt_extra: clang libclang-rt-18-dev libc++-dev libc++abi-dev
+            apt_extra: clang libclang-rt-18-dev libc++-18-dev libc++abi-18-dev
+            # Ubuntu's libc++/libc++abi packages are built with -Bsymbolic-functions,
+            # which prevents ASan from intercepting __cxa_rethrow_primary_exception and
+            # causes a CHECK failure at runtime (LLVM issue #59432, fixed upstream but
+            # not yet in Ubuntu 24.04 packages). use_llvm_apt installs the runtime
+            # libraries from apt.llvm.org, which builds without that flag.
+            use_llvm_apt: true
             build_type: Debug
             cxx_flags: >-
               -fsanitize=address,undefined
@@ -180,13 +186,7 @@ jobs:
             link_flags: "-stdlib=libc++"
             preload_asan: true
             pythonmalloc: malloc
-            # alloc_dealloc_mismatch=0: suppress a false positive caused by an ODR
-            # mismatch between libc++ and libc++abi on Ubuntu LLVM 18. libc++.so.1
-            # allocates __libcpp_refstring (used in std::logic_error and its subclasses)
-            # with operator new, but libc++abi.so.1 destroys it with free. This is a
-            # system library packaging issue, not a bug in wnet. All other ASan checks
-            # remain active.
-            asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0:alloc_dealloc_mismatch=0"
+            asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
             ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
             dump_logs: true
 
@@ -219,6 +219,21 @@ jobs:
           python-version: "3.14"
       - name: Install dependencies
         run: python -m pip install --upgrade pip
+      - name: Set up apt.llvm.org for libc++ without -Bsymbolic-functions
+        # Ubuntu's libc++/libc++abi packages are built with -Bsymbolic-functions,
+        # which prevents ASan from intercepting __cxa_rethrow_primary_exception
+        # (LLVM issue #59432). apt.llvm.org builds without this flag. We pin those
+        # packages at priority 1001 so they take precedence over Ubuntu's
+        # epoch-versioned packages (e.g. 1:18.1.3-1ubuntu1).
+        if: matrix.use_llvm_apt
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-18 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-18.list
+          printf 'Package: libc++1-18 libc++abi1-18 libc++-18-dev libc++abi-18-dev libclang-rt-18-dev\nPin: origin "apt.llvm.org"\nPin-Priority: 1001\n' \
+            | sudo tee /etc/apt/preferences.d/llvm-libcxx
+          sudo apt-get update -q
       - name: Install system packages
         if: matrix.apt_extra != ''
         run: sudo apt-get install -y ${{ matrix.apt_extra }}
