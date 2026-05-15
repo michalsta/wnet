@@ -23,7 +23,9 @@ template<typename T>
 nb::ndarray<nb::numpy, T, nb::ndim<1>> vector_to_numpy(const std::vector<T>& vec) {
     // Create a 1D NumPy array from the vector
     T* data = new T[vec.size()];
-    std::memcpy(data, vec.data(), vec.size() * sizeof(T));
+    // Guard against vec.data() == nullptr when vec is empty (memcpy UB with null src).
+    if (!vec.empty())
+        std::memcpy(data, vec.data(), vec.size() * sizeof(T));
     nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
     return nb::ndarray<nb::numpy, T, nb::ndim<1>>(
         data,
@@ -55,7 +57,9 @@ nb::ndarray<nb::numpy, T, nb::shape<-1>> span_to_numpy(const std::span<const T>&
 {
     // Create a 1D NumPy array from the span
     T* data = new T[span.size()];
-    std::memcpy(data, span.data(), span.size() * sizeof(T));
+    // Guard against span.data() == nullptr when span is empty (memcpy UB with null src).
+    if (!span.empty())
+        std::memcpy(data, span.data(), span.size() * sizeof(T));
     nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
     return nb::ndarray<nb::numpy, T, nb::shape<-1>>(
         data,
