@@ -86,6 +86,9 @@ jobs:
               -D_GLIBCXX_ASSERTIONS
               -D_GLIBCXX_SANITIZE_VECTOR
             link_flags: ""
+            # GCC adds libasan.so as DT_NEEDED automatically for .so targets;
+            # no LD_PRELOAD needed.
+            preload_asan: false
             pythonmalloc: malloc
             asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
             ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
@@ -111,6 +114,7 @@ jobs:
               -fstack-clash-protection
               -fcf-protection=full
             link_flags: ""
+            preload_asan: false
             pythonmalloc: ""
             asan_opts: ""
             ubsan_opts: ""
@@ -127,10 +131,10 @@ jobs:
               -fno-sanitize=vptr
               -fno-sanitize-recover=all
               -fno-omit-frame-pointer
-              -shared-libasan
               -D_GLIBCXX_ASSERTIONS
               -D_GLIBCXX_SANITIZE_VECTOR
             link_flags: ""
+            preload_asan: true
             pythonmalloc: malloc
             asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
             ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
@@ -151,6 +155,7 @@ jobs:
               -fstack-clash-protection
               -fcf-protection=full
             link_flags: ""
+            preload_asan: false
             pythonmalloc: ""
             asan_opts: ""
             ubsan_opts: ""
@@ -170,10 +175,10 @@ jobs:
               -fno-sanitize=vptr
               -fno-sanitize-recover=all
               -fno-omit-frame-pointer
-              -shared-libasan
               -stdlib=libc++
               -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE
             link_flags: "-stdlib=libc++"
+            preload_asan: true
             pythonmalloc: malloc
             asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
             ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
@@ -194,6 +199,7 @@ jobs:
               -fstack-clash-protection
               -fcf-protection=full
             link_flags: "-stdlib=libc++"
+            preload_asan: false
             pythonmalloc: ""
             asan_opts: ""
             ubsan_opts: ""
@@ -222,10 +228,6 @@ jobs:
           CXX_FLAGS: ${{ matrix.cxx_flags }}
           LINK_FLAGS: ${{ matrix.link_flags }}
         run: |
-          # No LD_PRELOAD: libasan is a NEEDED entry in wnet_cpp.so, so it loads
-          # when Python imports wnet (after libstdc++/libc++, so ASan's __cxa_throw
-          # interceptor finds the real symbol). verify_asan_link_order=0 suppresses
-          # the "ASan not first" warning for the Python host process.
           LINK_ARGS=()
           if [ -n "$LINK_FLAGS" ]; then
             LINK_ARGS=(--config-settings="cmake.define.CMAKE_SHARED_LINKER_FLAGS=${LINK_FLAGS}")
@@ -234,9 +236,20 @@ jobs:
             --config-settings="cmake.build-type=${{ matrix.build_type }}" \
             --config-settings="cmake.define.CMAKE_CXX_FLAGS=${CXX_FLAGS}" \
             "${LINK_ARGS[@]}"
+      - name: Find libasan for LD_PRELOAD
+        # Clang on Ubuntu does not ship a shared libclang_rt.asan.so, so the .so
+        # is built with static ASan stubs that reference runtime symbols as weak
+        # externals.  LD_PRELOADing GCC's libasan.so resolves them before Python
+        # imports the extension.  GCC jobs use DT_NEEDED and don't need this.
+        if: matrix.preload_asan
+        run: |
+          ASAN_LIB=$(ldconfig -p | awk '/libasan\.so\.[0-9]/{print $NF; exit}')
+          echo "Preloading ASan from: $ASAN_LIB"
+          echo "WNET_ASAN_PRELOAD=${ASAN_LIB}" >> $GITHUB_ENV
       - name: Test with pytest
         working-directory: ./tests
         env:
+          LD_PRELOAD: ${{ env.WNET_ASAN_PRELOAD }}
           PYTHONMALLOC: ${{ matrix.pythonmalloc }}
           ASAN_OPTIONS: ${{ matrix.asan_opts }}
           UBSAN_OPTIONS: ${{ matrix.ubsan_opts }}
