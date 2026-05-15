@@ -100,6 +100,10 @@ class WassersteinNetworkSubgraph {
     std::vector<TheoSinkEdgeInfo> _theo_sink_edge_cache;
     std::vector<uint8_t> _unlimited_arc;  // true for MatchingEdge and ChainEdge
     std::vector<VALUE_TYPE> _costs_buf;   // reusable scratch for update_positions_and_solve
+    mutable std::vector<VALUE_TYPE> _chain_R_buf;    // K-1; reused for R/c_right in chain functions
+    mutable std::vector<VALUE_TYPE> _chain_L_buf;    // K-1; reused for L/c_left in chain functions
+    mutable std::vector<VALUE_TYPE> _chain_dist_buf; // n nodes; reused by chain_residual_distances
+    std::vector<double> _chain_pos_buf;              // K; reused by update_positions_and_solve
 
     struct ChainTopology {
         std::vector<LEMON_INDEX> order;
@@ -440,6 +444,14 @@ public:
             }, edges[ii].get_type());
         }
         _costs_buf.assign(edges.size(), VALUE_TYPE(0));
+        if (_chain_topo.has_value()) {
+            const size_t K = _chain_topo->order.size();
+            const size_t Km1 = K > 1 ? K - 1 : 0;
+            _chain_R_buf.resize(Km1);
+            _chain_L_buf.resize(Km1);
+            _chain_pos_buf.resize(K);
+            _chain_dist_buf.resize(nodes.size());
+        }
         built = true;
     }
 
@@ -579,6 +591,7 @@ public:
     };
 
     std::vector<VALUE_TYPE>& costs_scratch() { return _costs_buf; }
+    std::vector<double>& chain_pos_scratch() { return _chain_pos_buf; }
 
     void flows_for_target(size_t spectrum_id,
                             std::vector<LEMON_INDEX>& empirical_peak_indices,
@@ -776,9 +789,9 @@ public:
         const auto& topo = *_chain_topo;
         const size_t K = topo.order.size();
 
-        const LEMON_INDEX n = lemon_graph.nodeNum();
         const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
-        std::vector<VALUE_TYPE> dist(n, INF);
+        auto& dist = _chain_dist_buf;
+        std::fill(dist.begin(), dist.end(), INF);
         dist[source_id] = 0;
         const LEMON_INDEX src_id = 0;
         const LEMON_INDEX sink_id = 1;
@@ -787,7 +800,8 @@ public:
         //   +gap if no leftward flow (forward of rightward arc), else -gap
         //   (reverse of leftward arc, since L[g] > 0 unlocks that residual).
         // c_left[g]: symmetric for the opposite direction.
-        std::vector<VALUE_TYPE> c_right(K > 0 ? K - 1 : 0), c_left(K > 0 ? K - 1 : 0);
+        auto& c_right = _chain_R_buf;
+        auto& c_left  = _chain_L_buf;
         for (size_t g = 0; g + 1 < K; ++g) {
             const VALUE_TYPE R = _solver_flow(lemon_graph.arcFromId(topo.right_arc_ids[g]));
             const VALUE_TYPE L = _solver_flow(lemon_graph.arcFromId(topo.left_arc_ids[g]));
@@ -948,7 +962,8 @@ public:
         const size_t K = topo.order.size();
         if (K < 2) return;
 
-        std::vector<VALUE_TYPE> R(K - 1), L(K - 1);
+        auto& R = _chain_R_buf;
+        auto& L = _chain_L_buf;
         for (size_t g = 0; g < K - 1; ++g) {
             R[g] = _solver_flow(lemon_graph.arcFromId(topo.right_arc_ids[g]));
             L[g] = _solver_flow(lemon_graph.arcFromId(topo.left_arc_ids[g]));
@@ -1616,8 +1631,8 @@ public:
             // nodes[i].get_id() == i by construction, so sg_nodes[nid] is a direct lookup.
             const auto& chain_order = sg.get_chain_order();
             if (chain_order.size() >= 2) {
-                std::vector<double> chain_pos;
-                chain_pos.reserve(chain_order.size());
+                auto& chain_pos = sg.chain_pos_scratch();
+                chain_pos.clear();
                 for (LEMON_INDEX nid : chain_order) {
                     const auto& ntype = sg_nodes[nid].get_type();
                     if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&ntype))
