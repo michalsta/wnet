@@ -236,16 +236,18 @@ jobs:
             --config-settings="cmake.build-type=${{ matrix.build_type }}" \
             --config-settings="cmake.define.CMAKE_CXX_FLAGS=${CXX_FLAGS}" \
             "${LINK_ARGS[@]}"
-      - name: Find libasan for LD_PRELOAD
-        # Clang on Ubuntu does not ship a shared libclang_rt.asan.so, so the .so
-        # is built with static ASan stubs that reference runtime symbols as weak
-        # externals.  LD_PRELOADing GCC's libasan.so resolves them before Python
-        # imports the extension.  GCC jobs use DT_NEEDED and don't need this.
+      - name: Find sanitizer libraries for LD_PRELOAD
+        # Clang on Ubuntu does not ship shared libclang_rt.asan.so / libclang_rt.ubsan.so,
+        # so the .so is built with static stubs that reference runtime symbols as weak
+        # externals.  LD_PRELOADing GCC's libasan.so + libubsan.so resolves them before
+        # Python imports the extension.  GCC jobs use DT_NEEDED and don't need this.
         if: matrix.preload_asan
         run: |
           ASAN_LIB=$(ldconfig -p | awk '/libasan\.so\.[0-9]/{print $NF; exit}')
+          UBSAN_LIB=$(ldconfig -p | awk '/libubsan\.so\.[0-9]/{print $NF; exit}')
           echo "Preloading ASan from: $ASAN_LIB"
-          echo "WNET_ASAN_PRELOAD=${ASAN_LIB}" >> $GITHUB_ENV
+          echo "Preloading UBSan from: $UBSAN_LIB"
+          echo "WNET_ASAN_PRELOAD=${ASAN_LIB} ${UBSAN_LIB}" >> $GITHUB_ENV
       - name: Test with pytest
         working-directory: ./tests
         env:
