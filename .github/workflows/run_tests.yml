@@ -166,11 +166,11 @@ jobs:
           # _LIBCPP_ENABLE_ASSERTIONS is intentionally absent: since LLVM 18 it is
           # deprecated and hard-errors when combined with _LIBCPP_HARDENING_MODE.
           - label: "clang libc++ asan+ubsan"
-            cc: clang-20
-            cxx: clang++-20
-            apt_extra: clang-20 libclang-rt-20-dev libc++-20-dev libc++abi-20-dev
-            # Use LLVM 20 from apt.llvm.org (see use_llvm_apt step). Ubuntu 24.04
-            # doesn't ship LLVM 20, so there's no epoch-version conflict and no need
+            cc: clang-22
+            cxx: clang++-22
+            apt_extra: clang-22 libclang-rt-22-dev libc++-22-dev libc++abi-22-dev
+            # Use LLVM 22 from apt.llvm.org (see use_llvm_apt step). Ubuntu 24.04
+            # doesn't ship LLVM 22, so there's no epoch-version conflict and no need
             # for apt pinning. LLVM project packages are built without Ubuntu's
             # -Bsymbolic-functions LDFLAGS patch that breaks ASan interception of
             # __cxa_rethrow_primary_exception in Ubuntu's LLVM 18 (LLVM issue #59432).
@@ -219,16 +219,16 @@ jobs:
           python-version: "3.14"
       - name: Install dependencies
         run: python -m pip install --upgrade pip
-      - name: Set up LLVM 20 from apt.llvm.org
-        # Ubuntu 24.04 doesn't ship LLVM 20, so no epoch-version conflict or pinning
+      - name: Set up LLVM 22 from apt.llvm.org
+        # Ubuntu 24.04 doesn't ship LLVM 22, so no epoch-version conflict or pinning
         # needed. LLVM project packages lack Ubuntu's -Bsymbolic-functions patch that
         # breaks ASan interception of __cxa_rethrow_primary_exception (LLVM #59432).
         if: matrix.use_llvm_apt
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
             | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-20.list
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list
           sudo apt-get update -q
       - name: Install system packages
         if: matrix.apt_extra != ''
