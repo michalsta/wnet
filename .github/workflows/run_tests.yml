@@ -237,17 +237,22 @@ jobs:
             --config-settings="cmake.define.CMAKE_CXX_FLAGS=${CXX_FLAGS}" \
             "${LINK_ARGS[@]}"
       - name: Find sanitizer libraries for LD_PRELOAD
-        # Clang on Ubuntu does not ship shared libclang_rt.asan.so / libclang_rt.ubsan.so,
-        # so the .so is built with static stubs that reference runtime symbols as weak
-        # externals.  LD_PRELOADing GCC's libasan.so + libubsan.so resolves them before
-        # Python imports the extension.  GCC jobs use DT_NEEDED and don't need this.
+        # Clang links the ASan runtime as a shared library (DT_NEEDED) when building
+        # .so targets.  The runtime lives under the LLVM tree (not in the standard
+        # ldconfig path), so Python cannot import the extension without help.
+        # We use `clang -print-file-name` to locate the exact library, then
+        # LD_PRELOAD it so it is mapped before Python imports the extension.
         if: matrix.preload_asan
         run: |
-          ASAN_LIB=$(ldconfig -p | awk '/libasan\.so\.[0-9]/{print $NF; exit}')
-          UBSAN_LIB=$(ldconfig -p | awk '/libubsan\.so\.[0-9]/{print $NF; exit}')
-          echo "Preloading ASan from: $ASAN_LIB"
-          echo "Preloading UBSan from: $UBSAN_LIB"
-          echo "WNET_ASAN_PRELOAD=${ASAN_LIB} ${UBSAN_LIB}" >> $GITHUB_ENV
+          ASAN_LIB=$(clang -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null || true)
+          if [ -f "$ASAN_LIB" ]; then
+            echo "Preloading clang ASan from: $ASAN_LIB"
+          else
+            # Fallback: search the LLVM tree (handles non-standard install layouts)
+            ASAN_LIB=$(find /usr/lib/llvm-* -name "libclang_rt.asan-x86_64.so" 2>/dev/null | head -1)
+            echo "Preloading clang ASan (fallback) from: $ASAN_LIB"
+          fi
+          echo "WNET_ASAN_PRELOAD=${ASAN_LIB}" >> $GITHUB_ENV
       - name: Test with pytest
         working-directory: ./tests
         env:
