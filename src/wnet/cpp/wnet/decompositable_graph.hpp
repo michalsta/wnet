@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <optional>
 #include <deque>
+#include <queue>
 #include <variant>
 
 
@@ -95,6 +96,7 @@ class WassersteinNetworkSubgraph {
     };
     std::vector<MatchingEdgeInfo> _matching_edge_cache;
     std::vector<TheoSinkEdgeInfo> _theo_sink_edge_cache;
+    std::vector<bool> _unlimited_arc;  // true for MatchingEdge and ChainEdge
 
     struct ChainTopology {
         std::vector<LEMON_INDEX> order;
@@ -417,13 +419,17 @@ public:
         _build_chain_topology();
         _matching_edge_cache.clear();
         _theo_sink_edge_cache.clear();
+        _unlimited_arc.assign(edges.size(), false);
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             std::visit([&](const auto& arg) {
                 using T = std::decay_t<decltype(arg)>;
                 if constexpr (std::is_same_v<T, MatchingEdge>) {
+                    _unlimited_arc[ii] = true;
                     const auto& theo = std::get<TheoreticalNode<intensity_type>>(edges[ii].get_end_node().get_type());
                     const auto& emp  = std::get<EmpiricalNode<intensity_type>>(edges[ii].get_start_node().get_type());
                     _matching_edge_cache.push_back({lemon_graph.arcFromId(ii), emp.get_intensity(), theo.get_intensity(), theo.get_spectrum_id()});
+                } else if constexpr (std::is_same_v<T, ChainEdge>) {
+                    _unlimited_arc[ii] = true;
                 } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
                     const auto& theo = std::get<TheoreticalNode<intensity_type>>(edges[ii].get_start_node().get_type());
                     _theo_sink_edge_cache.push_back({lemon_graph.arcFromId(ii), theo.get_intensity(), theo.get_spectrum_id()});
@@ -1022,6 +1028,62 @@ public:
         _run_solver(/*costs_changed=*/true);
     }
 
+    // Dijkstra variant of residual shortest-path using NetworkSimplex potentials.
+    // After an optimal NS solve, reduced costs c_r(u,v) = c(u,v) + pi[u] - pi[v]
+    // are >= 0 on every residual arc (complementary slackness), so Dijkstra applies.
+    // O((V+E) log V) vs Bellman-Ford's O(V*E).
+    // true_dist[v] = dijkstra_reduced_dist[v] + pi[v] - pi[source]
+    std::vector<VALUE_TYPE> dijkstra_residual(LEMON_INDEX source_id) const {
+        const LEMON_INDEX n = lemon_graph.nodeNum();
+        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
+
+        std::vector<VALUE_TYPE> pi(n);
+        for (LEMON_INDEX i = 0; i < n; ++i)
+            pi[i] = ns_solver->potential(lemon_graph.nodeFromId(i));
+
+        std::vector<VALUE_TYPE> rdist(n, INF);
+        rdist[source_id] = 0;
+        using Entry = std::pair<VALUE_TYPE, LEMON_INDEX>;
+        std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
+        pq.emplace(0, source_id);
+
+        while (!pq.empty()) {
+            auto [d, u] = pq.top(); pq.pop();
+            if (d > rdist[u]) continue;
+            const auto u_node = lemon_graph.nodeFromId(u);
+
+            // Forward residual: outgoing arcs of u
+            for (lemon::StaticDigraph::OutArcIt a(lemon_graph, u_node); a != lemon::INVALID; ++a) {
+                const LEMON_INDEX ii = lemon_graph.id(a);
+                if (ii == simple_trash_idx) continue;
+                if (!_unlimited_arc[ii] && _solver_flow(a) >= capacities_map[a]) continue;
+                const LEMON_INDEX v = lemon_graph.id(lemon_graph.target(a));
+                const VALUE_TYPE rcost = std::max<VALUE_TYPE>(0, costs_map[a] + pi[u] - pi[v]);
+                const VALUE_TYPE nd = d + rcost;
+                if (nd < rdist[v]) { rdist[v] = nd; pq.emplace(nd, v); }
+            }
+
+            // Reverse residual: incoming arcs of u (arc goes v→u in original, u→v in residual)
+            for (lemon::StaticDigraph::InArcIt a(lemon_graph, u_node); a != lemon::INVALID; ++a) {
+                const LEMON_INDEX ii = lemon_graph.id(a);
+                if (ii == simple_trash_idx) continue;
+                if (_solver_flow(a) <= 0) continue;
+                const LEMON_INDEX v = lemon_graph.id(lemon_graph.source(a));
+                const VALUE_TYPE rcost = std::max<VALUE_TYPE>(0, -costs_map[a] + pi[u] - pi[v]);
+                const VALUE_TYPE nd = d + rcost;
+                if (nd < rdist[v]) { rdist[v] = nd; pq.emplace(nd, v); }
+            }
+        }
+
+        // Convert reduced distances back to true distances
+        std::vector<VALUE_TYPE> dist(n, INF);
+        const VALUE_TYPE pi_src = pi[source_id];
+        for (LEMON_INDEX i = 0; i < n; ++i)
+            if (rdist[i] != INF)
+                dist[i] = rdist[i] + pi[i] - pi_src;
+        return dist;
+    }
+
     // Compute single-source shortest distances on the implicit residual graph
     // (excluding the trash edge). For each arc:
     //   forward residual if flow < capacity (cost = original)
@@ -1086,8 +1148,13 @@ public:
         const LEMON_INDEX sink_id = 1;
         const bool supply_fixed = (lemon_empirical_intensity > lemon_theoretical_intensity);
         const bool use_chain = has_chain_edges();
-        auto dist_src  = use_chain ? chain_residual_distances(0)       : bellman_ford_residual(0);
-        auto dist_sink = use_chain ? chain_residual_distances(sink_id) : bellman_ford_residual(sink_id);
+        const bool use_dijkstra = !use_chain && ns_solver.has_value();
+        auto dist_src  = use_chain   ? chain_residual_distances(0)
+                       : use_dijkstra ? dijkstra_residual(0)
+                       : bellman_ford_residual(0);
+        auto dist_sink = use_chain   ? chain_residual_distances(sink_id)
+                       : use_dijkstra ? dijkstra_residual(sink_id)
+                       : bellman_ford_residual(sink_id);
 
         // Pre-compute simple-trash adjustments (unused in asymmetric path).
         VALUE_TYPE trash_cost = 0, src_adjust = 0, sink_adjust = 0;
