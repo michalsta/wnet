@@ -104,9 +104,7 @@ def _capture_W(W, n_targets: int) -> SolveResults:
         for pk, d in peaks.items():
             peak_derivs[(int(spec_id), int(pk))] = int(d)
 
-    spec_derivs = {
-        int(k): int(v) for k, v in W.spectrum_proportion_derivatives().items()
-    }
+    spec_derivs = {i: int(v) for i, v in enumerate(W.spectrum_proportion_derivatives())}
 
     return SolveResults(
         total_cost=W.total_cost(),
@@ -679,7 +677,7 @@ class TestDerivativeStability:
         pd_before = W.spectrum_proportion_derivatives()
         warm_solve(W)
         pd_after = W.spectrum_proportion_derivatives()
-        assert pd_before == pd_after
+        assert np.array_equal(pd_before, pd_after)
 
     def test_derivatives_stable_after_multi_point_cycle(self):
         """Derivatives at point=1 match a fresh solve after cycling through other points."""
@@ -702,7 +700,7 @@ class TestDerivativeStability:
 
         assert W.total_cost() == fresh_cost
         assert W.signal_part_derivatives() == fresh_peak
-        assert W.spectrum_proportion_derivatives() == fresh_spec
+        assert np.array_equal(W.spectrum_proportion_derivatives(), fresh_spec)
 
     @pytest.mark.long
     @pytest.mark.parametrize("seed", range(20))
@@ -741,8 +739,8 @@ class TestDerivativeStability:
 
         assert W.total_cost() == fresh_cost, f"seed={seed}: cost"
         assert W.signal_part_derivatives() == fresh_peak, f"seed={seed}: peak_derivs"
-        assert (
-            W.spectrum_proportion_derivatives() == fresh_spec
+        assert np.array_equal(
+            W.spectrum_proportion_derivatives(), fresh_spec
         ), f"seed={seed}: spec_derivs"
 
 

@@ -352,7 +352,7 @@ def test_proportion_derivative_exact_match():
     Proportion derivative = 100 * 5 = 500.
     """
     W = make_network_and_solve([0], [5], [10], [5], 100)
-    assert W.spectrum_proportion_derivatives() == {0: 500}
+    assert W.spectrum_proportion_derivatives()[0] == 500
 
 
 def test_proportion_derivative_excess_base():
@@ -362,7 +362,7 @@ def test_proportion_derivative_excess_base():
     Proportion derivative = -90 * 5 = -450.
     """
     W = make_network_and_solve([0], [10], [10], [5], 100)
-    assert W.spectrum_proportion_derivatives() == {0: -450}
+    assert W.spectrum_proportion_derivatives()[0] == -450
 
 
 def test_proportion_derivative_two_peaks():
@@ -374,7 +374,7 @@ def test_proportion_derivative_two_peaks():
     Proportion derivative = (-95 * 3) + (-80 * 4) = -285 + -320 = -605.
     """
     W = make_network_and_solve([0], [10], [5, 20], [3, 4], 100)
-    assert W.spectrum_proportion_derivatives() == {0: -605}
+    assert W.spectrum_proportion_derivatives()[0] == -605
 
 
 def test_proportion_derivative_agrees_with_peak_derivs():
@@ -462,7 +462,7 @@ def test_signal_part_derivatives_includes_isolated_peaks():
 
     # proportion derivative must be consistent: sum(deriv_i * base_intensity_i)
     # = -10*3 + 20*4 = 50
-    assert W.spectrum_proportion_derivatives() == {0: 50}
+    assert W.spectrum_proportion_derivatives()[0] == 50
 
     # verify both derivatives by perturbation
     def perturb(peak_idx, delta):

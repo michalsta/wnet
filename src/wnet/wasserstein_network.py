@@ -1,6 +1,8 @@
 from typing import Optional
 from collections.abc import Sequence
 
+import numpy as np
+
 from wnet.wnet_cpp import (
     CWassersteinNetwork,
     CWassersteinNetworkSubgraph,
@@ -114,12 +116,13 @@ class WassersteinNetwork:
             ret.setdefault(spec_id, {})[peak_idx] = deriv
         return ret
 
-    def spectrum_proportion_derivatives(self) -> dict[int, int]:
+    def spectrum_proportion_derivatives(self) -> np.ndarray:
         """Gradient of total cost w.r.t. scaling each spectrum's proportion.
 
-        Aggregates across all subgraphs.  Returns spectrum_id -> derivative.
+        Aggregates across all subgraphs.  Returns array of derivatives indexed
+        by spectrum_id (0..n-1).
         """
-        return dict(self.wnet.spectrum_proportion_derivatives())
+        return np.array([v for _, v in self.wnet.spectrum_proportion_derivatives()])
 
     def update_positions_and_get_gradient(
         self,
@@ -301,11 +304,12 @@ class SubgraphWrapper:
             ret.setdefault(spec_id, {})[peak_idx] = deriv
         return ret
 
-    def spectrum_proportion_derivatives(self) -> dict[int, int]:
+    def spectrum_proportion_derivatives(self) -> np.ndarray:
         """Gradient of total cost w.r.t. scaling each spectrum's proportion.
 
-        Returns spectrum_id -> derivative.  The derivative approximates the
-        cost change when every peak in the spectrum is scaled by (1 + eps):
-        d(cost)/d(eps) at eps=0 = sum_i (peak_derivative_i * intensity_i).
+        Returns array of derivatives indexed by spectrum_id (0..n-1).  The
+        derivative approximates the cost change when every peak in the spectrum
+        is scaled by (1 + eps): d(cost)/d(eps) at eps=0 =
+        sum_i (peak_derivative_i * intensity_i).
         """
-        return dict(self._obj.spectrum_proportion_derivatives())
+        return np.array([v for _, v in self._obj.spectrum_proportion_derivatives()])
