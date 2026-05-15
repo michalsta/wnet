@@ -96,7 +96,7 @@ class WassersteinNetworkSubgraph {
     };
     std::vector<MatchingEdgeInfo> _matching_edge_cache;
     std::vector<TheoSinkEdgeInfo> _theo_sink_edge_cache;
-    std::vector<bool> _unlimited_arc;  // true for MatchingEdge and ChainEdge
+    std::vector<uint8_t> _unlimited_arc;  // true for MatchingEdge and ChainEdge
 
     struct ChainTopology {
         std::vector<LEMON_INDEX> order;
@@ -857,7 +857,8 @@ public:
             }
         }
 
-        auto update_min = [&](VALUE_TYPE& a, VALUE_TYPE b) { if (b < a) a = b; };
+        bool changed = false;
+        auto update_min = [&](VALUE_TYPE& a, VALUE_TYPE b) { if (b < a) { a = b; changed = true; } };
 
         auto relay = [&]() {
             for (size_t i = 0; i < K; ++i) {
@@ -896,18 +897,16 @@ public:
 
         const size_t MAX_ROUNDS = K + 2;
         for (size_t round = 0; round < MAX_ROUNDS; ++round) {
-            std::vector<VALUE_TYPE> prev = dist;
+            changed = false;
             relay();
             chain_sweep();
-            if (dist == prev) break;
+            if (!changed) break;
         }
         return dist;
     }
 
     bool has_chain_edges() const {
-        for (const auto& edge : edges)
-            if (std::holds_alternative<ChainEdge>(edge.get_type())) return true;
-        return false;
+        return _chain_topo.has_value();
     }
 
     // Returns the node IDs of the chain in sorted position order, or an empty
@@ -1166,12 +1165,9 @@ public:
 
         // Build theo->sink slack: capacity - flow.
         std::vector<VALUE_TYPE> theo_sink_slack(nodes.size(), VALUE_TYPE(-1));
-        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INDEX>(edges.size()); ++ii) {
-            if (std::holds_alternative<TheoreticalToSinkEdge>(edges[ii].get_type())) {
-                auto arc = lemon_graph.arcFromId(ii);
-                theo_sink_slack[edges[ii].get_start_node_id()] =
-                    capacities_map[arc] - _solver_flow(arc);
-            }
+        for (const auto& e : _theo_sink_edge_cache) {
+            const LEMON_INDEX node_id = lemon_graph.id(lemon_graph.source(e.arc));
+            theo_sink_slack[node_id] = capacities_map[e.arc] - _solver_flow(e.arc);
         }
 
         std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
