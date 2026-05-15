@@ -251,6 +251,12 @@ jobs:
           CXX_FLAGS: ${{ matrix.cxx_flags }}
           LINK_FLAGS: ${{ matrix.link_flags }}
         run: |
+          if [[ "$LINK_FLAGS" == *"-shared-libasan"* ]]; then
+            CLANG_RT_DIR=$(${CC:-clang} -print-runtime-dir 2>/dev/null || true)
+            if [ -n "$CLANG_RT_DIR" ] && [ -d "$CLANG_RT_DIR" ]; then
+              LINK_FLAGS="$LINK_FLAGS -Wl,-rpath,${CLANG_RT_DIR}"
+            fi
+          fi
           LINK_ARGS=()
           if [ -n "$LINK_FLAGS" ]; then
             LINK_ARGS=(
