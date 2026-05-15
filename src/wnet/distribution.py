@@ -183,6 +183,20 @@ class Distribution:
         max_coords = np.max(self.positions, axis=1)
         return min_coords, max_coords
 
+    def __getstate__(self) -> dict:
+        """
+        Prepares the state of the Distribution object for pickling.
+
+        Returns:
+            dict: A dictionary containing the state of the object, including positions, intensities, and label.
+        """
+        state = self.__dict__.copy()
+        # Remove cached properties to avoid pickling them
+        if "vecdist" in state:
+            del state["vecdist"]
+        return state
+
+    # def __setstate__(self, state: dict) -> None: default is fine
 
 def Distribution_1D(
     positions: np.ndarray, intensities: np.ndarray, label: Optional[str] = None
