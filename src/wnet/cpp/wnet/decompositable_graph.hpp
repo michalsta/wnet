@@ -88,6 +88,8 @@ class WassersteinNetworkSubgraph {
         intensity_type emp_intensity;
         intensity_type theo_intensity;
         size_t spectrum_id;
+        LEMON_INDEX emp_peak_index;
+        LEMON_INDEX theo_peak_index;
     };
     struct TheoSinkEdgeInfo {
         lemon::StaticDigraph::Arc arc;
@@ -97,6 +99,7 @@ class WassersteinNetworkSubgraph {
     std::vector<MatchingEdgeInfo> _matching_edge_cache;
     std::vector<TheoSinkEdgeInfo> _theo_sink_edge_cache;
     std::vector<uint8_t> _unlimited_arc;  // true for MatchingEdge and ChainEdge
+    std::vector<VALUE_TYPE> _costs_buf;   // reusable scratch for update_positions_and_solve
 
     struct ChainTopology {
         std::vector<LEMON_INDEX> order;
@@ -427,7 +430,7 @@ public:
                     _unlimited_arc[ii] = true;
                     const auto& theo = std::get<TheoreticalNode<intensity_type>>(edges[ii].get_end_node().get_type());
                     const auto& emp  = std::get<EmpiricalNode<intensity_type>>(edges[ii].get_start_node().get_type());
-                    _matching_edge_cache.push_back({lemon_graph.arcFromId(ii), emp.get_intensity(), theo.get_intensity(), theo.get_spectrum_id()});
+                    _matching_edge_cache.push_back({lemon_graph.arcFromId(ii), emp.get_intensity(), theo.get_intensity(), theo.get_spectrum_id(), emp.get_peak_index(), theo.get_peak_index()});
                 } else if constexpr (std::is_same_v<T, ChainEdge>) {
                     _unlimited_arc[ii] = true;
                 } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
@@ -436,6 +439,7 @@ public:
                 }
             }, edges[ii].get_type());
         }
+        _costs_buf.assign(edges.size(), VALUE_TYPE(0));
         built = true;
     }
 
@@ -574,42 +578,22 @@ public:
         return edges;
     };
 
+    std::vector<VALUE_TYPE>& costs_scratch() { return _costs_buf; }
+
     void flows_for_target(size_t spectrum_id,
                             std::vector<LEMON_INDEX>& empirical_peak_indices,
                             std::vector<LEMON_INDEX>& theoretical_peak_indices,
                             std::vector<VALUE_TYPE>& flows) const
     {
-        bool has_chain = false;
-        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
-        {
-            const FlowEdge<intensity_type>& edge = edges[ii];
-            const VALUE_TYPE flow = _solver_flow(lemon_graph.arcFromId(ii));
-            if (std::holds_alternative<ChainEdge>(edge.get_type())) {
-                has_chain = true;
-                continue;
-            }
+        for (const auto& e : _matching_edge_cache) {
+            if (e.spectrum_id != spectrum_id) continue;
+            const VALUE_TYPE flow = _solver_flow(e.arc);
             if (flow == 0) continue;
-            std::visit([&](const auto& arg) {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr (std::is_same_v<T, MatchingEdge>) {
-                    const auto& theoretical_node_type = std::get<TheoreticalNode<intensity_type>>(edge.get_end_node().get_type());
-                    if(theoretical_node_type.get_spectrum_id() == spectrum_id)
-                    {
-                        empirical_peak_indices.push_back(std::get<EmpiricalNode<intensity_type>>(edge.get_start_node().get_type()).get_peak_index());
-                        theoretical_peak_indices.push_back(theoretical_node_type.get_peak_index());
-                        flows.push_back(flow);
-                    }
-                }
-                else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {}
-                else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {}
-                else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {}
-                else if constexpr (std::is_same_v<T, ChainEdge>) {}
-                else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) {}
-                else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) {}
-                else { throw std::runtime_error("Invalid FlowEdgeType"); };
-            }, edge.get_type());
+            empirical_peak_indices.push_back(e.emp_peak_index);
+            theoretical_peak_indices.push_back(e.theo_peak_index);
+            flows.push_back(flow);
         }
-        if (has_chain)
+        if (has_chain_edges())
             flows_for_target_chain(
                 spectrum_id, empirical_peak_indices,
                 theoretical_peak_indices, flows);
@@ -929,22 +913,15 @@ public:
         std::vector<std::span<double>>& theo_grads
     ) const {
         static constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
-        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
-            const auto& edge = edges[ii];
-            if (!std::holds_alternative<MatchingEdge>(edge.get_type())) continue;
-            const VALUE_TYPE flow = _solver_flow(lemon_graph.arcFromId(ii));
+        for (const auto& e : _matching_edge_cache) {
+            const VALUE_TYPE flow = _solver_flow(e.arc);
             if (flow == 0) continue;
-            const auto& emp_t  = std::get<EmpiricalNode<intensity_type>>(edge.get_start_node().get_type());
-            const auto& theo_t = std::get<TheoreticalNode<intensity_type>>(edge.get_end_node().get_type());
-            const size_t emp_idx  = emp_t.get_peak_index();
-            const size_t theo_idx = theo_t.get_peak_index();
-            const size_t spec_id  = theo_t.get_spectrum_id();
             const auto g = DistMetric::grad_x(
-                new_empirical->get_point(emp_idx),
-                new_theoretical[spec_id]->get_point(theo_idx));
+                new_empirical->get_point(e.emp_peak_index),
+                new_theoretical[e.spectrum_id]->get_point(e.theo_peak_index));
             for (size_t d = 0; d < DIM; ++d) {
-                emp_grad[emp_idx * DIM + d]             += static_cast<double>(flow) * g[d];
-                theo_grads[spec_id][theo_idx * DIM + d] -= static_cast<double>(flow) * g[d];
+                emp_grad[e.emp_peak_index * DIM + d]                   += static_cast<double>(flow) * g[d];
+                theo_grads[e.spectrum_id][e.theo_peak_index * DIM + d] -= static_cast<double>(flow) * g[d];
             }
         }
     }
@@ -1636,16 +1613,13 @@ public:
             // chain order is deterministic.  Valid updates keep the sequence
             // monotone; a non-monotone result means peaks have genuinely crossed
             // and the topology is no longer valid.
+            // nodes[i].get_id() == i by construction, so sg_nodes[nid] is a direct lookup.
             const auto& chain_order = sg.get_chain_order();
             if (chain_order.size() >= 2) {
-                // Build node_id -> node* map for chain-order validation.
-                std::vector<const FlowNode<intensity_type>*> node_map(sg_nodes.size(), nullptr);
-                for (const auto& n : sg_nodes)
-                    node_map[n.get_id()] = &n;
                 std::vector<double> chain_pos;
                 chain_pos.reserve(chain_order.size());
                 for (LEMON_INDEX nid : chain_order) {
-                    const auto& ntype = node_map[nid]->get_type();
+                    const auto& ntype = sg_nodes[nid].get_type();
                     if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&ntype))
                         chain_pos.push_back(new_empirical->get_point(emp->get_peak_index())[0]);
                     else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&ntype))
@@ -1663,8 +1637,9 @@ public:
                         "order (peaks have crossed). Rebuild the network for the new positions.");
             }
 
-            // Compute new edge costs.
-            std::vector<VALUE_TYPE> new_costs(sg_edges.size(), 0);
+            // Compute new edge costs using the pre-allocated scratch buffer.
+            auto& new_costs = sg.costs_scratch();
+            std::fill(new_costs.begin(), new_costs.end(), VALUE_TYPE(0));
             for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(sg_edges.size()); ++ii) {
                 const auto& edge = sg_edges[ii];
                 if (std::holds_alternative<MatchingEdge>(edge.get_type())) {
