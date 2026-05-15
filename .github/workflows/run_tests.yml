@@ -180,7 +180,10 @@ jobs:
               -fno-omit-frame-pointer
               -stdlib=libc++
               -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE
-            link_flags: "-stdlib=libc++"
+            # Force dynamic ASan runtime linkage for Python extension modules.
+            # Without -shared-libasan the module may import with unresolved
+            # __asan_* symbols when no preload is used.
+            link_flags: "-stdlib=libc++ -shared-libasan"
             # preload_asan must be false for libc++ builds. LD_PRELOAD injects ASan
             # before libc++abi.so.1 is loaded, so ASan's dlsym(RTLD_NEXT,
             # "__cxa_rethrow_primary_exception") returns NULL and the interceptor
@@ -248,9 +251,18 @@ jobs:
           CXX_FLAGS: ${{ matrix.cxx_flags }}
           LINK_FLAGS: ${{ matrix.link_flags }}
         run: |
+          if [[ "$LINK_FLAGS" == *"-shared-libasan"* ]]; then
+            CLANG_RT_DIR=$(${CC:-clang} -print-runtime-dir 2>/dev/null || true)
+            if [ -n "$CLANG_RT_DIR" ] && [ -d "$CLANG_RT_DIR" ]; then
+              LINK_FLAGS="$LINK_FLAGS -Wl,-rpath,${CLANG_RT_DIR}"
+            fi
+          fi
           LINK_ARGS=()
           if [ -n "$LINK_FLAGS" ]; then
-            LINK_ARGS=(--config-settings="cmake.define.CMAKE_SHARED_LINKER_FLAGS=${LINK_FLAGS}")
+            LINK_ARGS=(
+              --config-settings="cmake.define.CMAKE_SHARED_LINKER_FLAGS=${LINK_FLAGS}"
+              --config-settings="cmake.define.CMAKE_MODULE_LINKER_FLAGS=${LINK_FLAGS}"
+            )
           fi
           python -m pip install -v .[pytest] \
             --config-settings="cmake.build-type=${{ matrix.build_type }}" \
@@ -295,4 +307,3 @@ jobs:
           cat /tmp/asan.* 2>/dev/null || echo "(no asan log files)"
           echo "=== UBSan logs ==="
           cat /tmp/ubsan.* 2>/dev/null || echo "(no ubsan log files)"
-
