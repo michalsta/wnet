@@ -1148,71 +1148,80 @@ public:
     // Source→Theo at C_theo), so no adjustments are needed.
     //   E > T (supply fixed): augmenting cycle through T_node uses dist_sink.
     //   T >= E (supply +1):   extra Source unit routed to T_node uses dist_src.
-    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
+    struct DerivContext {
+        VALUE_TYPE INF;
+        bool supply_fixed;
+        bool asymmetric;
+        VALUE_TYPE trash_cost, src_adjust, sink_adjust;
+        std::vector<VALUE_TYPE> dist_src, dist_sink;
+        std::vector<VALUE_TYPE> theo_sink_slack;
+    };
+
+    DerivContext _make_deriv_context() const {
         if (!_solver_has_value())
             throw std::runtime_error("Must call solve() before signal_part_derivatives().");
         if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max()
                 && !experimental_trash_added && !theoretical_trash_added)
             throw std::runtime_error("signal_part_derivatives() requires trash edges.");
 
-        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
+        DerivContext ctx;
+        ctx.INF = std::numeric_limits<VALUE_TYPE>::max();
+        ctx.supply_fixed = (lemon_empirical_intensity > lemon_theoretical_intensity);
+        ctx.asymmetric = experimental_trash_added || theoretical_trash_added;
         const LEMON_INDEX sink_id = 1;
-        const bool supply_fixed = (lemon_empirical_intensity > lemon_theoretical_intensity);
         const bool use_chain = has_chain_edges();
         const bool use_dijkstra = !use_chain && ns_solver.has_value();
-        const bool asymmetric = experimental_trash_added || theoretical_trash_added;
-        const bool need_src  = !asymmetric || !supply_fixed;
-        const bool need_sink = !asymmetric ||  supply_fixed;
+        const bool need_src  = !ctx.asymmetric || !ctx.supply_fixed;
+        const bool need_sink = !ctx.asymmetric ||  ctx.supply_fixed;
         auto compute_dist = [&](LEMON_INDEX id) -> std::vector<VALUE_TYPE> {
             return use_chain    ? chain_residual_distances(id)
                  : use_dijkstra ? dijkstra_residual(id)
                  : bellman_ford_residual(id);
         };
-        std::vector<VALUE_TYPE> dist_src, dist_sink;
-        if (need_src)  dist_src  = compute_dist(0);
-        if (need_sink) dist_sink = compute_dist(sink_id);
+        if (need_src)  ctx.dist_src  = compute_dist(0);
+        if (need_sink) ctx.dist_sink = compute_dist(sink_id);
 
-        // Pre-compute simple-trash adjustments (unused in asymmetric path).
-        VALUE_TYPE trash_cost = 0, src_adjust = 0, sink_adjust = 0;
-        if (!experimental_trash_added && !theoretical_trash_added) {
-            trash_cost  = simple_trash_cost();
-            src_adjust  = supply_fixed ? -trash_cost : 0;
-            sink_adjust = supply_fixed ? 0 : trash_cost;
+        ctx.trash_cost = 0; ctx.src_adjust = 0; ctx.sink_adjust = 0;
+        if (!ctx.asymmetric) {
+            ctx.trash_cost  = simple_trash_cost();
+            ctx.src_adjust  = ctx.supply_fixed ? -ctx.trash_cost : 0;
+            ctx.sink_adjust = ctx.supply_fixed ?  0 : ctx.trash_cost;
         }
 
-        // Build theo->sink slack: capacity - flow.
-        std::vector<VALUE_TYPE> theo_sink_slack(nodes.size(), VALUE_TYPE(-1));
+        ctx.theo_sink_slack.assign(nodes.size(), VALUE_TYPE(-1));
         for (const auto& e : _theo_sink_edge_cache) {
             const LEMON_INDEX node_id = lemon_graph.id(lemon_graph.source(e.arc));
-            theo_sink_slack[node_id] = capacities_map[e.arc] - _solver_flow(e.arc);
+            ctx.theo_sink_slack[node_id] = capacities_map[e.arc] - _solver_flow(e.arc);
         }
+        return ctx;
+    }
 
+    VALUE_TYPE _node_deriv(LEMON_INDEX node_id, const DerivContext& ctx) const {
+        const VALUE_TYPE slack = ctx.theo_sink_slack[node_id];
+        if (slack != VALUE_TYPE(-1) && slack > 0 && ctx.supply_fixed)
+            return VALUE_TYPE(0);
+        VALUE_TYPE deriv;
+        if (ctx.asymmetric) {
+            deriv = ctx.supply_fixed ? ctx.dist_sink[node_id] : ctx.dist_src[node_id];
+            if (deriv == ctx.INF) deriv = 0;
+        } else {
+            deriv = ctx.trash_cost;
+            if (!ctx.dist_src.empty() && ctx.dist_src[node_id] != ctx.INF)
+                deriv = std::min(deriv, ctx.dist_src[node_id] + ctx.src_adjust);
+            if (!ctx.dist_sink.empty() && ctx.dist_sink[node_id] != ctx.INF)
+                deriv = std::min(deriv, ctx.dist_sink[node_id] + ctx.sink_adjust);
+        }
+        return deriv;
+    }
+
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
+        const auto ctx = _make_deriv_context();
         std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
         for (const auto& node : nodes) {
             auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
             if (!theo) continue;
-            LEMON_INDEX node_id = node.get_id();
-
-            // Slack > 0 with excess empirical: adding capacity does nothing.
-            const VALUE_TYPE slack = theo_sink_slack[node_id];
-            if (slack != VALUE_TYPE(-1) && slack > 0 && supply_fixed) {
-                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), 0);
-                continue;
-            }
-
-            VALUE_TYPE deriv;
-            if (experimental_trash_added || theoretical_trash_added) {
-                deriv = supply_fixed ? dist_sink[node_id] : dist_src[node_id];
-                if (deriv == INF) deriv = 0;
-            } else {
-                deriv = trash_cost;
-                if (dist_src[node_id] != INF)
-                    deriv = std::min(deriv, dist_src[node_id] + src_adjust);
-                if (dist_sink[node_id] != INF)
-                    deriv = std::min(deriv, dist_sink[node_id] + sink_adjust);
-            }
-
-            result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), deriv);
+            result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(),
+                                _node_deriv(node.get_id(), ctx));
         }
         return result;
     }
@@ -1221,19 +1230,13 @@ public:
     // Returns vector of (spectrum_id, derivative).
     // derivative = sum_i(peak_derivative_i * intensity_i) for each spectrum.
     std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
-        auto peak_derivs = signal_part_derivatives();
-
-        // Build lookup: (spectrum_id, peak_index) -> derivative
-        std::vector<std::unordered_map<LEMON_INDEX, VALUE_TYPE>> deriv_map(no_target_distributions);
-        for (auto& [spec_id, peak_idx, deriv] : peak_derivs)
-            deriv_map[spec_id][peak_idx] = deriv;
-
+        const auto ctx = _make_deriv_context();
         std::vector<VALUE_TYPE> accum(no_target_distributions, VALUE_TYPE(0));
         for (const auto& node : nodes) {
             auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
             if (!theo) continue;
             accum[theo->get_spectrum_id()] +=
-                deriv_map[theo->get_spectrum_id()][theo->get_peak_index()]
+                _node_deriv(node.get_id(), ctx)
                 * static_cast<VALUE_TYPE>(theo->get_intensity());
         }
         std::vector<std::pair<size_t, VALUE_TYPE>> result;
