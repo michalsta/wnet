@@ -69,8 +69,7 @@ derivs = W.signal_part_derivatives()   # np.ndarray, one value per peak in S1
 After an initial solve, positions can be updated and re-solved cheaply via a warm restart. `update_positions_and_get_gradient()` returns `∂cost/∂position` for all peaks so you can feed them directly into a gradient-based optimiser:
 
 ```python
-W = WassersteinNetwork(S1, [S2], DistanceMetric.L2, max_distance=10.0,
-                       force_dense_1d=True)  # required for position gradients in 1D
+W = WassersteinNetwork(S1, [S2], DistanceMetric.L2, max_distance=10.0)
 W.build()
 W.solve()
 

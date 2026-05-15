@@ -1753,7 +1753,8 @@ public:
 
     // Layer 1 (span sink): update positions, re-solve, accumulate gradients into
     // caller-owned zero-initialised spans.  emp_grad is [N_emp * DIM] row-major;
-    // theo_grads[s] is [N_s * DIM] row-major.  Chain (1D) subgraphs not supported.
+    // theo_grads[s] is [N_s * DIM] row-major.  Chain (1D) subgraphs are handled
+    // via accumulate_position_gradients_chain(); dense subgraphs via accumulate_position_gradients().
     template<typename Distribution_t, typename DistMetric>
     void update_positions_and_get_gradient(
         const Distribution_t* new_empirical,
