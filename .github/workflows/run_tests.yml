@@ -170,10 +170,7 @@ jobs:
             cxx: clang++-22
             apt_extra: clang-22 libclang-rt-22-dev libc++-22-dev libc++abi-22-dev
             # Use LLVM 22 from apt.llvm.org (see use_llvm_apt step). Ubuntu 24.04
-            # doesn't ship LLVM 22, so there's no epoch-version conflict and no need
-            # for apt pinning. LLVM project packages are built without Ubuntu's
-            # -Bsymbolic-functions LDFLAGS patch that breaks ASan interception of
-            # __cxa_rethrow_primary_exception in Ubuntu's LLVM 18 (LLVM issue #59432).
+            # doesn't ship LLVM 22, so there's no epoch-version conflict.
             use_llvm_apt: true
             build_type: Debug
             cxx_flags: >-
@@ -184,7 +181,13 @@ jobs:
               -stdlib=libc++
               -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE
             link_flags: "-stdlib=libc++"
-            preload_asan: true
+            # preload_asan must be false for libc++ builds. LD_PRELOAD injects ASan
+            # before libc++abi.so.1 is loaded, so ASan's dlsym(RTLD_NEXT,
+            # "__cxa_rethrow_primary_exception") returns NULL and the interceptor
+            # CHECK-fails the first time std::rethrow_exception is called. With
+            # static ASan (no preload), the extension loads libc++abi.so.1 as a
+            # dependency before ASan initializes, so dlsym succeeds.
+            preload_asan: false
             pythonmalloc: malloc
             asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
             ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
