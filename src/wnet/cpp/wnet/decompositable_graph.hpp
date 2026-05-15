@@ -792,24 +792,13 @@ public:
     // net (matching the Bellman-Ford bound) but real inputs exit much sooner.
     //
     // Requires: at least one ChainEdge present (the caller is responsible).
-    std::vector<VALUE_TYPE> chain_residual_distances(LEMON_INDEX source_id) const {
-        if (!_chain_topo.has_value())
-            throw std::runtime_error(
-                "chain_residual_distances() called on non-chain subgraph.");
+    // Fills _chain_R_buf, _chain_L_buf, and all flag/cost scratch arrays from
+    // the current solved flow. Must be called before _chain_run_search().
+    void _chain_build_search_state() const {
         const auto& topo = *_chain_topo;
         const size_t K = topo.order.size();
-
         const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
-        auto& dist = _chain_dist_buf;
-        std::fill(dist.begin(), dist.end(), INF);
-        dist[source_id] = 0;
-        const LEMON_INDEX src_id = 0;
-        const LEMON_INDEX sink_id = 1;
 
-        // c_right[g]: cost to move topo.order[g] → topo.order[g+1] in residual.
-        //   +gap if no leftward flow (forward of rightward arc), else -gap
-        //   (reverse of leftward arc, since L[g] > 0 unlocks that residual).
-        // c_left[g]: symmetric for the opposite direction.
         auto& c_right = _chain_R_buf;
         auto& c_left  = _chain_L_buf;
         for (size_t g = 0; g + 1 < K; ++g) {
@@ -819,10 +808,6 @@ public:
             c_left[g]  = (R > 0) ? -topo.gap_cost[g] : topo.gap_cost[g];
         }
 
-        // src/sink connectivity per chain position.
-        // Cost-0 arcs (SrcToEmpiricalEdge, TheoreticalToSinkEdge) use bool flags.
-        // Non-zero trash arcs (EmpiricalTrashEdge, TheoreticalTrashEdge) store the
-        // arc cost per position (INF = absent) plus forward/reverse availability.
         auto& has_src_fwd    = _chain_has_src_fwd;   auto& has_src_rev    = _chain_has_src_rev;
         auto& has_sink_fwd   = _chain_has_sink_fwd;  auto& has_sink_rev   = _chain_has_sink_rev;
         auto& exp_trash_cost = _chain_exp_trash_cost; auto& theo_trash_cost = _chain_theo_trash_cost;
@@ -855,7 +840,6 @@ public:
                 if (flow < cap) has_sink_fwd[pos] = true;
                 if (flow > 0) has_sink_rev[pos] = true;
             } else if (const auto* e = std::get_if<EmpiricalTrashEdge>(&et)) {
-                // EmpiricalNode → Sink (cost C_exp); start node is in the chain.
                 const size_t pos = topo.node_to_pos[edges[ii].get_start_node_id()];
                 if (pos == std::numeric_limits<size_t>::max()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
@@ -864,7 +848,6 @@ public:
                 if (flow < cap) exp_trash_fwd[pos] = true;
                 if (flow > 0)   exp_trash_rev[pos] = true;
             } else if (const auto* t = std::get_if<TheoreticalTrashEdge>(&et)) {
-                // Source → TheoreticalNode (cost C_theo); end node is in the chain.
                 const size_t pos = topo.node_to_pos[edges[ii].get_end_node_id()];
                 if (pos == std::numeric_limits<size_t>::max()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
@@ -874,6 +857,28 @@ public:
                 if (flow > 0)   theo_trash_rev[pos] = true;
             }
         }
+    }
+
+    // Runs the relay+sweep search from source_id using pre-filled scratch state.
+    // _chain_build_search_state() must have been called first.
+    std::vector<VALUE_TYPE> _chain_run_search(LEMON_INDEX source_id) const {
+        const auto& topo = *_chain_topo;
+        const size_t K = topo.order.size();
+        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
+        const LEMON_INDEX src_id = 0;
+        const LEMON_INDEX sink_id = 1;
+
+        auto& dist         = _chain_dist_buf;
+        auto& c_right      = _chain_R_buf;
+        auto& c_left       = _chain_L_buf;
+        auto& has_src_fwd  = _chain_has_src_fwd;   auto& has_src_rev  = _chain_has_src_rev;
+        auto& has_sink_fwd = _chain_has_sink_fwd;  auto& has_sink_rev = _chain_has_sink_rev;
+        auto& exp_trash_cost  = _chain_exp_trash_cost; auto& theo_trash_cost = _chain_theo_trash_cost;
+        auto& exp_trash_fwd   = _chain_exp_trash_fwd;  auto& exp_trash_rev  = _chain_exp_trash_rev;
+        auto& theo_trash_fwd  = _chain_theo_trash_fwd; auto& theo_trash_rev = _chain_theo_trash_rev;
+
+        std::fill(dist.begin(), dist.end(), INF);
+        dist[source_id] = 0;
 
         bool changed = false;
         auto update_min = [&](VALUE_TYPE& a, VALUE_TYPE b) { if (b < a) { a = b; changed = true; } };
@@ -921,6 +926,14 @@ public:
             if (!changed) break;
         }
         return dist;
+    }
+
+    std::vector<VALUE_TYPE> chain_residual_distances(LEMON_INDEX source_id) const {
+        if (!_chain_topo.has_value())
+            throw std::runtime_error(
+                "chain_residual_distances() called on non-chain subgraph.");
+        _chain_build_search_state();
+        return _chain_run_search(source_id);
     }
 
     bool has_chain_edges() const {
@@ -1173,13 +1186,17 @@ public:
         const bool use_dijkstra = !use_chain && ns_solver.has_value();
         const bool need_src  = !ctx.asymmetric || !ctx.supply_fixed;
         const bool need_sink = !ctx.asymmetric ||  ctx.supply_fixed;
-        auto compute_dist = [&](LEMON_INDEX id) -> std::vector<VALUE_TYPE> {
-            return use_chain    ? chain_residual_distances(id)
-                 : use_dijkstra ? dijkstra_residual(id)
-                 : bellman_ford_residual(id);
-        };
-        if (need_src)  ctx.dist_src  = compute_dist(0);
-        if (need_sink) ctx.dist_sink = compute_dist(sink_id);
+        if (use_chain) {
+            _chain_build_search_state();
+            if (need_src)  ctx.dist_src  = _chain_run_search(0);
+            if (need_sink) ctx.dist_sink = _chain_run_search(sink_id);
+        } else {
+            auto compute_dist = [&](LEMON_INDEX id) -> std::vector<VALUE_TYPE> {
+                return use_dijkstra ? dijkstra_residual(id) : bellman_ford_residual(id);
+            };
+            if (need_src)  ctx.dist_src  = compute_dist(0);
+            if (need_sink) ctx.dist_sink = compute_dist(sink_id);
+        }
 
         ctx.trash_cost = 0; ctx.src_adjust = 0; ctx.sink_adjust = 0;
         if (!ctx.asymmetric) {
