@@ -16,6 +16,8 @@ Observable quantities under test:
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 from dataclasses import dataclass
@@ -23,7 +25,7 @@ from dataclasses import dataclass
 from wnet import WassersteinNetwork
 from wnet.distribution import Distribution, Distribution_1D
 from wnet.distances import DistanceMetric
-from wnet.wnet_cpp import CWassersteinNetworkFactory, NetworkSimplex
+from wnet.wnet_cpp import CWassersteinNetworkFactory, NetworkSimplex, WarmMode
 
 # ---------------------------------------------------------------------------
 # Warm-restart shim — replace the body when the API is ready
@@ -115,14 +117,33 @@ def _capture_W(W, n_targets: int) -> SolveResults:
 
 
 def _assert_exact(fresh: SolveResults, warm: SolveResults, tag: str = "") -> None:
-    """All quantities must match exactly (same point, same basis expected)."""
+    """Cold vs warm parity.
+
+    ``total_cost`` is the hard correctness invariant and must match exactly: a
+    feasible flow whose cost equals the cold optimum is optimal.
+
+    Flows and the potential-derived gradients are NOT asserted equal.  The
+    default warm mode is ``WarmMode.Dual`` (dual-simplex restart); at a
+    degenerate optimum the optimal *basis* — hence the dual potentials and the
+    π-derived derivatives, and tied-optima flow decompositions — is not unique,
+    so cold (WarmMode.NONE) and Dual-warm may legitimately land on different
+    equally-optimal vertices.  This was an explicit, accepted design decision
+    (Dual default for the large speedup).  Deep warm/dual correctness is
+    covered exhaustively by pylmcf/tests_cpp/test_dual_repair.cpp (cost vs an
+    independent cold solve + feasibility, 126k checks) and
+    test_warm_dual_restart.py.  Divergences here are surfaced as warnings so
+    they remain visible without failing the build.
+    """
     prefix = f"[{tag}] " if tag else ""
     assert (
         fresh.total_cost == warm.total_cost
     ), f"{prefix}cost: fresh={fresh.total_cost} warm={warm.total_cost}"
-    assert fresh.flows == warm.flows, f"{prefix}flows differ"
-    assert fresh.peak_derivs == warm.peak_derivs, f"{prefix}peak_derivs differ"
-    assert fresh.spec_derivs == warm.spec_derivs, f"{prefix}spec_derivs differ"
+    if fresh.flows != warm.flows:
+        warnings.warn(f"{prefix}flows differ (alt optimum under Dual; cost equal)")
+    if fresh.peak_derivs != warm.peak_derivs:
+        warnings.warn(f"{prefix}peak_derivs differ (degenerate dual; cost equal)")
+    if fresh.spec_derivs != warm.spec_derivs:
+        warnings.warn(f"{prefix}spec_derivs differ (degenerate dual; cost equal)")
 
 
 def _marginals(flow_list):
@@ -138,7 +159,13 @@ def _marginals(flow_list):
 def _assert_cost_and_marginals(
     r1: SolveResults, r2: SolveResults, tag: str = ""
 ) -> None:
-    """Cost and flow marginals must match; exact decomposition may differ."""
+    """Cost is the hard invariant; marginals/derivs may differ under Dual.
+
+    See _assert_exact for the rationale: with WarmMode.Dual as the default,
+    cold and warm can settle on different equally-optimal bases at degenerate
+    optima, so flow marginals and π-derived derivatives are not guaranteed
+    equal.  Only total_cost is asserted; the rest is surfaced as warnings.
+    """
     prefix = f"[{tag}] " if tag else ""
     assert (
         r1.total_cost == r2.total_cost
@@ -146,10 +173,15 @@ def _assert_cost_and_marginals(
     for t_id in set(r1.flows) | set(r2.flows):
         row1, col1 = _marginals(r1.flows.get(t_id, []))
         row2, col2 = _marginals(r2.flows.get(t_id, []))
-        assert row1 == row2, f"{prefix}target={t_id} emp marginals: {row1} vs {row2}"
-        assert col1 == col2, f"{prefix}target={t_id} theo marginals: {col1} vs {col2}"
-    assert r1.peak_derivs == r2.peak_derivs, f"{prefix}peak_derivs differ"
-    assert r1.spec_derivs == r2.spec_derivs, f"{prefix}spec_derivs differ"
+        if row1 != row2 or col1 != col2:
+            warnings.warn(
+                f"{prefix}target={t_id} marginals differ "
+                f"(alt optimum under Dual; cost equal)"
+            )
+    if r1.peak_derivs != r2.peak_derivs:
+        warnings.warn(f"{prefix}peak_derivs differ (degenerate dual; cost equal)")
+    if r1.spec_derivs != r2.spec_derivs:
+        warnings.warn(f"{prefix}spec_derivs differ (degenerate dual; cost equal)")
 
 
 # ---------------------------------------------------------------------------
@@ -808,7 +840,7 @@ class TestColdVsWarmParity:
     @staticmethod
     def _cpp_pair(factory_fn, base, targets, trash_cost, max_dist):
         cold_cfg = NetworkSimplex()
-        cold_cfg.warm = False
+        cold_cfg.warm = WarmMode.NONE
 
         def _make(cfg):
             net = factory_fn(
@@ -824,7 +856,7 @@ class TestColdVsWarmParity:
     @staticmethod
     def _W_pair(base, targets, trash_cost, max_dist):
         cold_cfg = NetworkSimplex()
-        cold_cfg.warm = False
+        cold_cfg.warm = WarmMode.NONE
 
         def _make(solver):
             W = WassersteinNetwork(
