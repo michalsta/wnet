@@ -237,20 +237,27 @@ jobs:
             --config-settings="cmake.define.CMAKE_CXX_FLAGS=${CXX_FLAGS}" \
             "${LINK_ARGS[@]}"
       - name: Find sanitizer libraries for LD_PRELOAD
-        # Clang links the ASan runtime as a shared library (DT_NEEDED) when building
-        # .so targets.  The runtime lives under the LLVM tree (not in the standard
-        # ldconfig path), so Python cannot import the extension without help.
-        # We use `clang -print-file-name` to locate the exact library, then
-        # LD_PRELOAD it so it is mapped before Python imports the extension.
+        # Without -shared-libasan, clang links the ASan/UBSan runtime statically
+        # into the .so, so no LD_PRELOAD is strictly required.  However, if the
+        # clang runtime shared library IS available (libclang-rt-XX-dev installed),
+        # preloading it ensures ASan intercepts Python's allocations from startup.
+        # We use `clang -print-file-name` to probe for it; if not found we skip
+        # preloading and let the static runtime in the extension handle things.
+        # IMPORTANT: never preload GCC's libasan here — it brings libstdc++ exception
+        # hooks into the process, which crash libc++-compiled extensions when they
+        # throw C++ exceptions (ABI mismatch between libstdc++ and libc++ EH tables).
         if: matrix.preload_asan
         run: |
           ASAN_LIB=$(clang -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null || true)
-          if [ -f "$ASAN_LIB" ]; then
+          if [ ! -f "$ASAN_LIB" ]; then
+            # clang -print-file-name returned a bare name (library not in clang's
+            # search path); try the LLVM tree directly.
+            ASAN_LIB=$(find /usr/lib/llvm-* -name "libclang_rt.asan-x86_64.so" 2>/dev/null | head -1)
+          fi
+          if [ -n "$ASAN_LIB" ]; then
             echo "Preloading clang ASan from: $ASAN_LIB"
           else
-            # Fallback: search the LLVM tree (handles non-standard install layouts)
-            ASAN_LIB=$(find /usr/lib/llvm-* -name "libclang_rt.asan-x86_64.so" 2>/dev/null | head -1)
-            echo "Preloading clang ASan (fallback) from: $ASAN_LIB"
+            echo "clang ASan shared library not found; relying on static runtime embedded in extension"
           fi
           echo "WNET_ASAN_PRELOAD=${ASAN_LIB}" >> $GITHUB_ENV
       - name: Test with pytest
