@@ -34,6 +34,10 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
 #include "misc.hpp"
 
 
+#ifndef WNET_MAX_DIM
+#define WNET_MAX_DIM 20
+#endif
+
 #define EXPOSE_VECTOR_DISTRIBUTION(DIM) \
     using VectorDistribution_##DIM = VectorDistribution<DIM, double, LEMON_INT>; \
     nb::class_<VectorDistribution_##DIM>(m, "CVectorDistribution" #DIM) \
@@ -99,6 +103,7 @@ NB_MODULE(wnet_cpp, m) {
         .value("Dual",   NSWarmMode::Dual)
         .value("Primal", NSWarmMode::Primal);
 
+
     nb::class_<NetworkSimplexConfig>(m, "NetworkSimplex")
         .def(nb::init<>())
         .def_rw("pivot", &NetworkSimplexConfig::pivot)
@@ -159,6 +164,8 @@ NB_MODULE(wnet_cpp, m) {
         .def("is_solved", &WassersteinNetworkSubgraph<int64_t, int64_t>::is_solved)
         .def("signal_part_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::signal_part_derivatives)
         .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::spectrum_proportion_derivatives)
+        .def("signal_part_derivatives_fast_approx", &WassersteinNetworkSubgraph<int64_t, int64_t>::signal_part_derivatives_fast_approx)
+        .def("spectrum_proportion_derivatives_fast_approx", &WassersteinNetworkSubgraph<int64_t, int64_t>::spectrum_proportion_derivatives_fast_approx)
         .def("warm_start_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::warm_start_count)
         .def("cold_start_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::cold_start_count)
         .def("dual_repair_count", &WassersteinNetworkSubgraph<int64_t, int64_t>::dual_repair_count)
@@ -192,6 +199,8 @@ NB_MODULE(wnet_cpp, m) {
         .def("is_solved", &WassersteinNetworkSubgraph<int64_t, double>::is_solved)
         .def("signal_part_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::signal_part_derivatives)
         .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::spectrum_proportion_derivatives)
+        .def("signal_part_derivatives_fast_approx", &WassersteinNetworkSubgraph<int64_t, double>::signal_part_derivatives_fast_approx)
+        .def("spectrum_proportion_derivatives_fast_approx", &WassersteinNetworkSubgraph<int64_t, double>::spectrum_proportion_derivatives_fast_approx)
         .def("warm_start_count", &WassersteinNetworkSubgraph<int64_t, double>::warm_start_count)
         .def("cold_start_count", &WassersteinNetworkSubgraph<int64_t, double>::cold_start_count)
         .def("dual_repair_count", &WassersteinNetworkSubgraph<int64_t, double>::dual_repair_count)
@@ -296,10 +305,13 @@ NB_MODULE(wnet_cpp, m) {
         .def_static("max_index", &WassersteinNetwork<int64_t, int64_t>::max_index)
         .def("signal_part_derivatives", &WassersteinNetwork<int64_t, int64_t>::signal_part_derivatives)
         .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, int64_t>::spectrum_proportion_derivatives)
+        .def("signal_part_derivatives_fast_approx", &WassersteinNetwork<int64_t, int64_t>::signal_part_derivatives_fast_approx)
+        .def("spectrum_proportion_derivatives_fast_approx", &WassersteinNetwork<int64_t, int64_t>::spectrum_proportion_derivatives_fast_approx)
         .def("warm_start_count", &WassersteinNetwork<int64_t, int64_t>::warm_start_count)
         .def("cold_start_count", &WassersteinNetwork<int64_t, int64_t>::cold_start_count)
         .def("dual_repair_count", &WassersteinNetwork<int64_t, int64_t>::dual_repair_count)
         .def("primal_repair_count", &WassersteinNetwork<int64_t, int64_t>::primal_repair_count)
+        .def("prof_breakdown", &WassersteinNetwork<int64_t, int64_t>::prof_breakdown)
         BIND_UPDATE_AND_SOLVE(WNetII, int64_t,  1)
         BIND_UPDATE_AND_SOLVE(WNetII, int64_t,  2)
         BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 3)
@@ -379,10 +391,13 @@ NB_MODULE(wnet_cpp, m) {
         .def_static("max_index", &WassersteinNetwork<int64_t, double>::max_index)
         .def("signal_part_derivatives", &WassersteinNetwork<int64_t, double>::signal_part_derivatives)
         .def("spectrum_proportion_derivatives", &WassersteinNetwork<int64_t, double>::spectrum_proportion_derivatives)
+        .def("signal_part_derivatives_fast_approx", &WassersteinNetwork<int64_t, double>::signal_part_derivatives_fast_approx)
+        .def("spectrum_proportion_derivatives_fast_approx", &WassersteinNetwork<int64_t, double>::spectrum_proportion_derivatives_fast_approx)
         .def("warm_start_count", &WassersteinNetwork<int64_t, double>::warm_start_count)
         .def("cold_start_count", &WassersteinNetwork<int64_t, double>::cold_start_count)
         .def("dual_repair_count", &WassersteinNetwork<int64_t, double>::dual_repair_count)
         .def("primal_repair_count", &WassersteinNetwork<int64_t, double>::primal_repair_count)
+        .def("prof_breakdown", &WassersteinNetwork<int64_t, double>::prof_breakdown)
         BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  1)
         BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  2)
         BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  3)
@@ -419,68 +434,182 @@ NB_MODULE(wnet_cpp, m) {
 
     nb::class_<WassersteinNetworkFactory<int64_t>>(m, "CWassersteinNetworkFactory")
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<1, double, LEMON_INT>>)
+#if WNET_MAX_DIM >= 2
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<2, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 3
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<3, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 4
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<4, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 5
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<5, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 6
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<6, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 7
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<7, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 8
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<8, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 9
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<9, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 10
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<10, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 11
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<11, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 12
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<12, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 13
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<13, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 14
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<14, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 15
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<15, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 16
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<16, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 17
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<17, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 18
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<18, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 19
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<19, double, LEMON_INT>>)
+#endif
+#if WNET_MAX_DIM >= 20
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<20, double, LEMON_INT>>)
+#endif
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<1, double, double>>)
+#if WNET_MAX_DIM >= 2
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<2, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 3
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<3, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 4
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<4, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 5
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<5, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 6
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<6, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 7
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<7, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 8
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<8, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 9
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<9, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 10
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<10, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 11
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<11, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 12
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<12, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 13
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<13, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 14
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<14, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 15
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<15, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 16
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<16, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 17
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<17, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 18
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<18, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 19
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<19, double, double>>)
+#endif
+#if WNET_MAX_DIM >= 20
         .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<20, double, double>>)
+#endif
         .def_static("create_1d", &WassersteinNetworkFactory<int64_t>::create_1d<LEMON_INT>)
         .def_static("create_1d", &WassersteinNetworkFactory<int64_t>::create_1d<double>);
 
     EXPOSE_VECTOR_DISTRIBUTION(1)
+#if WNET_MAX_DIM >= 2
     EXPOSE_VECTOR_DISTRIBUTION(2)
+#endif
+#if WNET_MAX_DIM >= 3
     EXPOSE_VECTOR_DISTRIBUTION(3)
+#endif
+#if WNET_MAX_DIM >= 4
     EXPOSE_VECTOR_DISTRIBUTION(4)
+#endif
+#if WNET_MAX_DIM >= 5
     EXPOSE_VECTOR_DISTRIBUTION(5)
+#endif
+#if WNET_MAX_DIM >= 6
     EXPOSE_VECTOR_DISTRIBUTION(6)
+#endif
+#if WNET_MAX_DIM >= 7
     EXPOSE_VECTOR_DISTRIBUTION(7)
+#endif
+#if WNET_MAX_DIM >= 8
     EXPOSE_VECTOR_DISTRIBUTION(8)
+#endif
+#if WNET_MAX_DIM >= 9
     EXPOSE_VECTOR_DISTRIBUTION(9)
+#endif
+#if WNET_MAX_DIM >= 10
     EXPOSE_VECTOR_DISTRIBUTION(10)
+#endif
+#if WNET_MAX_DIM >= 11
     EXPOSE_VECTOR_DISTRIBUTION(11)
+#endif
+#if WNET_MAX_DIM >= 12
     EXPOSE_VECTOR_DISTRIBUTION(12)
+#endif
+#if WNET_MAX_DIM >= 13
     EXPOSE_VECTOR_DISTRIBUTION(13)
+#endif
+#if WNET_MAX_DIM >= 14
     EXPOSE_VECTOR_DISTRIBUTION(14)
+#endif
+#if WNET_MAX_DIM >= 15
     EXPOSE_VECTOR_DISTRIBUTION(15)
+#endif
+#if WNET_MAX_DIM >= 16
     EXPOSE_VECTOR_DISTRIBUTION(16)
+#endif
+#if WNET_MAX_DIM >= 17
     EXPOSE_VECTOR_DISTRIBUTION(17)
+#endif
+#if WNET_MAX_DIM >= 18
     EXPOSE_VECTOR_DISTRIBUTION(18)
+#endif
+#if WNET_MAX_DIM >= 19
     EXPOSE_VECTOR_DISTRIBUTION(19)
+#endif
+#if WNET_MAX_DIM >= 20
     EXPOSE_VECTOR_DISTRIBUTION(20)
+#endif
 /*
     m.def("WnetViaVectorDistribution", [](
         const Distribution<LEMON_INT>* empirical_dist,

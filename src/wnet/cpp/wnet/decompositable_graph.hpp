@@ -90,6 +90,28 @@ class WassersteinNetworkSubgraph {
     bool built = false;
     int _cold_starts_via_run = 0;
 
+    // Cached residual/derivative context.  The context is a pure function of
+    // the post-solve solver state (potentials, flow, capacities, costs),
+    // which only changes via _run_solver(); _solution_version is bumped
+    // there, so a cached context whose stamp matches is bit-identical to a
+    // fresh recompute (value-exact memoization across multiple derivative
+    // queries / identical re-solves on the same solution).  Two independent
+    // slots: [0] = exact residual, [1] = fast dual-pi approximation, so the
+    // same solved solution can be queried in either form without thrash.
+    struct DerivContext {
+        VALUE_TYPE INF;
+        bool supply_fixed;
+        bool asymmetric;
+        VALUE_TYPE trash_cost, src_adjust, sink_adjust;
+        std::vector<VALUE_TYPE> dist_src, dist_sink;
+        std::vector<VALUE_TYPE> theo_sink_slack;
+    };
+    std::uint64_t _solution_version = 0;
+    mutable std::uint64_t _deriv_ctx_version[2] = {
+        std::numeric_limits<std::uint64_t>::max(),
+        std::numeric_limits<std::uint64_t>::max()};
+    mutable DerivContext _deriv_ctx_cache[2];
+
     struct MatchingEdgeInfo {
         lemon::StaticDigraph::Arc arc;
         intensity_type emp_intensity;
@@ -252,6 +274,9 @@ class WassersteinNetworkSubgraph {
                 cap_solver->run(cfg.factor);
             }
         }, _config);
+        // Any solve may have changed potentials/flow -> invalidate the
+        // cached derivative context.
+        ++_solution_version;
     }
 
 public:
@@ -565,6 +590,17 @@ public:
     int primal_repair_count() const {
         return ns_solver.has_value() ? ns_solver->primalRepairCount() : 0;
     }
+
+    // Solve-tail profiling: accumulate this subgraph's 15-slot counters
+    // (diagnostic; see NetworkSimplex::profCounters for the layout).
+    void prof_accumulate(std::vector<int64_t>& acc) const {
+        if (!ns_solver.has_value()) return;
+        long long o[lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PROF_SLOTS];
+        ns_solver->profCounters(o);
+        for (int i = 0; i < lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PROF_SLOTS; ++i)
+            acc[i] += static_cast<int64_t>(o[i]);
+    }
+
 
     std::string to_string() const {
         std::string result;
@@ -1173,6 +1209,25 @@ public:
         return dist;
     }
 
+    // Opt-in (GradientMode::DualPi) fast, approximate replacement for
+    // dijkstra_residual(): the pure dual-potential difference
+    //   dist[i] = pi[i] - pi[source_id].
+    // This is exactly the residual-shortest-path distance with the (>= 0)
+    // reduced-cost detour term dropped, so it is correct only for nodes on
+    // the optimal flow support (reduced-cost-0 reachable) and a lower bound
+    // elsewhere; it is also basis-dependent at degenerate optima.  O(n), no
+    // search.  NOT value-equivalent to the residual marginal — only reachable
+    // via the *_fast_approx() entry points.
+    std::vector<VALUE_TYPE> pi_distances(LEMON_INDEX source_id) const {
+        const LEMON_INDEX n = lemon_graph.nodeNum();
+        std::vector<VALUE_TYPE> dist(n);
+        const VALUE_TYPE pi_src =
+            ns_solver->potential(lemon_graph.nodeFromId(source_id));
+        for (LEMON_INDEX i = 0; i < n; ++i)
+            dist[i] = ns_solver->potential(lemon_graph.nodeFromId(i)) - pi_src;
+        return dist;
+    }
+
     // Per-peak marginal cost of increasing each theoretical signal by 1.
     // Returns vector of (spectrum_id, peak_index, derivative).
     //
@@ -1184,16 +1239,13 @@ public:
     // Source→Theo at C_theo), so no adjustments are needed.
     //   E > T (supply fixed): augmenting cycle through T_node uses dist_sink.
     //   T >= E (supply +1):   extra Source unit routed to T_node uses dist_src.
-    struct DerivContext {
-        VALUE_TYPE INF;
-        bool supply_fixed;
-        bool asymmetric;
-        VALUE_TYPE trash_cost, src_adjust, sink_adjust;
-        std::vector<VALUE_TYPE> dist_src, dist_sink;
-        std::vector<VALUE_TYPE> theo_sink_slack;
-    };
+    // (DerivContext is declared near the top of the class so it can be cached.)
 
-    DerivContext _make_deriv_context() const {
+    // want_pi=false: exact residual marginals.  want_pi=true: fast dual-pi
+    // approximation (only when the NetworkSimplex solver is in use; chain /
+    // non-NS subgraphs have no potentials so they ignore want_pi and stay
+    // exact).
+    DerivContext _make_deriv_context(bool want_pi) const {
         if (!_solver_has_value())
             throw std::runtime_error("Must call solve() before signal_part_derivatives().");
         if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max()
@@ -1214,8 +1266,11 @@ public:
             if (need_src)  ctx.dist_src  = _chain_run_search(0);
             if (need_sink) ctx.dist_sink = _chain_run_search(sink_id);
         } else {
+            const bool use_pi = want_pi && use_dijkstra;
             auto compute_dist = [&](LEMON_INDEX id) -> std::vector<VALUE_TYPE> {
-                return use_dijkstra ? dijkstra_residual(id) : bellman_ford_residual(id);
+                if (use_pi)       return pi_distances(id);
+                return use_dijkstra ? dijkstra_residual(id)
+                                    : bellman_ford_residual(id);
             };
             if (need_src)  ctx.dist_src  = compute_dist(0);
             if (need_sink) ctx.dist_sink = compute_dist(sink_id);
@@ -1236,6 +1291,22 @@ public:
         return ctx;
     }
 
+    // Value-exact memoized accessor: rebuilds the context only when the
+    // solution changed since the last build (_solution_version), otherwise
+    // returns the cached one.  Eliminates the redundant residual recompute
+    // when several derivative queries (spectrum + signal + repeated/identical
+    // re-solves) hit the same solved solution.  Bit-identical to
+    // _make_deriv_context() because the context is a pure function of the
+    // post-solve solver state.
+    const DerivContext& _get_deriv_context(bool use_pi) const {
+        const int k = use_pi ? 1 : 0;
+        if (_deriv_ctx_version[k] != _solution_version) {
+            _deriv_ctx_cache[k] = _make_deriv_context(use_pi);
+            _deriv_ctx_version[k] = _solution_version;
+        }
+        return _deriv_ctx_cache[k];
+    }
+
     VALUE_TYPE _node_deriv(LEMON_INDEX node_id, const DerivContext& ctx) const {
         const VALUE_TYPE slack = ctx.theo_sink_slack[node_id];
         if (slack != VALUE_TYPE(-1) && slack > 0 && ctx.supply_fixed)
@@ -1254,8 +1325,8 @@ public:
         return deriv;
     }
 
-    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
-        const auto ctx = _make_deriv_context();
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
+    _signal_part_derivatives_impl(const DerivContext& ctx) const {
         std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
         for (const auto& node : nodes) {
             auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
@@ -1266,11 +1337,8 @@ public:
         return result;
     }
 
-    // Gradient of total cost w.r.t. scaling each spectrum's proportion.
-    // Returns vector of (spectrum_id, derivative).
-    // derivative = sum_i(peak_derivative_i * intensity_i) for each spectrum.
-    std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
-        const auto ctx = _make_deriv_context();
+    std::vector<std::pair<size_t, VALUE_TYPE>>
+    _spectrum_proportion_derivatives_impl(const DerivContext& ctx) const {
         std::vector<VALUE_TYPE> accum(no_target_distributions, VALUE_TYPE(0));
         for (const auto& node : nodes) {
             auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
@@ -1284,6 +1352,39 @@ public:
         for (size_t s = 0; s < no_target_distributions; ++s)
             result.emplace_back(s, accum[s]);
         return result;
+    }
+
+public:
+    // Per-peak marginal cost of increasing each theoretical signal by 1
+    // (spectrum_id, peak_index, derivative).  Exact: cheapest residual
+    // augmenting route (Dijkstra on reduced costs).
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
+        return _signal_part_derivatives_impl(_get_deriv_context(/*use_pi=*/false));
+    }
+
+    // Fast, APPROXIMATE per-peak marginals: the pure dual-potential
+    // difference (pi[v] - pi[src]), skipping the residual search.  A lower
+    // bound on the true marginal — exact only for peaks on the optimal flow
+    // support, basis-dependent at degenerate optima.  Different VALUES from
+    // signal_part_derivatives(); opt-in only.
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
+    signal_part_derivatives_fast_approx() const {
+        return _signal_part_derivatives_impl(_get_deriv_context(/*use_pi=*/true));
+    }
+
+    // Gradient of total cost w.r.t. scaling each spectrum's proportion
+    // (spectrum_id, derivative) = sum_i(peak_derivative_i * intensity_i).
+    // Exact residual marginals.
+    std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
+        return _spectrum_proportion_derivatives_impl(_get_deriv_context(/*use_pi=*/false));
+    }
+
+    // Fast, APPROXIMATE spectrum-proportion gradient (dual-potential
+    // difference; see signal_part_derivatives_fast_approx for the accuracy
+    // caveat).  Different VALUES from spectrum_proportion_derivatives().
+    std::vector<std::pair<size_t, VALUE_TYPE>>
+    spectrum_proportion_derivatives_fast_approx() const {
+        return _spectrum_proportion_derivatives_impl(_get_deriv_context(/*use_pi=*/true));
     }
 };
 
@@ -1563,6 +1664,17 @@ public:
         return total;
     }
 
+    // Solve-tail profiling breakdown, summed across all subgraphs.
+    // 15-slot layout (see NetworkSimplex::profCounters): ns values are
+    // nanoseconds.  Diagnostic only.
+    std::vector<int64_t> prof_breakdown() const {
+        std::vector<int64_t> acc(
+            lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PROF_SLOTS, 0);
+        for (const auto& sg : flow_subgraphs)
+            sg->prof_accumulate(acc);
+        return acc;
+    }
+
     size_t no_subgraphs() const {
         return flow_subgraphs.size();
     };
@@ -1634,10 +1746,12 @@ public:
         return nominator / denominator;
     }
 
-    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
+    _signal_part_derivatives(bool fast) const {
         std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
         for (const auto& sg : flow_subgraphs) {
-            auto sg_derivs = sg->signal_part_derivatives();
+            auto sg_derivs = fast ? sg->signal_part_derivatives_fast_approx()
+                                  : sg->signal_part_derivatives();
             result.insert(result.end(), sg_derivs.begin(), sg_derivs.end());
         }
         for (LEMON_INDEX dead_end_id : dead_end_node_ids) {
@@ -1647,10 +1761,13 @@ public:
         return result;
     }
 
-    std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
+    std::vector<std::pair<size_t, VALUE_TYPE>>
+    _spectrum_proportion_derivatives(bool fast) const {
         std::vector<VALUE_TYPE> accum(_no_theoretical_spectra, VALUE_TYPE(0));
         for (const auto& sg : flow_subgraphs) {
-            for (auto& [spec_id, deriv] : sg->spectrum_proportion_derivatives())
+            auto sg_derivs = fast ? sg->spectrum_proportion_derivatives_fast_approx()
+                                  : sg->spectrum_proportion_derivatives();
+            for (auto& [spec_id, deriv] : sg_derivs)
                 accum[spec_id] += deriv;
         }
         for (size_t s = 0; s < _no_theoretical_spectra; ++s) {
@@ -1662,6 +1779,29 @@ public:
         for (size_t s = 0; s < _no_theoretical_spectra; ++s)
             result.emplace_back(s, accum[s]);
         return result;
+    }
+
+public:
+    // Exact per-peak / per-spectrum marginals (cheapest residual augmenting
+    // route).  This is the default everything uses.
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
+        return _signal_part_derivatives(/*fast=*/false);
+    }
+    std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
+        return _spectrum_proportion_derivatives(/*fast=*/false);
+    }
+
+    // Fast, APPROXIMATE variants: pure dual-potential difference, no residual
+    // search.  ~O(n) vs a Dijkstra per subgraph, but the returned gradient
+    // VALUES differ (lower bound on the true marginal; exact only on the
+    // optimal flow support, basis-dependent at degenerate optima).  Opt-in.
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
+    signal_part_derivatives_fast_approx() const {
+        return _signal_part_derivatives(/*fast=*/true);
+    }
+    std::vector<std::pair<size_t, VALUE_TYPE>>
+    spectrum_proportion_derivatives_fast_approx() const {
+        return _spectrum_proportion_derivatives(/*fast=*/true);
     }
 
     static constexpr size_t value_type_size() {

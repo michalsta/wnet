@@ -124,6 +124,26 @@ class WassersteinNetwork:
         """
         return np.array([v for _, v in self.wnet.spectrum_proportion_derivatives()])
 
+    def signal_part_derivatives_fast_approx(self) -> dict[int, dict[int, int]]:
+        """Fast, APPROXIMATE signal_part_derivatives().
+
+        Uses the pure dual-potential difference instead of the residual
+        shortest-path search: much faster, but a different (basis-dependent)
+        gradient — a lower bound on the true marginal, exact only for peaks on
+        the optimal flow support.  Opt-in; not a drop-in for the exact one.
+        """
+        ret: dict[int, dict[int, int]] = {}
+        for spec_id, peak_idx, deriv in self.wnet.signal_part_derivatives_fast_approx():
+            ret.setdefault(spec_id, {})[peak_idx] = deriv
+        return ret
+
+    def spectrum_proportion_derivatives_fast_approx(self) -> np.ndarray:
+        """Fast, APPROXIMATE spectrum_proportion_derivatives() (see
+        signal_part_derivatives_fast_approx for the accuracy caveat)."""
+        return np.array(
+            [v for _, v in self.wnet.spectrum_proportion_derivatives_fast_approx()]
+        )
+
     def update_positions_and_get_gradient(
         self,
         new_base: Distribution,
@@ -313,3 +333,17 @@ class SubgraphWrapper:
         sum_i (peak_derivative_i * intensity_i).
         """
         return np.array([v for _, v in self._obj.spectrum_proportion_derivatives()])
+
+    def signal_part_derivatives_fast_approx(self) -> dict[int, dict[int, int]]:
+        """Fast, APPROXIMATE signal_part_derivatives() (dual-potential
+        difference; different basis-dependent values, opt-in)."""
+        ret: dict[int, dict[int, int]] = {}
+        for spec_id, peak_idx, deriv in self._obj.signal_part_derivatives_fast_approx():
+            ret.setdefault(spec_id, {})[peak_idx] = deriv
+        return ret
+
+    def spectrum_proportion_derivatives_fast_approx(self) -> np.ndarray:
+        """Fast, APPROXIMATE spectrum_proportion_derivatives() (opt-in)."""
+        return np.array(
+            [v for _, v in self._obj.spectrum_proportion_derivatives_fast_approx()]
+        )
