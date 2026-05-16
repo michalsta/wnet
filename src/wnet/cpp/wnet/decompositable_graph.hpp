@@ -37,7 +37,8 @@ enum class CCMethod {
 //   None   - always cold init() (no basis reuse)
 //   Simple - reuse the basis via repairTreeFlows(); cold-fallback if it fails
 //   Dual   - Simple, plus a bounded dual-simplex repair before cold-fallback
-enum class NSWarmMode { None, Simple, Dual };
+//   Primal - Simple, plus a bounded primal-pivot repair before cold-fallback
+enum class NSWarmMode { None, Simple, Dual, Primal };
 
 struct NetworkSimplexConfig {
     NSPivotRule pivot = NSPivotRule::BLOCK_SEARCH;
@@ -207,13 +208,19 @@ class WassersteinNetworkSubgraph {
                     // basis.  Only capacities and supplies change between calls
                     // (costs are fixed at build() time), so warmRun() can repair
                     // the previous optimal basis and reach the new optimum with
-                    // far fewer pivots.  Dual mode additionally attempts a
-                    // dual-simplex repair before any cold fallback; both modes
-                    // fall back to a cold start if the basis cannot be repaired.
+                    // far fewer pivots.  Dual/Primal modes additionally attempt
+                    // a dual-simplex / primal-pivot repair before any cold
+                    // fallback; all modes fall back to a cold start if the
+                    // basis cannot be repaired.
+                    using LemonWR = lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::WarmRepair;
+                    const LemonWR strategy =
+                        cfg.warm == NSWarmMode::Dual   ? LemonWR::Dual   :
+                        cfg.warm == NSWarmMode::Primal ? LemonWR::Primal :
+                                                         LemonWR::RepairOnly;
                     ns_solver->upperMap(capacities_map);
                     ns_solver->supplyMap(node_supply_map);
                     if (costs_changed) ns_solver->costMap(costs_map);
-                    ns_solver->warmRun(pivot, /*allow_dual=*/cfg.warm == NSWarmMode::Dual);
+                    ns_solver->warmRun(pivot, strategy);
                 } else {
                     ++_cold_starts_via_run;
                     ns_solver.emplace(lemon_graph);
@@ -554,6 +561,9 @@ public:
     }
     int dual_repair_count() const {
         return ns_solver.has_value() ? ns_solver->dualRepairCount() : 0;
+    }
+    int primal_repair_count() const {
+        return ns_solver.has_value() ? ns_solver->primalRepairCount() : 0;
     }
 
     std::string to_string() const {
@@ -1544,6 +1554,12 @@ public:
         int total = 0;
         for (const auto& sg : flow_subgraphs)
             total += sg->dual_repair_count();
+        return total;
+    }
+    int primal_repair_count() const {
+        int total = 0;
+        for (const auto& sg : flow_subgraphs)
+            total += sg->primal_repair_count();
         return total;
     }
 
