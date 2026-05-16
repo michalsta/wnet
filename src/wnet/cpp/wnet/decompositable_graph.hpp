@@ -591,16 +591,6 @@ public:
         return ns_solver.has_value() ? ns_solver->primalRepairCount() : 0;
     }
 
-    // Solve-tail profiling: accumulate this subgraph's 15-slot counters
-    // (diagnostic; see NetworkSimplex::profCounters for the layout).
-    void prof_accumulate(std::vector<int64_t>& acc) const {
-        if (!ns_solver.has_value()) return;
-        long long o[lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PROF_SLOTS];
-        ns_solver->profCounters(o);
-        for (int i = 0; i < lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PROF_SLOTS; ++i)
-            acc[i] += static_cast<int64_t>(o[i]);
-    }
-
 
     std::string to_string() const {
         std::string result;
@@ -1662,17 +1652,6 @@ public:
         for (const auto& sg : flow_subgraphs)
             total += sg->primal_repair_count();
         return total;
-    }
-
-    // Solve-tail profiling breakdown, summed across all subgraphs.
-    // 15-slot layout (see NetworkSimplex::profCounters): ns values are
-    // nanoseconds.  Diagnostic only.
-    std::vector<int64_t> prof_breakdown() const {
-        std::vector<int64_t> acc(
-            lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PROF_SLOTS, 0);
-        for (const auto& sg : flow_subgraphs)
-            sg->prof_accumulate(acc);
-        return acc;
     }
 
     size_t no_subgraphs() const {
