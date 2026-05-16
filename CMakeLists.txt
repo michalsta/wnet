@@ -22,6 +22,12 @@ nanobind_add_module(wnet_cpp
 target_include_directories(wnet_cpp PRIVATE ${PYLMCF_INCLUDE_DIRS})
 target_compile_definitions(wnet_cpp PRIVATE INCLUDE_NANOBIND_STUFF)
 
+# Max VectorDistribution dimension to instantiate. Defaults to 20 (and stays 20
+# for CI/wheel builds); reinstall.sh lowers it for faster local builds.
+if(DEFINED WNET_MAX_DIM)
+    target_compile_definitions(wnet_cpp PRIVATE WNET_MAX_DIM=${WNET_MAX_DIM})
+endif()
+
 # Add -Wall -Wextra for Unix-style compilers (GCC/Clang)
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
     target_compile_options(wnet_cpp PRIVATE -Wall -Wextra)

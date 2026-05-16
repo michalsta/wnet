@@ -207,4 +207,4 @@ marimo/_lsp/
 __marimo__/
 
 # scikit-build-core persistent build dir (used by reinstall.sh)
-_skbuild_*/
+_skbuild*/
