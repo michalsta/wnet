@@ -198,6 +198,7 @@ class Distribution:
 
     # def __setstate__(self, state: dict) -> None: default is fine
 
+
 def Distribution_1D(
     positions: np.ndarray, intensities: np.ndarray, label: Optional[str] = None
 ) -> Distribution:
