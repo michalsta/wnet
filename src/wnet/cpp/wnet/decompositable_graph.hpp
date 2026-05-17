@@ -34,15 +34,17 @@ enum class CCMethod {
 };
 
 // Warm-restart strategy for NetworkSimplex across successive solves:
-//   None   - always cold init() (no basis reuse)
-//   Simple - reuse the basis via repairTreeFlows(); cold-fallback if it fails
-//   Dual   - Simple, plus a bounded dual-simplex repair before cold-fallback
-//   Primal - Simple, plus a bounded primal-pivot repair before cold-fallback
+//   None      - always cold init() (no basis reuse)
+//   Simple    - reuse the basis via repairTreeFlows(); cold-fallback if it fails
+//   Dual      - Simple, plus a bounded dual-simplex repair before cold-fallback
+//   Primal    - Simple, plus a bounded primal-pivot repair before cold-fallback
+//   DualRatio - Dual with bound-flipping long step; fewer cold-fallbacks on
+//               large/hard graphs; default choice across most dataset families
 enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio };
 
 struct NetworkSimplexConfig {
     NSPivotRule pivot = NSPivotRule::BLOCK_SEARCH;
-    NSWarmMode warm = NSWarmMode::Dual;
+    NSWarmMode warm = NSWarmMode::DualRatio;
 };
 struct CostScalingConfig {
     CSMethod method = CSMethod::PARTIAL_AUGMENT;
