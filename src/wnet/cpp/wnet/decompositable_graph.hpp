@@ -38,7 +38,7 @@ enum class CCMethod {
 //   Simple - reuse the basis via repairTreeFlows(); cold-fallback if it fails
 //   Dual   - Simple, plus a bounded dual-simplex repair before cold-fallback
 //   Primal - Simple, plus a bounded primal-pivot repair before cold-fallback
-enum class NSWarmMode { None, Simple, Dual, Primal };
+enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio };
 
 struct NetworkSimplexConfig {
     NSPivotRule pivot = NSPivotRule::BLOCK_SEARCH;
@@ -236,9 +236,10 @@ class WassersteinNetworkSubgraph {
                     // basis cannot be repaired.
                     using LemonWR = lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::WarmRepair;
                     const LemonWR strategy =
-                        cfg.warm == NSWarmMode::Dual   ? LemonWR::Dual   :
-                        cfg.warm == NSWarmMode::Primal ? LemonWR::Primal :
-                                                         LemonWR::RepairOnly;
+                        cfg.warm == NSWarmMode::Dual      ? LemonWR::Dual      :
+                        cfg.warm == NSWarmMode::Primal    ? LemonWR::Primal    :
+                        cfg.warm == NSWarmMode::DualRatio ? LemonWR::DualRatio :
+                                                            LemonWR::RepairOnly;
                     ns_solver->upperMap(capacities_map);
                     ns_solver->supplyMap(node_supply_map);
                     if (costs_changed) ns_solver->costMap(costs_map);
