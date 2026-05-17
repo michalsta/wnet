@@ -106,7 +106,9 @@ NB_MODULE(wnet_cpp, m) {
         .value("Simple", NSWarmMode::Simple)
         .value("Dual",   NSWarmMode::Dual)
         .value("Primal", NSWarmMode::Primal)
-        .value("DualRatio", NSWarmMode::DualRatio);
+        .value("DualRatio", NSWarmMode::DualRatio)
+        .value("DualGreedy", NSWarmMode::DualGreedy)
+        .value("LinkCut", NSWarmMode::LinkCut);
 
 
     nb::class_<NetworkSimplexConfig>(m, "NetworkSimplex")

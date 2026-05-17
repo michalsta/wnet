@@ -59,7 +59,10 @@ def _trajectory(n_targets):
 
 @pytest.mark.parametrize("dim", [1, 3])  # 1 -> chain factory, 3 -> dense
 @pytest.mark.parametrize("n_targets", [2, 3])
-@pytest.mark.parametrize("warm_mode", [WarmMode.Simple, WarmMode.Dual, WarmMode.Primal])
+@pytest.mark.parametrize("warm_mode", [
+    WarmMode.Simple, WarmMode.Dual, WarmMode.Primal,
+    WarmMode.DualRatio, WarmMode.DualGreedy, WarmMode.LinkCut,
+])
 def test_warm_matches_cold_along_trajectory(dim, n_targets, warm_mode):
     size = 25
     seed = 1000 * dim + 7 * n_targets
@@ -92,6 +95,14 @@ def test_warm_matches_cold_along_trajectory(dim, n_targets, warm_mode):
         assert pr == 0  # Dual never invokes the primal path
     if warm_mode == WarmMode.Primal:
         assert d == 0  # Primal never invokes the dual path
+    if warm_mode == WarmMode.DualRatio:
+        assert pr == 0  # DualRatio never invokes the primal path
+    if warm_mode == WarmMode.DualGreedy:
+        assert pr == 0  # DualGreedy never invokes the primal path
+    if warm_mode == WarmMode.LinkCut:
+        # LinkCut is a separate (link-cut-tree) backend with the Simple warm
+        # strategy: no dual/primal repair counters.
+        assert d == 0 and pr == 0
 
 
 def test_dual_path_is_actually_exercised():
@@ -130,18 +141,58 @@ def test_primal_path_is_actually_exercised():
     assert primal.wnet.dual_repair_count() == 0
 
 
-def test_dual_not_worse_than_simple_on_cold_fallbacks():
-    """Dual and Primal should convert some cold fallbacks into repairs (never
-    more cold starts than Simple).  Correctness already covered above; this
-    guards the performance intent."""
+def test_dualratio_path_is_actually_exercised():
+    """DualRatio must hit dualRatioRepair and still be correct."""
     dim, n_targets, size = 3, 3, 30
     pts = _trajectory(n_targets)
-    simple = _build(11, dim, n_targets, size, WarmMode.Simple)
-    dual = _build(11, dim, n_targets, size, WarmMode.Dual)
-    primal = _build(11, dim, n_targets, size, WarmMode.Primal)
+    dr = _build(11, dim, n_targets, size, WarmMode.DualRatio)
+    cold = _build(11, dim, n_targets, size, WarmMode.NONE)
+    for p in pts:
+        dr.solve(p)
+        cold.solve(p)
+        assert dr.total_cost() == cold.total_cost()
+    assert dr.wnet.dual_repair_count() > 0, (
+        "dualratio repair never triggered -- test would be vacuous; "
+        "tighten the trajectory"
+    )
+    assert dr.wnet.primal_repair_count() == 0
+
+
+def test_dualgreedy_path_is_actually_exercised():
+    """DualGreedy must hit dualGreedyRepair and still be correct."""
+    dim, n_targets, size = 3, 3, 30
+    pts = _trajectory(n_targets)
+    dg = _build(11, dim, n_targets, size, WarmMode.DualGreedy)
+    cold = _build(11, dim, n_targets, size, WarmMode.NONE)
+    for p in pts:
+        dg.solve(p)
+        cold.solve(p)
+        assert dg.total_cost() == cold.total_cost()
+    assert dg.wnet.dual_repair_count() > 0, (
+        "dualgreedy repair never triggered -- test would be vacuous; "
+        "tighten the trajectory"
+    )
+    assert dg.wnet.primal_repair_count() == 0
+
+
+def test_dual_not_worse_than_simple_on_cold_fallbacks():
+    """Dual, Primal, DualRatio, and DualGreedy should convert some cold
+    fallbacks into repairs (never more cold starts than Simple).  Correctness
+    already covered above; this guards the performance intent."""
+    dim, n_targets, size = 3, 3, 30
+    pts = _trajectory(n_targets)
+    simple   = _build(11, dim, n_targets, size, WarmMode.Simple)
+    dual     = _build(11, dim, n_targets, size, WarmMode.Dual)
+    primal   = _build(11, dim, n_targets, size, WarmMode.Primal)
+    dualR    = _build(11, dim, n_targets, size, WarmMode.DualRatio)
+    dualG    = _build(11, dim, n_targets, size, WarmMode.DualGreedy)
     for p in pts:
         simple.solve(p)
         dual.solve(p)
         primal.solve(p)
-    assert dual.wnet.cold_start_count() <= simple.wnet.cold_start_count()
+        dualR.solve(p)
+        dualG.solve(p)
+    assert dual.wnet.cold_start_count()   <= simple.wnet.cold_start_count()
     assert primal.wnet.cold_start_count() <= simple.wnet.cold_start_count()
+    assert dualR.wnet.cold_start_count()  <= simple.wnet.cold_start_count()
+    assert dualG.wnet.cold_start_count()  <= simple.wnet.cold_start_count()

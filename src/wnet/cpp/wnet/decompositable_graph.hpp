@@ -19,6 +19,7 @@
 #include <lemon/cycle_canceling.h>
 #include <lemon/cost_scaling.h>
 #include <lemon/capacity_scaling.h>
+#include <pylmcf/network_simplex_lct_adapter.h>
 
 // Pivot rule for NetworkSimplex. Values match lemon::NetworkSimplex::PivotRule.
 enum class NSPivotRule {
@@ -34,13 +35,19 @@ enum class CCMethod {
 };
 
 // Warm-restart strategy for NetworkSimplex across successive solves:
-//   None      - always cold init() (no basis reuse)
-//   Simple    - reuse the basis via repairTreeFlows(); cold-fallback if it fails
-//   Dual      - Simple, plus a bounded dual-simplex repair before cold-fallback
-//   Primal    - Simple, plus a bounded primal-pivot repair before cold-fallback
-//   DualRatio - Dual with bound-flipping long step; fewer cold-fallbacks on
-//               large/hard graphs; default choice across most dataset families
-enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio };
+//   None       - always cold init() (no basis reuse)
+//   Simple     - reuse the basis via repairTreeFlows(); cold-fallback if it fails
+//   Dual       - Simple, plus a bounded dual-simplex repair before cold-fallback
+//   Primal     - Simple, plus a bounded primal-pivot repair before cold-fallback
+//   DualRatio  - Dual with bound-flipping long step; fewer cold-fallbacks on
+//                large/hard graphs; default choice across most dataset families
+//   DualGreedy - Like DualRatio but enters the max-capacity arc (not min-|rc|);
+//                may fix violations in fewer pivots when capacities vary widely
+//   LinkCut    - EXPERIMENTAL alternative backend: pylmcf::NetworkSimplexLCT
+//                (link-cut-tree spanning tree, O(log n) pivot tree updates).
+//                Currently Simple-strategy warm only (repair-or-cold); selects
+//                a different solver implementation, not a repair strategy.
+enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio, DualGreedy, LinkCut };
 
 struct NetworkSimplexConfig {
     NSPivotRule pivot = NSPivotRule::BLOCK_SEARCH;
@@ -78,6 +85,7 @@ class WassersteinNetworkSubgraph {
     lemon::StaticDigraph::ArcMap<VALUE_TYPE> capacities_map;
     lemon::StaticDigraph::ArcMap<VALUE_TYPE> costs_map;
     std::optional<lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> ns_solver;
+    std::optional<pylmcf::NetworkSimplexLCTAdapter<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> ns_lct_solver;
     std::optional<lemon::CycleCanceling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cc_solver;
     std::optional<lemon::CostScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cs_solver;
     std::optional<lemon::CapacityScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cap_solver;
@@ -150,20 +158,33 @@ class WassersteinNetworkSubgraph {
     };
     std::optional<ChainTopology> _chain_topo;
 
+    // True when the NetworkSimplex backend is the experimental link-cut-tree
+    // implementation (NSWarmMode::LinkCut) rather than LEMON's array solver.
+    bool _use_lct() const {
+        return std::holds_alternative<NetworkSimplexConfig>(_config) &&
+               std::get<NetworkSimplexConfig>(_config).warm == NSWarmMode::LinkCut;
+    }
+    VALUE_TYPE _solver_potential(lemon::StaticDigraph::Node nd) const {
+        return _use_lct() ? ns_lct_solver->potential(nd)
+                          : ns_solver->potential(nd);
+    }
     bool _solver_has_value() const {
-        if (std::holds_alternative<NetworkSimplexConfig>(_config)) return ns_solver.has_value();
+        if (std::holds_alternative<NetworkSimplexConfig>(_config))
+            return _use_lct() ? ns_lct_solver.has_value() : ns_solver.has_value();
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver.has_value();
         if (std::holds_alternative<CostScalingConfig>(_config))    return cs_solver.has_value();
         return cap_solver.has_value();
     }
     VALUE_TYPE _solver_flow(lemon::StaticDigraph::Arc arc) const {
-        if (std::holds_alternative<NetworkSimplexConfig>(_config)) return ns_solver->flow(arc);
+        if (std::holds_alternative<NetworkSimplexConfig>(_config))
+            return _use_lct() ? ns_lct_solver->flow(arc) : ns_solver->flow(arc);
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver->flow(arc);
         if (std::holds_alternative<CostScalingConfig>(_config))    return cs_solver->flow(arc);
         return cap_solver->flow(arc);
     }
     VALUE_TYPE _solver_total_cost() const {
-        if (std::holds_alternative<NetworkSimplexConfig>(_config)) return ns_solver->totalCost();
+        if (std::holds_alternative<NetworkSimplexConfig>(_config))
+            return _use_lct() ? ns_lct_solver->totalCost() : ns_solver->totalCost();
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver->totalCost();
         if (std::holds_alternative<CostScalingConfig>(_config))    return cs_solver->totalCost();
         return cap_solver->totalCost();
@@ -225,6 +246,23 @@ class WassersteinNetworkSubgraph {
         std::visit([&](const auto& cfg) {
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, NetworkSimplexConfig>) {
+              if (cfg.warm == NSWarmMode::LinkCut) {
+                // Experimental link-cut-tree backend (Simple warm strategy:
+                // repair-or-cold).  pivot/strategy are not applicable.
+                if (ns_lct_solver.has_value()) {
+                    ns_lct_solver->upperMap(capacities_map);
+                    ns_lct_solver->supplyMap(node_supply_map);
+                    if (costs_changed) ns_lct_solver->costMap(costs_map);
+                    ns_lct_solver->warmRun();
+                } else {
+                    ++_cold_starts_via_run;
+                    ns_lct_solver.emplace(lemon_graph);
+                    ns_lct_solver->upperMap(capacities_map);
+                    ns_lct_solver->costMap(costs_map);
+                    ns_lct_solver->supplyMap(node_supply_map);
+                    ns_lct_solver->run();
+                }
+              } else {
                 using LemonPR = lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PivotRule;
                 const auto pivot = static_cast<LemonPR>(cfg.pivot);
                 if (cfg.warm != NSWarmMode::None && ns_solver.has_value()) {
@@ -238,10 +276,11 @@ class WassersteinNetworkSubgraph {
                     // basis cannot be repaired.
                     using LemonWR = lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::WarmRepair;
                     const LemonWR strategy =
-                        cfg.warm == NSWarmMode::Dual      ? LemonWR::Dual      :
-                        cfg.warm == NSWarmMode::Primal    ? LemonWR::Primal    :
-                        cfg.warm == NSWarmMode::DualRatio ? LemonWR::DualRatio :
-                                                            LemonWR::RepairOnly;
+                        cfg.warm == NSWarmMode::Dual       ? LemonWR::Dual       :
+                        cfg.warm == NSWarmMode::Primal     ? LemonWR::Primal     :
+                        cfg.warm == NSWarmMode::DualRatio  ? LemonWR::DualRatio  :
+                        cfg.warm == NSWarmMode::DualGreedy ? LemonWR::DualGreedy :
+                                                             LemonWR::RepairOnly;
                     ns_solver->upperMap(capacities_map);
                     ns_solver->supplyMap(node_supply_map);
                     if (costs_changed) ns_solver->costMap(costs_map);
@@ -254,6 +293,7 @@ class WassersteinNetworkSubgraph {
                     ns_solver->supplyMap(node_supply_map);
                     ns_solver->run(pivot);
                 }
+              }
             } else if constexpr (std::is_same_v<T, CycleCancelingConfig>) {
                 using LemonM = lemon::CycleCanceling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::Method;
                 cc_solver.emplace(lemon_graph);
@@ -474,6 +514,7 @@ public:
                 }, edges[ii].get_type());
         }
         ns_solver.reset();
+        ns_lct_solver.reset();
         cc_solver.reset();
         _build_chain_topology();
         _matching_edge_cache.clear();
@@ -581,16 +622,25 @@ public:
     };
 
     int warm_start_count() const {
+        if (_use_lct())
+            return ns_lct_solver.has_value() ? ns_lct_solver->warmStartCount() : 0;
         return ns_solver.has_value() ? ns_solver->warmStartCount() : 0;
     }
     int cold_start_count() const {
+        if (_use_lct())
+            return _cold_starts_via_run +
+                   (ns_lct_solver.has_value() ? ns_lct_solver->coldStartCount() : 0);
         return _cold_starts_via_run +
                (ns_solver.has_value() ? ns_solver->coldStartCount() : 0);
     }
     int dual_repair_count() const {
+        if (_use_lct())
+            return ns_lct_solver.has_value() ? ns_lct_solver->dualRepairCount() : 0;
         return ns_solver.has_value() ? ns_solver->dualRepairCount() : 0;
     }
     int primal_repair_count() const {
+        if (_use_lct())
+            return ns_lct_solver.has_value() ? ns_lct_solver->primalRepairCount() : 0;
         return ns_solver.has_value() ? ns_solver->primalRepairCount() : 0;
     }
 
@@ -1115,7 +1165,7 @@ public:
 
         std::vector<VALUE_TYPE> pi(n);
         for (LEMON_INDEX i = 0; i < n; ++i)
-            pi[i] = ns_solver->potential(lemon_graph.nodeFromId(i));
+            pi[i] = _solver_potential(lemon_graph.nodeFromId(i));
 
         std::vector<VALUE_TYPE> rdist(n, INF);
         rdist[source_id] = 0;
@@ -1215,9 +1265,9 @@ public:
         const LEMON_INDEX n = lemon_graph.nodeNum();
         std::vector<VALUE_TYPE> dist(n);
         const VALUE_TYPE pi_src =
-            ns_solver->potential(lemon_graph.nodeFromId(source_id));
+            _solver_potential(lemon_graph.nodeFromId(source_id));
         for (LEMON_INDEX i = 0; i < n; ++i)
-            dist[i] = ns_solver->potential(lemon_graph.nodeFromId(i)) - pi_src;
+            dist[i] = _solver_potential(lemon_graph.nodeFromId(i)) - pi_src;
         return dist;
     }
 
@@ -1251,7 +1301,8 @@ public:
         ctx.asymmetric = experimental_trash_added || theoretical_trash_added;
         const LEMON_INDEX sink_id = 1;
         const bool use_chain = has_chain_edges();
-        const bool use_dijkstra = !use_chain && ns_solver.has_value();
+        const bool use_dijkstra = !use_chain &&
+            (_use_lct() ? ns_lct_solver.has_value() : ns_solver.has_value());
         const bool need_src  = !ctx.asymmetric || !ctx.supply_fixed;
         const bool need_sink = !ctx.asymmetric ||  ctx.supply_fixed;
         if (use_chain) {
