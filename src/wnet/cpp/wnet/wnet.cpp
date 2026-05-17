@@ -48,6 +48,8 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
         .def("py_get_positions", &VectorDistribution_##DIM::py_get_positions) \
         .def("py_get_intensities", &VectorDistribution_##DIM::py_get_intensities) \
         .def("get_point", &VectorDistribution_##DIM::get_point) \
+        .def("n_highest", &VectorDistribution_##DIM::n_highest) \
+        .def("p_trim", &VectorDistribution_##DIM::p_trim) \
         .def("__len__", &VectorDistribution_##DIM::size); \
     using VectorDistributionFloat_##DIM = VectorDistribution<DIM, double, double>; \
     nb::class_<VectorDistributionFloat_##DIM>(m, "CVectorDistributionFloat" #DIM) \
@@ -58,6 +60,8 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
         .def("py_get_positions", &VectorDistributionFloat_##DIM::py_get_positions) \
         .def("py_get_intensities", &VectorDistributionFloat_##DIM::py_get_intensities) \
         .def("get_point", &VectorDistributionFloat_##DIM::get_point) \
+        .def("n_highest", &VectorDistributionFloat_##DIM::n_highest) \
+        .def("p_trim", &VectorDistributionFloat_##DIM::p_trim) \
         .def("__len__", &VectorDistributionFloat_##DIM::size);
 
 NB_MODULE(wnet_cpp, m) {

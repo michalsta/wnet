@@ -258,6 +258,52 @@ public:
         return CloserThanIter<DistMetric>(*this, other_distribution, max_dist);
     };
 
+    VectorDistribution n_highest(size_t n) const {
+        if (n >= size()) return *this;
+        std::vector<size_t> idx(size());
+        std::iota(idx.begin(), idx.end(), 0);
+        std::partial_sort(idx.begin(), idx.begin() + n, idx.end(),
+            [this](size_t a, size_t b) {
+                return intensities_vector[a] > intensities_vector[b];
+            });
+        idx.resize(n);
+        std::vector<std::array<position_type, DIM>> new_positions;
+        std::vector<intensity_type> new_intensities;
+        new_positions.reserve(n);
+        new_intensities.reserve(n);
+        for (size_t i : idx) {
+            new_positions.push_back(positions[i]);
+            new_intensities.push_back(intensities_vector[i]);
+        }
+        return VectorDistribution(std::move(new_positions), std::move(new_intensities));
+    }
+
+    VectorDistribution p_trim(double p) const {
+        if (p <= 0.0) return VectorDistribution(
+            std::vector<std::array<position_type, DIM>>{},
+            std::vector<intensity_type>{});
+        if (p >= 1.0) return *this;
+        std::vector<size_t> idx(size());
+        std::iota(idx.begin(), idx.end(), 0);
+        std::sort(idx.begin(), idx.end(),
+            [this](size_t a, size_t b) {
+                return intensities_vector[a] > intensities_vector[b];
+            });
+        double total = 0.0;
+        for (auto& v : intensities_vector) total += static_cast<double>(v);
+        double threshold = p * total;
+        std::vector<std::array<position_type, DIM>> new_positions;
+        std::vector<intensity_type> new_intensities;
+        double cumsum = 0.0;
+        for (size_t i : idx) {
+            cumsum += static_cast<double>(intensities_vector[i]);
+            new_positions.push_back(positions[i]);
+            new_intensities.push_back(intensities_vector[i]);
+            if (cumsum >= threshold) break;
+        }
+        return VectorDistribution(std::move(new_positions), std::move(new_intensities));
+    }
+
     static VectorDistribution CreateRandom(size_t no_points,
                                            position_type position_range,
                                            intensity_type intensity_range,

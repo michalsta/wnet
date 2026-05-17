@@ -56,6 +56,37 @@ class Distribution:
             self.positions.astype(np.float64), self.intensities.astype(np.int64)
         )
 
+    def n_highest(self, n: int) -> "Distribution":
+        """
+        Returns a new Distribution containing the n peaks with the highest intensities.
+
+        Args:
+            n (int): Number of top peaks to retain.
+
+        Returns:
+            Distribution: New distribution with at most n peaks, ordered by intensity descending.
+        """
+        result = self.vecdist.n_highest(n)
+        return Distribution(
+            result.py_get_positions(), result.py_get_intensities(), label=self.label
+        )
+
+    def p_trim(self, p: float) -> "Distribution":
+        """
+        Returns a new Distribution keeping the fewest highest-intensity peaks whose
+        combined intensity is at least p * total_intensity.
+
+        Args:
+            p (float): Fraction of total signal to retain (0.0–1.0).
+
+        Returns:
+            Distribution: New distribution covering at least fraction p of the signal.
+        """
+        result = self.vecdist.p_trim(p)
+        return Distribution(
+            result.py_get_positions(), result.py_get_intensities(), label=self.label
+        )
+
     def scaled(self, scale_factor: float) -> "Distribution":
         """
         Creates a new Distribution instance with intensities scaled by the given factor.
