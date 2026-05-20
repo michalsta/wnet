@@ -210,7 +210,8 @@ jobs:
           - label: "clang libstdc++ asan+ubsan"
             cc: clang
             cxx: clang++
-            apt_extra: clang libclang-rt-18-dev
+            apt_extra: clang
+            install_clang_rt: true
             build_type: Debug
             cxx_flags: >-
               -fsanitize=address,undefined
@@ -285,7 +286,7 @@ jobs:
           - label: "clang libc++ hardened"
             cc: clang
             cxx: clang++
-            apt_extra: clang libc++-dev libc++abi-dev
+            apt_extra: clang libc++-dev libc++abi-18-dev
             build_type: RelWithDebInfo
             cxx_flags: >-
               -stdlib=libc++
@@ -313,20 +314,28 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install dependencies
         run: python -m pip install --upgrade pip
-      - name: Set up LLVM 22 from apt.llvm.org
-        # Ubuntu 24.04 doesn't ship LLVM 22, so no epoch-version conflict or pinning
-        # needed. LLVM project packages lack Ubuntu's -Bsymbolic-functions patch that
+      - name: Set up LLVM from apt.llvm.org
+        # LLVM project packages lack Ubuntu's -Bsymbolic-functions patch that
         # breaks ASan interception of __cxa_rethrow_primary_exception (LLVM #59432).
+        # Also used to get libclang-rt-XX-dev for versions not in Ubuntu main repos.
         if: matrix.use_llvm_apt
         run: |
+          LLVM_VERSION="${{ matrix.llvm_apt_version || '22' }}"
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
             | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-${LLVM_VERSION} main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-${LLVM_VERSION}.list
           sudo apt-get update -q
       - name: Install system packages
         if: matrix.apt_extra != ''
-        run: sudo apt-get install -y ${{ matrix.apt_extra }}
+        run: sudo apt-get update -q && sudo apt-get install -y ${{ matrix.apt_extra }}
+      - name: Install Clang sanitizer runtime
+        # Installs the clang runtime (ASan/UBSan shared library) for LD_PRELOAD.
+        # Detects the installed clang version dynamically to avoid pinning a version number.
+        if: matrix.install_clang_rt
+        run: |
+          CLANG_VER=$(clang --version | grep -oP '(?<=clang version )\d+')
+          sudo apt-get install -y libclang-rt-${CLANG_VER}-dev
       - name: Set up Clang as compiler
         if: startsWith(matrix.cc, 'clang')
         run: |
