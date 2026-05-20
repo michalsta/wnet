@@ -24,10 +24,10 @@ jobs:
         include:
         - os: linux-amd64
           runner: [self-hosted, wloczykij-amd64]
-          container: ubuntu:24.04
+          container: localhost:5000/ubuntu-ci:24.04
         - os: linux-arm64
           runner: [self-hosted, wloczykij-arm64]
-          container: ubuntu:24.04
+          container: localhost:5000/ubuntu-ci:24.04
         - os: windows-latest
           runner: windows-latest
         - os: macos-15-intel
@@ -74,9 +74,6 @@ jobs:
 
 
     steps:
-      - name: Install base tools
-        if: startsWith(matrix.os, 'linux')
-        run: apt-get update -q && apt-get install -y git sudo build-essential
       - uses: actions/checkout@v5
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
@@ -90,7 +87,6 @@ jobs:
       - name: "Non-default compiler: set up Clang"
         if: matrix.compiler == 'clang'
         run: |
-          sudo apt-get install -y clang g++
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
           echo "CMAKE_ARGS=-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++" >> $GITHUB_ENV
@@ -118,14 +114,12 @@ jobs:
         include:
         - os: linux-amd64
           runner: [self-hosted, wloczykij-amd64]
-          container: ubuntu:24.04
+          container: localhost:5000/ubuntu-ci:24.04
         - os: linux-arm64
           runner: [self-hosted, wloczykij-arm64]
-          container: ubuntu:24.04
+          container: localhost:5000/ubuntu-ci:24.04
 
     steps:
-      - name: Install base tools
-        run: apt-get update -q && apt-get install -y git sudo build-essential
       - uses: actions/checkout@v5
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
@@ -139,7 +133,6 @@ jobs:
       - name: "Non-default compiler: set up Clang"
         if: matrix.compiler == 'clang'
         run: |
-          sudo apt-get install -y clang g++
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
           echo "CMAKE_ARGS=-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++" >> $GITHUB_ENV
@@ -156,7 +149,7 @@ jobs:
   sanitize:
     name: "[sanitize] ${{ matrix.label }}"
     runs-on: [self-hosted, wloczykij-amd64]
-    container: ubuntu:24.04
+    container: localhost:5000/ubuntu-ci:24.04
     strategy:
       fail-fast: false
       matrix:
@@ -311,8 +304,6 @@ jobs:
             dump_logs: false
 
     steps:
-      - name: Install base tools
-        run: apt-get update -q && apt-get install -y git sudo build-essential wget
       - uses: actions/checkout@v5
       - name: Set up Python 3.14
         uses: actions/setup-python@v4
