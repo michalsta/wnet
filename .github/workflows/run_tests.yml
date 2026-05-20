@@ -388,16 +388,26 @@ jobs:
           MATRIX_CC: ${{ matrix.cc }}
         run: |
           CC_BIN="$MATRIX_CC"
+          PRELOAD=""
           if [[ "$CC_BIN" == gcc* ]] || [[ "$CC_BIN" == g++* ]]; then
+            # GCC libasan: when preloaded alone, ASan initializes before
+            # libstdc++ is mapped, so dlsym(RTLD_NEXT, "__cxa_throw") returns
+            # NULL and the first C++ throw CHECK-fails. Preload libstdc++
+            # FIRST so the C++ runtime is on the link map before libasan's
+            # interceptor init runs.
+            LIBSTDCXX=$($CC_BIN -print-file-name=libstdc++.so.6 2>/dev/null || true)
+            if [ ! -f "$LIBSTDCXX" ]; then
+              LIBSTDCXX=$(find /lib /usr/lib -name "libstdc++.so.6" 2>/dev/null | head -1)
+            fi
             ASAN_LIB=$($CC_BIN -print-file-name=libasan.so 2>/dev/null || true)
             if [ ! -f "$ASAN_LIB" ]; then
               ASAN_LIB=$(find /usr/lib/gcc -name "libasan.so*" 2>/dev/null | head -1)
             fi
-            if [ -n "$ASAN_LIB" ] && [ -f "$ASAN_LIB" ]; then
-              echo "Preloading GCC ASan from: $ASAN_LIB"
+            if [ -f "$LIBSTDCXX" ] && [ -f "$ASAN_LIB" ]; then
+              PRELOAD="${LIBSTDCXX}:${ASAN_LIB}"
+              echo "Preloading (order matters, libstdc++ first): $PRELOAD"
             else
-              echo "GCC libasan.so not found"
-              ASAN_LIB=""
+              echo "Missing libstdc++ ($LIBSTDCXX) or libasan ($ASAN_LIB); not preloading"
             fi
           else
             ASAN_LIB=$($CC_BIN -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null || true)
@@ -406,13 +416,14 @@ jobs:
               # search path); try the LLVM tree directly.
               ASAN_LIB=$(find /usr/lib/llvm-* -name "libclang_rt.asan-x86_64.so" 2>/dev/null | head -1)
             fi
-            if [ -n "$ASAN_LIB" ]; then
+            if [ -n "$ASAN_LIB" ] && [ -f "$ASAN_LIB" ]; then
+              PRELOAD="$ASAN_LIB"
               echo "Preloading clang ASan from: $ASAN_LIB"
             else
               echo "clang ASan shared library not found; relying on static runtime embedded in extension"
             fi
           fi
-          echo "WNET_ASAN_PRELOAD=${ASAN_LIB}" >> $GITHUB_ENV
+          echo "WNET_ASAN_PRELOAD=${PRELOAD}" >> $GITHUB_ENV
       - name: Test with pytest
         working-directory: ./tests
         env:
