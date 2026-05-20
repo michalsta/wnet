@@ -172,9 +172,12 @@ jobs:
               -D_GLIBCXX_ASSERTIONS
               -D_GLIBCXX_SANITIZE_VECTOR
             link_flags: ""
-            # GCC adds libasan.so as DT_NEEDED automatically for .so targets;
-            # no LD_PRELOAD needed.
-            preload_asan: false
+            # GCC's driver does not add libasan to DT_NEEDED for `-shared
+            # -fsanitize=address` on this container, so the extension imports
+            # with unresolved __asan_* symbols. Preload libasan instead.
+            # Safe here because the extension itself is built with libstdc++,
+            # so the libstdc++ EH hooks libasan pulls in match the ABI.
+            preload_asan: true
             pythonmalloc: malloc
             asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
             ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
@@ -366,27 +369,48 @@ jobs:
             --config-settings="cmake.define.CMAKE_CXX_FLAGS=${CXX_FLAGS}" \
             "${LINK_ARGS[@]}"
       - name: Find sanitizer libraries for LD_PRELOAD
-        # Without -shared-libasan, clang links the ASan/UBSan runtime statically
-        # into the .so, so no LD_PRELOAD is strictly required.  However, if the
-        # clang runtime shared library IS available (libclang-rt-XX-dev installed),
-        # preloading it ensures ASan intercepts Python's allocations from startup.
-        # We use `clang -print-file-name` to probe for it; if not found we skip
-        # preloading and let the static runtime in the extension handle things.
-        # IMPORTANT: never preload GCC's libasan here — it brings libstdc++ exception
-        # hooks into the process, which crash libc++-compiled extensions when they
-        # throw C++ exceptions (ABI mismatch between libstdc++ and libc++ EH tables).
+        # For GCC: the driver does not reliably add libasan to DT_NEEDED for
+        # `-shared -fsanitize=address` builds, so preloading libasan.so is the
+        # easiest way to get __asan_* symbols resolved at import time.
+        # For Clang: without -shared-libasan, clang links the ASan/UBSan runtime
+        # statically into the .so, so no LD_PRELOAD is strictly required.
+        # However, if the clang runtime shared library IS available
+        # (libclang-rt-XX-dev installed), preloading it ensures ASan intercepts
+        # Python's allocations from startup. If not found, skip preloading and
+        # let the static runtime in the extension handle things.
+        # IMPORTANT: never preload GCC's libasan for a libc++-compiled extension
+        # — it brings libstdc++ exception hooks into the process, which crash
+        # libc++ extensions when they throw C++ exceptions (ABI mismatch between
+        # libstdc++ and libc++ EH tables). Only enable preload_asan for matrix
+        # entries whose extension is built against the matching libstdc++/libc++.
         if: matrix.preload_asan
+        env:
+          MATRIX_CC: ${{ matrix.cc }}
         run: |
-          ASAN_LIB=$(${CC:-clang} -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null || true)
-          if [ ! -f "$ASAN_LIB" ]; then
-            # compiler -print-file-name returned a bare name (library not in clang's
-            # search path); try the LLVM tree directly.
-            ASAN_LIB=$(find /usr/lib/llvm-* -name "libclang_rt.asan-x86_64.so" 2>/dev/null | head -1)
-          fi
-          if [ -n "$ASAN_LIB" ]; then
-            echo "Preloading clang ASan from: $ASAN_LIB"
+          CC_BIN="$MATRIX_CC"
+          if [[ "$CC_BIN" == gcc* ]] || [[ "$CC_BIN" == g++* ]]; then
+            ASAN_LIB=$($CC_BIN -print-file-name=libasan.so 2>/dev/null || true)
+            if [ ! -f "$ASAN_LIB" ]; then
+              ASAN_LIB=$(find /usr/lib/gcc -name "libasan.so*" 2>/dev/null | head -1)
+            fi
+            if [ -n "$ASAN_LIB" ] && [ -f "$ASAN_LIB" ]; then
+              echo "Preloading GCC ASan from: $ASAN_LIB"
+            else
+              echo "GCC libasan.so not found"
+              ASAN_LIB=""
+            fi
           else
-            echo "clang ASan shared library not found; relying on static runtime embedded in extension"
+            ASAN_LIB=$($CC_BIN -print-file-name=libclang_rt.asan-x86_64.so 2>/dev/null || true)
+            if [ ! -f "$ASAN_LIB" ]; then
+              # compiler -print-file-name returned a bare name (library not in clang's
+              # search path); try the LLVM tree directly.
+              ASAN_LIB=$(find /usr/lib/llvm-* -name "libclang_rt.asan-x86_64.so" 2>/dev/null | head -1)
+            fi
+            if [ -n "$ASAN_LIB" ]; then
+              echo "Preloading clang ASan from: $ASAN_LIB"
+            else
+              echo "clang ASan shared library not found; relying on static runtime embedded in extension"
+            fi
           fi
           echo "WNET_ASAN_PRELOAD=${ASAN_LIB}" >> $GITHUB_ENV
       - name: Test with pytest
