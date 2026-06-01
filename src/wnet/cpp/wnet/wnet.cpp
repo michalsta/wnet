@@ -272,6 +272,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("add_simple_trash", &WassersteinNetwork<int64_t, int64_t>::add_simple_trash)
         .def("add_experimental_trash", &WassersteinNetwork<int64_t, int64_t>::add_experimental_trash)
         .def("add_theoretical_trash", &WassersteinNetwork<int64_t, int64_t>::add_theoretical_trash)
+        .def("add_independent_asymmetric_trash", &WassersteinNetwork<int64_t, int64_t>::add_independent_asymmetric_trash)
         .def("build", &WassersteinNetwork<int64_t, int64_t>::build, nb::arg("config") = NetworkSimplexConfig{})
         .def("solve",
              [](WassersteinNetwork<int64_t, int64_t>& self) { self.solve(); })
@@ -357,6 +358,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("add_simple_trash", &WassersteinNetwork<int64_t, double>::add_simple_trash)
         .def("add_experimental_trash", &WassersteinNetwork<int64_t, double>::add_experimental_trash)
         .def("add_theoretical_trash", &WassersteinNetwork<int64_t, double>::add_theoretical_trash)
+        .def("add_independent_asymmetric_trash", &WassersteinNetwork<int64_t, double>::add_independent_asymmetric_trash)
         .def("build", &WassersteinNetwork<int64_t, double>::build, nb::arg("config") = NetworkSimplexConfig{})
         .def("solve",
              [](WassersteinNetwork<int64_t, double>& self) { self.solve(); })

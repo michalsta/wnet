@@ -97,6 +97,14 @@ struct TrashModel {
     VALUE_TYPE C_s    = INF;
     VALUE_TYPE C_exp  = INF;
     VALUE_TYPE C_theo = INF;
+    // dualdeconv4 mode: the experimental and theoretical abysses are
+    // *independent* (no annihilation discount).  An unmatched empirical unit
+    // always costs C_exp and an unfilled theoretical unit always costs C_theo,
+    // so resolving an (emp, theo) excess pair costs C_exp + C_theo (route
+    // through both abysses), never min(C_exp, C_theo).  Requires both C_exp and
+    // C_theo finite and no simple trash; set via the network's
+    // add_independent_asymmetric_trash().
+    bool independent = false;
 
     bool any() const { return C_s < INF || C_exp < INF || C_theo < INF; }
     bool emp_dischargeable() const { return C_exp < INF || C_s < INF; }
@@ -108,7 +116,15 @@ struct TrashModel {
     // iff its distance is below this, *independent* of subgraph or global balance
     // (hence per-subgraph matching with an escape at tau() reproduces the global
     // optimum and the closed-form excess() reconciliation below is exact).
-    VALUE_TYPE tau() const { return std::min(C_s, std::min(C_exp, C_theo)); }
+    VALUE_TYPE tau() const {
+        // Independent abysses (dualdeconv4): forgoing a candidate match adds one
+        // empirical and one theoretical excess unit, resolved separately at
+        // C_exp + C_theo — that sum is the matching threshold.  Still a global
+        // constant (independent of subgraph/balance), so per-subgraph matching
+        // with an escape at tau() reproduces the global optimum.
+        if (independent) return C_exp + C_theo;
+        return std::min(C_s, std::min(C_exp, C_theo));
+    }
 
     // Minimum cost to resolve Xe unmatched empirical and Xt unfilled theoretical
     // units (after matching).  Mass that is not forced through to the sink may be
@@ -122,6 +138,11 @@ struct TrashModel {
     //   escapable this reduces to the pairing form
     //     min(Xe,Xt)*min(C_s,C_exp,C_theo) + surplus*min(C_s,C_side).
     VALUE_TYPE excess(VALUE_TYPE Xe, VALUE_TYPE Xt) const {
+        // Independent abysses (dualdeconv4): each side disposed on its own route,
+        // no pairing.  Linear ⇒ trivially decomposition-invariant; the
+        // marginal_Xt / saving_Xe finite differences below yield the constants
+        // C_theo / C_exp automatically.
+        if (independent) return Xe * C_exp + Xt * C_theo;
         const bool emp = emp_dischargeable();
         const bool theo = theo_fillable();
         VALUE_TYPE forced;
@@ -1654,6 +1675,23 @@ public:
         if (_trash_model.C_theo < TrashModel<VALUE_TYPE>::INF)
             throw std::runtime_error("Theoretical trash already added.");
         _trash_model.C_theo = cost;
+    };
+
+    // dualdeconv4: independent experimental + theoretical abysses (no pairing
+    // discount).  An unmatched empirical unit costs C_exp and an unfilled
+    // theoretical unit costs C_theo, charged independently; the match-vs-dump
+    // threshold is C_exp + C_theo.  Mutually exclusive with the other trash
+    // types (which implement the annihilating model).
+    void add_independent_asymmetric_trash(VALUE_TYPE C_exp, VALUE_TYPE C_theo) {
+        if (built)
+            throw std::runtime_error("add_independent_asymmetric_trash() must be called before build().");
+        if (_trash_model.any())
+            throw std::runtime_error(
+                "add_independent_asymmetric_trash() cannot be combined with "
+                "simple/experimental/theoretical trash.");
+        _trash_model.C_exp = C_exp;
+        _trash_model.C_theo = C_theo;
+        _trash_model.independent = true;
     };
 
     void build(SolverConfig config = NetworkSimplexConfig{}) {

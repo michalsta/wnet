@@ -76,6 +76,7 @@ class WassersteinNetwork:
         self.add_simple_trash = self.wnet.add_simple_trash
         self.add_experimental_trash = self.wnet.add_experimental_trash
         self.add_theoretical_trash = self.wnet.add_theoretical_trash
+        self.add_independent_asymmetric_trash = self.wnet.add_independent_asymmetric_trash
 
         # Avoid capturing self in the lambda to prevent reference cycles that could lead to memory leaks.  The underlying C++ object should be freed when this wrapper is freed, but if we capture self in the lambda, the lambda's reference to self would keep it alive indefinitely.
         # Without this trick, the lambda would hold a reference to self, which holds a reference to the C++ object, which holds a reference back to the lambda, creating a cycle that prevents garbage collection.
