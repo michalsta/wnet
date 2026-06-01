@@ -5,8 +5,11 @@ Topology reminder:
   Source → EmpiricalNode  → TheoreticalNode → Sink   (normal path)
   EmpiricalNode → Sink                               (experimental trash)
   Source → TheoreticalNode                           (theoretical trash)
+  Source → Sink                                      (simple trash)
 
-The two asymmetric types are mutually exclusive with SimpleTrashEdge.
+All three trash types may be combined freely: simple + experimental,
+simple + theoretical, experimental + theoretical, or all three.  The MCF
+solver picks the cheapest available escape for each unit.
 """
 
 import pytest
@@ -151,11 +154,13 @@ def test_theo_trash_equals_simple_trash_excess_theoretical():
 
 
 def test_both_trash_equals_simple_trash_two_components():
-    # Multi-component graph: component 1 has E > T, component 2 has T > E.
-    # Points separated by 1000 → two independent subgraphs.
-    # Component 1: emp=7 @ 0, theo=4 @ 1 → 4*1 + 3*10 = 34
-    # Component 2: emp=3 @ 1000, theo=7 @ 1001 → 3*1 + 4*10 = 43
-    # Total: 77 for both formulations.
+    # Multi-component graph with opposing imbalance per component:
+    #   component 1: E > T (emp excess 3)
+    #   component 2: T > E (theo excess 4)
+    # Under the global cost model the subgraph decomposition is invisible:
+    # cost = match + global trash flow * unit cost.
+    # E_total=10, T_total=11, match=4+3=7, supply=11, trash=4. All routes
+    # at C=10 in both setups, so cost = 7 + 40 = 47 either way.
     emp = _dist1d([0, 1000], [7, 3])
     theo = _dist1d([1, 1001], [4, 7])
 
@@ -168,7 +173,7 @@ def test_both_trash_equals_simple_trash_two_components():
     W_sym.add_simple_trash(10)
     cost_sym = _solve(W_sym)
 
-    assert cost_asym == cost_sym == 77
+    assert cost_asym == cost_sym == 47
 
 
 # ---------------------------------------------------------------------------
@@ -211,42 +216,6 @@ def test_theoretical_trash_after_build_raises():
     W.build()
     with pytest.raises(RuntimeError):
         W.add_theoretical_trash(10)
-
-
-def test_experimental_trash_exclusive_with_simple_trash():
-    emp = _dist1d([0], [5])
-    theo = _dist1d([1], [5])
-    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
-    W.add_simple_trash(10)
-    with pytest.raises(RuntimeError):
-        W.add_experimental_trash(10)
-
-
-def test_theoretical_trash_exclusive_with_simple_trash():
-    emp = _dist1d([0], [5])
-    theo = _dist1d([1], [5])
-    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
-    W.add_simple_trash(10)
-    with pytest.raises(RuntimeError):
-        W.add_theoretical_trash(10)
-
-
-def test_simple_trash_exclusive_with_experimental_trash():
-    emp = _dist1d([0], [5])
-    theo = _dist1d([1], [5])
-    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
-    W.add_experimental_trash(10)
-    with pytest.raises(RuntimeError):
-        W.add_simple_trash(10)
-
-
-def test_simple_trash_exclusive_with_theoretical_trash():
-    emp = _dist1d([0], [5])
-    theo = _dist1d([1], [5])
-    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
-    W.add_theoretical_trash(10)
-    with pytest.raises(RuntimeError):
-        W.add_simple_trash(10)
 
 
 def test_experimental_trash_double_add_raises():
@@ -410,6 +379,321 @@ def test_signal_part_derivatives_matches_simple_trash_excess_empirical():
     W_sym.solve()
 
     assert W_asym.signal_part_derivatives() == W_sym.signal_part_derivatives()
+
+
+# ---------------------------------------------------------------------------
+# Combined simple + asymmetric trash
+# ---------------------------------------------------------------------------
+
+
+def test_simple_plus_exp_uses_cheaper_simple():
+    # E > T, exp_trash=100, simple_trash=10.  Simple is cheaper for excess emp.
+    # cost = 4*1 + 3*10 = 34.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
+    W.add_simple_trash(10)
+    W.add_experimental_trash(100)
+    assert _solve(W) == 34
+
+
+def test_simple_plus_exp_uses_cheaper_exp():
+    # E > T, simple=100, exp=10.  Exp is cheaper.
+    # cost = 4*1 + 3*10 = 34.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
+    W.add_simple_trash(100)
+    W.add_experimental_trash(10)
+    assert _solve(W) == 34
+
+
+def test_simple_plus_theo_uses_cheaper_theo():
+    # T > E, simple=100, theo=10.  Theo is cheaper for excess theo.
+    # cost = 3*1 + 4*10 = 43.
+    emp = _dist1d([0], [3])
+    theo = _dist1d([1], [7])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
+    W.add_simple_trash(100)
+    W.add_theoretical_trash(10)
+    assert _solve(W) == 43
+
+
+def test_all_three_trash_types_simple_cheapest():
+    # E > T, simple=5 cheapest, exp=10, theo=10.
+    # cost = 4*1 + 3*5 = 19.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
+    W.add_simple_trash(5)
+    W.add_experimental_trash(10)
+    W.add_theoretical_trash(10)
+    assert _solve(W) == 19
+
+
+def test_all_three_trash_types_asym_cheapest():
+    # E > T, simple=100, exp=5, theo=100.  Exp is cheapest for excess emp.
+    # cost = 4*1 + 3*5 = 19.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
+    W.add_simple_trash(100)
+    W.add_experimental_trash(5)
+    W.add_theoretical_trash(100)
+    assert _solve(W) == 19
+
+
+# ---------------------------------------------------------------------------
+# Global-model invariance: the subgraph decomposition is purely a
+# computational optimization, so results must be invariant to whether
+# max_distance forces a split or keeps everything in a single subgraph.
+# ---------------------------------------------------------------------------
+
+
+def _build_and_solve(emp_d, theo_d, max_dist, trash):
+    W = WassersteinNetwork(emp_d, [theo_d], DistanceMetric.L1, max_dist, force_dense_1d=True)
+    if "simple" in trash:
+        W.add_simple_trash(trash["simple"])
+    if "exp" in trash:
+        W.add_experimental_trash(trash["exp"])
+    if "theo" in trash:
+        W.add_theoretical_trash(trash["theo"])
+    W.build()
+    W.solve()
+    return W
+
+
+@pytest.mark.parametrize("trash", [
+    {"simple": 10},
+    {"exp": 10, "theo": 10},
+    {"simple": 10, "exp": 10, "theo": 10},
+    {"simple": 100, "exp": 10, "theo": 100},
+    {"simple": 5, "exp": 100, "theo": 100},
+])
+def test_global_cost_invariant_to_decomposition_opposing(trash):
+    # Opposing imbalance: sg1 has E>T, sg2 has T>E.  Split decomposition
+    # must give the same total_cost as a single-graph solve.
+    emp = _dist1d([0, 100], [5, 2])
+    theo = _dist1d([1, 101], [2, 6])
+    W_split = _build_and_solve(emp, theo, 10, trash)
+    W_global = _build_and_solve(emp, theo, 1000, trash)
+    assert W_split.total_cost() == W_global.total_cost()
+
+
+@pytest.mark.parametrize("trash", [
+    {"simple": 10},
+    {"exp": 10, "theo": 10},
+    {"simple": 10, "exp": 10, "theo": 10},
+    {"simple": 100, "exp": 10, "theo": 100},
+    {"simple": 5, "exp": 100, "theo": 100},
+])
+def test_global_derivatives_invariant_to_decomposition_opposing(trash):
+    # Same setup: derivatives must be invariant to the decomposition.
+    emp = _dist1d([0, 100], [5, 2])
+    theo = _dist1d([1, 101], [2, 6])
+    W_split = _build_and_solve(emp, theo, 10, trash)
+    W_global = _build_and_solve(emp, theo, 1000, trash)
+    assert W_split.signal_part_derivatives() == W_global.signal_part_derivatives()
+
+
+def test_global_invariance_dead_end_peaks():
+    # E peaks at one location, T peaks far away → all peaks become
+    # dead-ends.  Cost = max(E,T) * cheapest trash, not E+T * cheapest.
+    emp = _dist1d([0], [6])
+    theo = _dist1d([1000], [4])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 10)
+    W.add_simple_trash(10)
+    W.build(); W.solve()
+    # supply = max(6, 4) = 6, all via simple at 10. match = 0.
+    assert W.total_cost() == 6 * 10
+
+
+def test_simple_plus_asym_decomposed_subgraphs():
+    # Two disjoint components with opposing imbalance.  Combined trash is
+    # added to each subgraph; the global model pairs the cross-subgraph
+    # excess via the simple trash arc:
+    #   E_total=10, T_total=11, match=7, supply=11, trash=4.
+    #   Simple (5) is cheapest, exp/theo at 100 unused.
+    #   cost = 7 (match) + 4*5 (simple) = 27.
+    emp = _dist1d([0, 1000], [7, 3])
+    theo = _dist1d([1, 1001], [4, 7])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 10)
+    W.add_simple_trash(5)
+    W.add_experimental_trash(100)
+    W.add_theoretical_trash(100)
+    assert _solve(W) == 27
+
+
+def test_combined_trash_matches_simple_only_when_simple_cheaper():
+    # When simple is uniformly cheaper than any asym, results must match
+    # simple-only configuration.
+    emp = _dist1d([0, 1000], [7, 3])
+    theo = _dist1d([1, 1001], [4, 7])
+
+    W_combined = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 10)
+    W_combined.add_simple_trash(5)
+    W_combined.add_experimental_trash(100)
+    W_combined.add_theoretical_trash(100)
+    cost_combined = _solve(W_combined)
+
+    W_simple = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 10)
+    W_simple.add_simple_trash(5)
+    cost_simple = _solve(W_simple)
+
+    assert cost_combined == cost_simple
+
+
+def test_signal_part_derivatives_simple_plus_asym_excess_empirical():
+    # E=7, T=4, simple=100, exp=10.  Exp is cheaper for emp side.
+    # Optimal: 4 match + 3 exp-trash = 34.  Add 1 to T: 5 match + 2 exp = 25,
+    # delta = -9.  Same as exp-only derivative.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True)
+    W.add_simple_trash(100)
+    W.add_experimental_trash(10)
+    W.build()
+    W.solve()
+    assert W.signal_part_derivatives() == {0: {0: -9}}
+
+
+def test_signal_part_derivatives_simple_plus_asym_excess_theoretical():
+    # E=3, T=7, simple=100, theo=10.  Theo cheaper for theo side.
+    # Adding 1 to theo intensity adds 1 to supply → 1 more theo-trash = +10.
+    emp = _dist1d([0], [3])
+    theo = _dist1d([1], [7])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True)
+    W.add_simple_trash(100)
+    W.add_theoretical_trash(10)
+    W.build()
+    W.solve()
+    assert W.signal_part_derivatives() == {0: {0: 10}}
+
+
+def test_signal_part_derivatives_combined_matches_asym_only_when_asym_cheaper():
+    # When asym trash is cheaper than simple, the derivative must match the
+    # asym-only configuration.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
+
+    W_combined = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True
+    )
+    W_combined.add_simple_trash(1000)
+    W_combined.add_experimental_trash(10)
+    W_combined.build()
+    W_combined.solve()
+
+    W_asym = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True
+    )
+    W_asym.add_experimental_trash(10)
+    W_asym.build()
+    W_asym.solve()
+
+    assert W_combined.signal_part_derivatives() == W_asym.signal_part_derivatives()
+
+
+def test_signal_part_derivatives_combined_matches_simple_only_when_simple_cheaper():
+    # When simple is cheaper than asym, the derivative must match the
+    # simple-only configuration.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
+
+    W_combined = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True
+    )
+    W_combined.add_simple_trash(10)
+    W_combined.add_experimental_trash(1000)
+    W_combined.build()
+    W_combined.solve()
+
+    W_simple = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True
+    )
+    W_simple.add_simple_trash(10)
+    W_simple.build()
+    W_simple.solve()
+
+    assert W_combined.signal_part_derivatives() == W_simple.signal_part_derivatives()
+
+
+def test_combined_trash_chain_factory_matches_dense():
+    # Chain (1D) and dense factories should give the same total cost and the
+    # same derivatives when both simple + asym are active.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
+
+    W_chain = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
+    W_chain.add_simple_trash(50)
+    W_chain.add_experimental_trash(10)
+    W_chain.build()
+    W_chain.solve()
+
+    W_dense = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, force_dense_1d=True
+    )
+    W_dense.add_simple_trash(50)
+    W_dense.add_experimental_trash(10)
+    W_dense.build()
+    W_dense.solve()
+
+    assert W_chain.total_cost() == W_dense.total_cost()
+    assert W_chain.signal_part_derivatives() == W_dense.signal_part_derivatives()
+
+
+def test_update_positions_and_get_gradient_combined_trash():
+    # Position-gradient flow path must work with combined trash.  Use a 2D
+    # case so we exercise the dense (non-chain) gradient.
+    emp = Distribution(
+        np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float64),
+        np.array([5, 5], dtype=np.int64),
+    )
+    theo = Distribution(
+        np.array([[0.5, 0.0], [1.5, 0.0]], dtype=np.float64),
+        np.array([5, 5], dtype=np.int64),
+    )
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L2, 100)
+    W.add_simple_trash(50)
+    W.add_experimental_trash(50)
+    W.build()
+    W.solve()
+
+    new_emp = Distribution(
+        np.array([[0.0, 0.0], [1.2, 0.0]], dtype=np.float64),
+        np.array([5, 5], dtype=np.int64),
+    )
+    new_theo = Distribution(
+        np.array([[0.6, 0.0], [1.5, 0.0]], dtype=np.float64),
+        np.array([5, 5], dtype=np.int64),
+    )
+    emp_grad, theo_grads = W.update_positions_and_get_gradient(new_emp, [new_theo])
+    # Gradient must be finite and the right shape.  We don't pin the values —
+    # that's the job of test_position_gradient.py for the trash-free case;
+    # here we just want to confirm combined trash doesn't break the path.
+    assert emp_grad.shape == (2, 2)
+    assert len(theo_grads) == 1
+    assert theo_grads[0].shape == (2, 2)
+    assert np.all(np.isfinite(emp_grad))
+    assert np.all(np.isfinite(theo_grads[0]))
+
+
+# ---------------------------------------------------------------------------
+# Combined trash isolated/dead-end peak handling
+# ---------------------------------------------------------------------------
+
+
+def test_isolated_emp_uses_cheaper_trash():
+    # Two isolated emp@0 (far from any theo) → must use cheapest emp-side trash.
+    # max_distance=10 isolates emp@0 from theo@1000.  Combine simple=100 and
+    # exp=5; isolated unit should cost 5 each (5 * 2 = 10).
+    # Reachable component: emp@1000 (1 unit) ↔ theo@1000 (1 unit) matches at 0.
+    emp = _dist1d([0, 1000], [2, 1])
+    theo = _dist1d([1000], [1])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 10)
+    W.add_simple_trash(100)
+    W.add_experimental_trash(5)
+    assert _solve(W) == 2 * 5
 
 
 def test_signal_part_derivatives_matches_simple_trash_excess_theoretical():

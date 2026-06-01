@@ -433,6 +433,11 @@ def test_signal_part_derivatives_includes_isolated_peaks():
     A theoretical peak outside max_distance becomes an isolated dead-end node —
     no matching edges, always sent to trash.  Its signal_part_derivative must be
     present and equal to the trash cost, not silently absent.
+
+    Under the global cost model:
+    E_total=5, T_total=7. supply=max(5,7)=7. Match=3 (peak0 absorbs 3 emp).
+    Trash flow=4. Simple at 20 is the only route, cost=4*20=80.
+    Plus match cost = 3*10 = 30. Total = 110.
     """
     trash = 20
     max_dist = 20
@@ -450,19 +455,20 @@ def test_signal_part_derivatives_includes_isolated_peaks():
     W.build()
     W.solve()
 
-    # 3 matched at cost 10, 2 excess base to trash at 20, isolated peak1 (4 units) to trash at 20
-    assert W.total_cost() == 3 * 10 + 2 * 20 + 4 * 20  # 150
+    # 3 matched at cost 10 + 4 trash at 20 = 110 under the global cost model.
+    assert W.total_cost() == 3 * 10 + 4 * 20  # 110
 
     derivs = W.signal_part_derivatives()
-    # peak 0 (connected): emp(5) > theo(3), derivative = distance - trash = 10 - 20 = -10
-    assert derivs[0][0] == -10
-    # peak 1 (isolated): only route is trash
+    # peak 0 (connected): under global model with T_total > E_total, +1 to its
+    # intensity means supply +1 routed via match (cost 10), giving deriv = +10.
+    assert derivs[0][0] == 10
+    # peak 1 (isolated): only route is trash; deriv = simple trash cost.
     assert 1 in derivs[0], "isolated peak must appear in signal_part_derivatives"
     assert derivs[0][1] == trash
 
     # proportion derivative must be consistent: sum(deriv_i * base_intensity_i)
-    # = -10*3 + 20*4 = 50
-    assert W.spectrum_proportion_derivatives()[0] == 50
+    # = 10*3 + 20*4 = 110
+    assert W.spectrum_proportion_derivatives()[0] == 110
 
     # verify both derivatives by perturbation
     def perturb(peak_idx, delta):
@@ -480,8 +486,8 @@ def test_signal_part_derivatives_includes_isolated_peaks():
         W2.solve()
         return W2.total_cost()
 
-    assert perturb(0, 1) - 150 == -10
-    assert perturb(1, 1) - 150 == trash  # extra isolated unit goes straight to trash
+    assert perturb(0, 1) - 110 == 10
+    assert perturb(1, 1) - 110 == trash  # extra isolated unit goes straight to trash
 
 
 @pytest.mark.long

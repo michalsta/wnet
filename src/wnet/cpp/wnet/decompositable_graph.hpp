@@ -111,8 +111,6 @@ class WassersteinNetworkSubgraph {
     struct DerivContext {
         VALUE_TYPE INF;
         bool supply_fixed;
-        bool asymmetric;
-        VALUE_TYPE trash_cost, src_adjust, sink_adjust;
         std::vector<VALUE_TYPE> dist_src, dist_sink;
         std::vector<VALUE_TYPE> theo_sink_slack;
     };
@@ -148,6 +146,9 @@ class WassersteinNetworkSubgraph {
     mutable std::vector<VALUE_TYPE> _chain_exp_trash_cost, _chain_theo_trash_cost;
     mutable std::vector<uint8_t>    _chain_exp_trash_fwd, _chain_exp_trash_rev;
     mutable std::vector<uint8_t>    _chain_theo_trash_fwd, _chain_theo_trash_rev;
+    // Simple trash provides a Src↔Sink shortcut shared across the whole chain.
+    mutable VALUE_TYPE _chain_simple_trash_cost = 0;
+    mutable uint8_t    _chain_simple_trash_fwd = 0, _chain_simple_trash_rev = 0;
 
     struct ChainTopology {
         std::vector<LEMON_INDEX> order;
@@ -395,11 +396,12 @@ public:
     WassersteinNetworkSubgraph(WassersteinNetworkSubgraph&&) = delete;
     WassersteinNetworkSubgraph& operator=(WassersteinNetworkSubgraph&&) = delete;
 
+    // Trash types may be combined freely: simple + experimental, simple + theoretical,
+    // experimental + theoretical, or all three.  Each adds its own arcs; the MCF picks
+    // whichever route is cheapest for each unit.
     void add_simple_trash(VALUE_TYPE cost) {
         if (simple_trash_added)
             throw std::runtime_error("Simple trash edge already added.");
-        if (experimental_trash_added || theoretical_trash_added)
-            throw std::runtime_error("add_simple_trash() is exclusive with experimental/theoretical trash.");
         if (built)
             throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
         edges.emplace_back(
@@ -412,8 +414,6 @@ public:
     }
 
     void add_experimental_trash(VALUE_TYPE cost) {
-        if (simple_trash_added)
-            throw std::runtime_error("add_experimental_trash() is exclusive with simple trash.");
         if (experimental_trash_added)
             throw std::runtime_error("Experimental trash already added.");
         if (built)
@@ -428,8 +428,6 @@ public:
     }
 
     void add_theoretical_trash(VALUE_TYPE cost) {
-        if (simple_trash_added)
-            throw std::runtime_error("add_theoretical_trash() is exclusive with simple trash.");
         if (theoretical_trash_added)
             throw std::runtime_error("Theoretical trash already added.");
         if (built)
@@ -573,17 +571,20 @@ public:
             lemon_theoretical_intensity += lemon_intensity;
         }
         // Determine how many units to push from source to sink.
-        // When both sides can absorb excess (simple trash, or both asymmetric
-        // trash types), use max so every peak participates.  When only one
-        // asymmetric trash direction is present, cap supply to the side that
-        // has a valid escape route so the MCF is feasible.  No-trash always
-        // throws — see the comment inside the else branch.
+        // Simple trash gives both sides a Source↔Sink escape; experimental trash
+        // gives the empirical side an Emp→Sink escape; theoretical trash gives
+        // the theoretical side a Source→Theo escape.  When both sides have
+        // *some* escape, use max so every peak participates; otherwise cap
+        // supply to the side that has a valid escape route so the MCF is
+        // feasible.  No trash at all always throws — see the else branch.
+        const bool has_emp_escape  = simple_trash_added || experimental_trash_added;
+        const bool has_theo_escape = simple_trash_added || theoretical_trash_added;
         VALUE_TYPE lemon_total_flow = 0;
-        if (simple_trash_added || (experimental_trash_added && theoretical_trash_added)) {
+        if (has_emp_escape && has_theo_escape) {
             lemon_total_flow = std::max<VALUE_TYPE>(lemon_empirical_intensity, lemon_theoretical_intensity);
-        } else if (experimental_trash_added) {
+        } else if (has_emp_escape) {
             lemon_total_flow = lemon_empirical_intensity;
-        } else if (theoretical_trash_added) {
+        } else if (has_theo_escape) {
             lemon_total_flow = lemon_theoretical_intensity;
         } else {
             // No trash edges present.  All MCF solvers are unsafe or produce
@@ -620,6 +621,71 @@ public:
         if(!_solver_has_value()) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
         return _solver_total_cost();
     };
+
+    // Source supply this subgraph was solved with (= max(E_i, T_i) or one side
+    // when only that side has escape).  Equals the absolute supply set on the
+    // source/sink nodes in set_point().
+    VALUE_TYPE source_supply() const {
+        if (!_solver_has_value()) return 0;
+        return node_supply_map[lemon_graph.nodeFromId(0)];
+    }
+
+    // Aggregate empirical / theoretical intensity in this subgraph (theo
+    // intensity uses the last point already applied via set_point).  Used by
+    // WassersteinNetwork::total_cost to derive global E/T totals.
+    VALUE_TYPE lemon_emp_intensity() const  { return lemon_empirical_intensity; }
+    VALUE_TYPE lemon_theo_intensity() const { return lemon_theoretical_intensity; }
+
+    // Flow on each trash arc type (0 if that type wasn't added or not solved).
+    // The global cost rebuilder in WassersteinNetwork uses these to recompute
+    // trash distribution across all subgraphs.
+    VALUE_TYPE simple_trash_flow() const {
+        if (!_solver_has_value() || !simple_trash_added) return 0;
+        return _solver_flow(lemon_graph.arcFromId(simple_trash_idx));
+    }
+    VALUE_TYPE exp_trash_flow_sum() const {
+        if (!_solver_has_value() || !experimental_trash_added) return 0;
+        VALUE_TYPE total = 0;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
+            if (std::holds_alternative<EmpiricalTrashEdge>(edges[ii].get_type()))
+                total += _solver_flow(lemon_graph.arcFromId(ii));
+        return total;
+    }
+    VALUE_TYPE theo_trash_flow_sum() const {
+        if (!_solver_has_value() || !theoretical_trash_added) return 0;
+        VALUE_TYPE total = 0;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
+            if (std::holds_alternative<TheoreticalTrashEdge>(edges[ii].get_type()))
+                total += _solver_flow(lemon_graph.arcFromId(ii));
+        return total;
+    }
+
+    // Matching/transport cost in this subgraph: sum of flow * cost on
+    // MatchingEdge and ChainEdge arcs only (excludes trash).  The global
+    // total_cost is sum_i match_cost_i + globally-optimal trash cost.
+    VALUE_TYPE match_cost() const {
+        if (!_solver_has_value()) return 0;
+        VALUE_TYPE cost = 0;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            const auto& et = edges[ii].get_type();
+            if (std::holds_alternative<MatchingEdge>(et)
+                    || std::holds_alternative<ChainEdge>(et)) {
+                auto arc = lemon_graph.arcFromId(ii);
+                cost += _solver_flow(arc) * costs_map[arc];
+            }
+        }
+        return cost;
+    }
+
+    // Match flow = source supply minus trash flow.  Each source unit either
+    // matched (Src→Emp→Theo→Sink) or trashed via simple/exp/theo.
+    VALUE_TYPE match_flow() const {
+        if (!_solver_has_value()) return 0;
+        return source_supply()
+             - simple_trash_flow()
+             - exp_trash_flow_sum()
+             - theo_trash_flow_sum();
+    }
 
     int warm_start_count() const {
         if (_use_lct())
@@ -925,6 +991,9 @@ public:
         std::fill(exp_trash_rev.begin(),   exp_trash_rev.end(),   uint8_t(0));
         std::fill(theo_trash_fwd.begin(),  theo_trash_fwd.end(),  uint8_t(0));
         std::fill(theo_trash_rev.begin(),  theo_trash_rev.end(),  uint8_t(0));
+        _chain_simple_trash_cost = 0;
+        _chain_simple_trash_fwd = 0;
+        _chain_simple_trash_rev = 0;
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             const auto& et = edges[ii].get_type();
             if (std::holds_alternative<SrcToEmpiricalEdge>(et)) {
@@ -957,6 +1026,12 @@ public:
                 theo_trash_cost[pos] = t->get_cost();
                 if (flow < cap) theo_trash_fwd[pos] = true;
                 if (flow > 0)   theo_trash_rev[pos] = true;
+            } else if (const auto* s = std::get_if<SimpleTrashEdge>(&et)) {
+                auto arc = lemon_graph.arcFromId(ii);
+                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
+                _chain_simple_trash_cost = s->get_cost();
+                if (flow < cap) _chain_simple_trash_fwd = 1;
+                if (flow > 0)   _chain_simple_trash_rev = 1;
             }
         }
     }
@@ -985,6 +1060,9 @@ public:
         bool changed = false;
         auto update_min = [&](VALUE_TYPE& a, VALUE_TYPE b) { if (b < a) { a = b; changed = true; } };
 
+        const VALUE_TYPE simple_cost = _chain_simple_trash_cost;
+        const bool simple_fwd = _chain_simple_trash_fwd != 0;
+        const bool simple_rev = _chain_simple_trash_rev != 0;
         auto relay = [&]() {
             for (size_t i = 0; i < K; ++i) {
                 const VALUE_TYPE d = dist[topo.order[i]];
@@ -997,6 +1075,11 @@ public:
                 // Reverse TheoreticalTrashEdge (Theo→Source, cost -C_theo).
                 if (theo_trash_rev[i]) update_min(dist[src_id], d - theo_trash_cost[i]);
             }
+            // Simple trash Src↔Sink shortcut (shared across the whole chain).
+            // Forward Src→Sink at +cost; reverse Sink→Src at -cost.  Done
+            // BEFORE we snapshot ds/dk so the chain sweep below picks it up.
+            if (simple_fwd && dist[src_id]  != INF) update_min(dist[sink_id], dist[src_id]  + simple_cost);
+            if (simple_rev && dist[sink_id] != INF) update_min(dist[src_id],  dist[sink_id] - simple_cost);
             const VALUE_TYPE ds = dist[src_id], dk = dist[sink_id];
             for (size_t i = 0; i < K; ++i) {
                 // Cost-0: forward SrcToEmpiricalEdge, reverse TheoreticalToSinkEdge.
@@ -1178,10 +1261,11 @@ public:
             if (d > rdist[u]) continue;
             const auto u_node = lemon_graph.nodeFromId(u);
 
-            // Forward residual: outgoing arcs of u
+            // Forward residual: outgoing arcs of u.  All trash arcs (simple,
+            // experimental, theoretical) participate as ordinary arcs — the
+            // residual contains every Src↔Sink shortcut they provide.
             for (lemon::StaticDigraph::OutArcIt a(lemon_graph, u_node); a != lemon::INVALID; ++a) {
                 const LEMON_INDEX ii = lemon_graph.id(a);
-                if (ii == simple_trash_idx) continue;
                 if (!_unlimited_arc[ii] && _solver_flow(a) >= capacities_map[a]) continue;
                 const LEMON_INDEX v = lemon_graph.id(lemon_graph.target(a));
                 const VALUE_TYPE rcost = std::max<VALUE_TYPE>(0, costs_map[a] + pi[u] - pi[v]);
@@ -1191,8 +1275,6 @@ public:
 
             // Reverse residual: incoming arcs of u (arc goes v→u in original, u→v in residual)
             for (lemon::StaticDigraph::InArcIt a(lemon_graph, u_node); a != lemon::INVALID; ++a) {
-                const LEMON_INDEX ii = lemon_graph.id(a);
-                if (ii == simple_trash_idx) continue;
                 if (_solver_flow(a) <= 0) continue;
                 const LEMON_INDEX v = lemon_graph.id(lemon_graph.source(a));
                 const VALUE_TYPE rcost = std::max<VALUE_TYPE>(0, -costs_map[a] + pi[u] - pi[v]);
@@ -1211,7 +1293,7 @@ public:
     }
 
     // Compute single-source shortest distances on the implicit residual graph
-    // (excluding the trash edge). For each arc:
+    // (all trash arcs included as ordinary arcs).  For each arc:
     //   forward residual if flow < capacity (cost = original)
     //   reverse residual if flow > 0 (cost = -original)
     std::vector<VALUE_TYPE> bellman_ford_residual(LEMON_INDEX source_id) const {
@@ -1224,7 +1306,6 @@ public:
         for (LEMON_INDEX iter = 0; iter < n - 1; ++iter) {
             bool changed = false;
             for (LEMON_INDEX ii = 0; ii < m; ++ii) {
-                if (ii == simple_trash_idx) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 LEMON_INDEX u = lemon_graph.id(lemon_graph.source(arc));
                 LEMON_INDEX v = lemon_graph.id(lemon_graph.target(arc));
@@ -1274,14 +1355,16 @@ public:
     // Per-peak marginal cost of increasing each theoretical signal by 1.
     // Returns vector of (spectrum_id, peak_index, derivative).
     //
-    // Simple trash: Bellman-Ford excludes the trash edge; src_adjust/sink_adjust
-    // manually account for the Source↔Sink shortcut it provides.
+    // All trash arcs (simple, experimental, theoretical) participate in the
+    // residual as ordinary arcs, so every Src↔Sink shortcut they provide is
+    // captured directly in dist_src / dist_sink — no manual adjustments needed.
     //
-    // Asymmetric trash: full residual already contains the shortcuts (reverse
-    // EmpiricalTrashEdge: Sink→Emp at -C_exp; forward TheoreticalTrashEdge:
-    // Source→Theo at C_theo), so no adjustments are needed.
-    //   E > T (supply fixed): augmenting cycle through T_node uses dist_sink.
-    //   T >= E (supply +1):   extra Source unit routed to T_node uses dist_src.
+    //   E > T (supply fixed): supply does not change when T += 1; the marginal
+    //     cost is the cheapest augmenting cycle T→Sink→…→T = dist_sink[v]
+    //     (≤ 0 at the optimum; flipped to 0 when v is unreachable).
+    //   T >= E (supply +1):   one extra Src→Sink unit is pushed; cheapest is
+    //     either via the new cap on v→Sink (dist_src[v]) or any other residual
+    //     path (dist_src[Sink]).  Take the min.
     // (DerivContext is declared near the top of the class so it can be cached.)
 
     // want_pi=false: exact residual marginals.  want_pi=true: fast dual-pi
@@ -1291,24 +1374,24 @@ public:
     DerivContext _make_deriv_context(bool want_pi) const {
         if (!_solver_has_value())
             throw std::runtime_error("Must call solve() before signal_part_derivatives().");
-        if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max()
-                && !experimental_trash_added && !theoretical_trash_added)
+        if (!simple_trash_added && !experimental_trash_added && !theoretical_trash_added)
             throw std::runtime_error("signal_part_derivatives() requires trash edges.");
 
         DerivContext ctx;
         ctx.INF = std::numeric_limits<VALUE_TYPE>::max();
         ctx.supply_fixed = (lemon_empirical_intensity > lemon_theoretical_intensity);
-        ctx.asymmetric = experimental_trash_added || theoretical_trash_added;
         const LEMON_INDEX sink_id = 1;
         const bool use_chain = has_chain_edges();
         const bool use_dijkstra = !use_chain &&
             (_use_lct() ? ns_lct_solver.has_value() : ns_solver.has_value());
-        const bool need_src  = !ctx.asymmetric || !ctx.supply_fixed;
-        const bool need_sink = !ctx.asymmetric ||  ctx.supply_fixed;
+        // Compute BOTH directions: the network-level deriv adjustment uses
+        // the local dist_src[v]/dist_sink[v] *and* the local Src↔Sink
+        // residual distances (dist_src[Sink], dist_sink[Src]) to combine with
+        // the global shortcut.
         if (use_chain) {
             _chain_build_search_state();
-            if (need_src)  ctx.dist_src  = _chain_run_search(0);
-            if (need_sink) ctx.dist_sink = _chain_run_search(sink_id);
+            ctx.dist_src  = _chain_run_search(0);
+            ctx.dist_sink = _chain_run_search(sink_id);
         } else {
             const bool use_pi = want_pi && use_dijkstra;
             auto compute_dist = [&](LEMON_INDEX id) -> std::vector<VALUE_TYPE> {
@@ -1316,15 +1399,8 @@ public:
                 return use_dijkstra ? dijkstra_residual(id)
                                     : bellman_ford_residual(id);
             };
-            if (need_src)  ctx.dist_src  = compute_dist(0);
-            if (need_sink) ctx.dist_sink = compute_dist(sink_id);
-        }
-
-        ctx.trash_cost = 0; ctx.src_adjust = 0; ctx.sink_adjust = 0;
-        if (!ctx.asymmetric) {
-            ctx.trash_cost  = simple_trash_cost();
-            ctx.src_adjust  = ctx.supply_fixed ? -ctx.trash_cost : 0;
-            ctx.sink_adjust = ctx.supply_fixed ?  0 : ctx.trash_cost;
+            ctx.dist_src  = compute_dist(0);
+            ctx.dist_sink = compute_dist(sink_id);
         }
 
         ctx.theo_sink_slack.assign(nodes.size(), VALUE_TYPE(-1));
@@ -1351,23 +1427,111 @@ public:
         return _deriv_ctx_cache[k];
     }
 
-    VALUE_TYPE _node_deriv(LEMON_INDEX node_id, const DerivContext& ctx) const {
-        const VALUE_TYPE slack = ctx.theo_sink_slack[node_id];
-        if (slack != VALUE_TYPE(-1) && slack > 0 && ctx.supply_fixed)
-            return VALUE_TYPE(0);
-        VALUE_TYPE deriv;
-        if (ctx.asymmetric) {
-            deriv = ctx.supply_fixed ? ctx.dist_sink[node_id] : ctx.dist_src[node_id];
-            if (deriv == ctx.INF) deriv = 0;
-        } else {
-            deriv = ctx.trash_cost;
-            if (!ctx.dist_src.empty() && ctx.dist_src[node_id] != ctx.INF)
-                deriv = std::min(deriv, ctx.dist_src[node_id] + ctx.src_adjust);
-            if (!ctx.dist_sink.empty() && ctx.dist_sink[node_id] != ctx.INF)
-                deriv = std::min(deriv, ctx.dist_sink[node_id] + ctx.sink_adjust);
-        }
-        return deriv;
+    // Combine two residual distances safely (any of them may be INF).
+    static VALUE_TYPE _min_dist(VALUE_TYPE INF, VALUE_TYPE a, VALUE_TYPE b) {
+        if (a == INF) return b;
+        if (b == INF) return a;
+        return std::min(a, b);
     }
+    static VALUE_TYPE _add_dist(VALUE_TYPE INF, VALUE_TYPE a, VALUE_TYPE b) {
+        if (a == INF || b == INF) return INF;
+        return a + b;
+    }
+
+    // Per-node deriv decomposed via LP duality on the global trash LP:
+    //
+    //   cap_saving = (slack > 0) ? 0
+    //              : min(local_sink[v], B + local_src[v])   (≤ 0 at optimum)
+    //   supply_fixed:   deriv = cap_saving                  (supply unchanged)
+    //   !supply_fixed:  deriv = lp_marginal + cap_saving
+    //
+    // lp_marginal = LP shadow on the global supply constraint (cost of the
+    // next supply unit if it had to take a trash route).
+    // B = global cheapest Sink→Src residual distance (combines cross-sg).
+    VALUE_TYPE _node_deriv_global(LEMON_INDEX node_id, const DerivContext& ctx,
+                                  VALUE_TYPE lp_marginal, VALUE_TYPE B,
+                                  bool supply_fixed_global) const {
+        const VALUE_TYPE INF = ctx.INF;
+        const VALUE_TYPE slack = ctx.theo_sink_slack[node_id];
+        VALUE_TYPE cap_saving;
+        if (slack != VALUE_TYPE(-1) && slack > 0) {
+            cap_saving = 0;
+        } else {
+            const VALUE_TYPE local_src  = ctx.dist_src[node_id];
+            const VALUE_TYPE local_sink = ctx.dist_sink[node_id];
+            cap_saving = _min_dist(INF, local_sink, _add_dist(INF, B, local_src));
+            if (cap_saving == INF) cap_saving = 0;
+        }
+        if (supply_fixed_global)
+            return cap_saving;
+        if (lp_marginal == INF) return cap_saving;  // no global supply route → just cap
+        return lp_marginal + cap_saving;
+    }
+
+    // Subgraph-level signal_part_derivatives() variant: uses the subgraph's
+    // own state (no cross-subgraph knowledge).  Behaves as if this subgraph
+    // were the only one in the network: lp_marginal derived from local
+    // dist_src[Sink], B from local dist_sink[Src], supply_fixed from local.
+    VALUE_TYPE _node_deriv(LEMON_INDEX node_id, const DerivContext& ctx) const {
+        const LEMON_INDEX src_id = 0, sink_id = 1;
+        const VALUE_TYPE A_local = ctx.dist_src[sink_id];
+        const VALUE_TYPE B_local = ctx.dist_sink[src_id];
+        return _node_deriv_global(node_id, ctx,
+            /*lp_marginal=*/A_local,
+            /*B=*/B_local,
+            ctx.supply_fixed);
+    }
+
+public:
+    // Local residual distance Src→Sink in this subgraph.  Used by the
+    // network-level deriv to compute A = min over subgraphs of this value
+    // (the global cheapest Src→Sink shortcut available for cross-subgraph
+    // residual searches).
+    VALUE_TYPE local_dist_src_to_sink(bool fast = false) const {
+        const auto& ctx = _get_deriv_context(fast);
+        return ctx.dist_src[1];
+    }
+    // Local residual distance Sink→Src in this subgraph.  See above.
+    VALUE_TYPE local_dist_sink_to_src(bool fast = false) const {
+        const auto& ctx = _get_deriv_context(fast);
+        return ctx.dist_sink[0];
+    }
+
+    // Derivative computations parametrised with the network-level global
+    // shortcuts A, B and supply_fixed_global.  See _node_deriv_global for the
+    // formulas.
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
+    signal_part_derivatives_global(VALUE_TYPE lp_marginal, VALUE_TYPE B,
+                                   bool supply_fixed_global, bool fast = false) const {
+        const auto& ctx = _get_deriv_context(fast);
+        std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
+        for (const auto& node : nodes) {
+            auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
+            if (!theo) continue;
+            result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(),
+                                _node_deriv_global(node.get_id(), ctx, lp_marginal, B, supply_fixed_global));
+        }
+        return result;
+    }
+    std::vector<std::pair<size_t, VALUE_TYPE>>
+    spectrum_proportion_derivatives_global(VALUE_TYPE lp_marginal, VALUE_TYPE B,
+                                           bool supply_fixed_global, bool fast = false) const {
+        const auto& ctx = _get_deriv_context(fast);
+        std::vector<VALUE_TYPE> accum(no_target_distributions, VALUE_TYPE(0));
+        for (const auto& node : nodes) {
+            auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
+            if (!theo) continue;
+            accum[theo->get_spectrum_id()] +=
+                _node_deriv_global(node.get_id(), ctx, lp_marginal, B, supply_fixed_global)
+                * static_cast<VALUE_TYPE>(theo->get_intensity());
+        }
+        std::vector<std::pair<size_t, VALUE_TYPE>> result;
+        result.reserve(no_target_distributions);
+        for (size_t s = 0; s < no_target_distributions; ++s)
+            result.emplace_back(s, accum[s]);
+        return result;
+    }
+private:
 
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
     _signal_part_derivatives_impl(const DerivContext& ctx) const {
@@ -1445,8 +1609,14 @@ class WassersteinNetwork {
 
     intensity_type _isolated_empirical_intensity = 0;
     std::vector<intensity_type> _isolated_theoretical_intensity;
-    VALUE_TYPE _isolated_exp_trash_cost = 0;
-    VALUE_TYPE _isolated_theo_trash_cost = 0;
+    // Per-route trash costs set when the corresponding add_*_trash is called.
+    // Used by the global trash distribution LP in total_cost().
+    VALUE_TYPE _simple_trash_cost = 0;
+    VALUE_TYPE _exp_trash_cost = 0;
+    VALUE_TYPE _theo_trash_cost = 0;
+    bool _simple_trash_added = false;
+    bool _exp_trash_added = false;
+    bool _theo_trash_added = false;
     std::vector<double> _last_point;
 
     bool built = false;
@@ -1478,8 +1648,12 @@ public:
         flow_subgraphs(std::move(other.flow_subgraphs)),
         _isolated_empirical_intensity(other._isolated_empirical_intensity),
         _isolated_theoretical_intensity(std::move(other._isolated_theoretical_intensity)),
-        _isolated_exp_trash_cost(other._isolated_exp_trash_cost),
-        _isolated_theo_trash_cost(other._isolated_theo_trash_cost),
+        _simple_trash_cost(other._simple_trash_cost),
+        _exp_trash_cost(other._exp_trash_cost),
+        _theo_trash_cost(other._theo_trash_cost),
+        _simple_trash_added(other._simple_trash_added),
+        _exp_trash_added(other._exp_trash_added),
+        _theo_trash_added(other._theo_trash_added),
         _last_point(std::move(other._last_point)),
         built(other.built)
     {
@@ -1630,8 +1804,8 @@ public:
     void add_simple_trash(VALUE_TYPE cost) {
         if (built)
             throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
-        _isolated_exp_trash_cost = cost;
-        _isolated_theo_trash_cost = cost;
+        _simple_trash_cost = cost;
+        _simple_trash_added = true;
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_simple_trash(cost);
     };
@@ -1639,7 +1813,8 @@ public:
     void add_experimental_trash(VALUE_TYPE cost) {
         if (built)
             throw std::runtime_error("add_experimental_trash() must be called before build().");
-        _isolated_exp_trash_cost = cost;
+        _exp_trash_cost = cost;
+        _exp_trash_added = true;
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_experimental_trash(cost);
     };
@@ -1647,7 +1822,8 @@ public:
     void add_theoretical_trash(VALUE_TYPE cost) {
         if (built)
             throw std::runtime_error("add_theoretical_trash() must be called before build().");
-        _isolated_theo_trash_cost = cost;
+        _theo_trash_cost = cost;
+        _theo_trash_added = true;
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_theoretical_trash(cost);
     };
@@ -1673,14 +1849,126 @@ public:
             flow_subgraph->set_point(point);
     };
 
-    VALUE_TYPE total_cost() const {
-        VALUE_TYPE cost = 0;
-        for (const auto& flow_subgraph : flow_subgraphs)
-            cost += flow_subgraph->total_cost();
-        cost += _isolated_exp_trash_cost * _isolated_empirical_intensity;
+    // Snapshot of the global accounting at the current solved state.  Both
+    // total_cost() and the derivative path consume this — total_cost uses
+    // `cost`, derivatives use `lp_marginal` and `supply_fixed_global`.
+    struct GlobalState {
+        VALUE_TYPE E_total;
+        VALUE_TYPE T_total;
+        VALUE_TYPE match_total;
+        VALUE_TYPE supply;
+        VALUE_TYPE global_trash_flow;
+        VALUE_TYPE cost;          // total_cost = match cost + LP trash cost.
+        VALUE_TYPE lp_marginal;   // cost of the *next* trash unit at the LP optimum.
+        bool supply_fixed_global; // E_total > T_total.
+        bool has_emp_escape;
+        bool has_theo_escape;
+    };
+
+    // Build the snapshot.  Subgraph decomposition is purely a computational
+    // optimization here: the reported state matches what one would get from a
+    // single global MCF over all peaks (max_dist → ∞ equivalent).
+    //
+    //   total = Σ matching cost in each subgraph
+    //         + cost of distributing the *globally* required trash flow over
+    //           the available trash routes (simple, exp, theo).
+    //
+    // Each subgraph still solves its private MCF with its own trash arcs; we
+    // aggregate match flow + total intensity (including dead ends) and run
+    // a tiny 3-route LP for the global trash distribution.
+    GlobalState _compute_global_state() const {
+        GlobalState st{};
+        st.E_total = static_cast<VALUE_TYPE>(_isolated_empirical_intensity);
+        for (const auto& sg : flow_subgraphs)
+            st.E_total += sg->lemon_emp_intensity();
+        st.T_total = 0;
+        for (const auto& sg : flow_subgraphs)
+            st.T_total += sg->lemon_theo_intensity();
         for (size_t s = 0; s < _no_theoretical_spectra; ++s)
-            cost += static_cast<VALUE_TYPE>(_isolated_theo_trash_cost * _isolated_theoretical_intensity[s] * _last_point[s]);
-        return cost;
+            st.T_total += static_cast<VALUE_TYPE>(_isolated_theoretical_intensity[s] * _last_point[s]);
+
+        st.match_total = 0;
+        VALUE_TYPE match_cost = 0;
+        for (const auto& sg : flow_subgraphs) {
+            st.match_total += sg->match_flow();
+            match_cost += sg->match_cost();
+        }
+
+        st.has_emp_escape  = _simple_trash_added || _exp_trash_added;
+        st.has_theo_escape = _simple_trash_added || _theo_trash_added;
+        if (st.has_emp_escape && st.has_theo_escape)
+            st.supply = std::max(st.E_total, st.T_total);
+        else if (st.has_emp_escape)
+            st.supply = st.E_total;
+        else if (st.has_theo_escape)
+            st.supply = st.T_total;
+        else
+            st.supply = st.match_total;
+        st.supply_fixed_global = st.E_total > st.T_total;
+
+        if (st.supply < st.match_total)
+            throw std::runtime_error("wnet: internal accounting bug — global supply below match flow.");
+        st.global_trash_flow = st.supply - st.match_total;
+
+        if (st.E_total > st.match_total && !st.has_emp_escape)
+            throw std::runtime_error(
+                "wnet: empirical excess has no escape route — add simple or experimental trash.");
+        if (st.T_total > st.match_total && !st.has_theo_escape)
+            throw std::runtime_error(
+                "wnet: theoretical excess has no escape route — add simple or theoretical trash.");
+
+        // 3-route LP: distribute trash flow over (exp, theo, simple) by
+        // increasing unit_cost up to each route's cap.  Greedy is exact for
+        // this single-sum LP.  Track lp_marginal = the cost of the *next*
+        // trash unit at the optimum, which is the LP shadow on the supply
+        // constraint (used by the derivative formula).
+        struct Route {
+            bool added;
+            VALUE_TYPE unit_cost;
+            VALUE_TYPE cap;
+        };
+        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
+        Route routes[3] = {
+            {_exp_trash_added,    _exp_trash_cost,    _exp_trash_added    ? (st.E_total - st.match_total) : VALUE_TYPE(0)},
+            {_theo_trash_added,   _theo_trash_cost,   _theo_trash_added   ? (st.T_total - st.match_total) : VALUE_TYPE(0)},
+            {_simple_trash_added, _simple_trash_cost, _simple_trash_added ? INF : VALUE_TYPE(0)},
+        };
+        int order[3] = {0, 1, 2};
+        std::sort(std::begin(order), std::end(order),
+            [&](int a, int b) { return routes[a].unit_cost < routes[b].unit_cost; });
+
+        VALUE_TYPE trash_cost = 0;
+        VALUE_TYPE remaining = st.global_trash_flow;
+        st.lp_marginal = INF;
+        for (int idx : order) {
+            const auto& r = routes[idx];
+            if (!r.added) continue;
+            if (remaining == 0) {
+                // First fully-unfilled added route after we satisfied demand:
+                // the marginal next unit would use this route.
+                if (r.cap > 0) { st.lp_marginal = r.unit_cost; }
+                break;
+            }
+            if (r.cap == 0) continue;
+            const VALUE_TYPE used = std::min(remaining, r.cap);
+            trash_cost += used * r.unit_cost;
+            remaining -= used;
+            if (used < r.cap) {
+                // Route has remaining cap → marginal next unit uses it.
+                st.lp_marginal = r.unit_cost;
+                break;
+            }
+            // Route fully filled, continue to the next-cheapest.
+        }
+        if (remaining > 0)
+            throw std::runtime_error(
+                "wnet: trash route capacities insufficient for global flow — internal bug.");
+        st.cost = match_cost + trash_cost;
+        return st;
+    }
+
+    VALUE_TYPE total_cost() const {
+        return _compute_global_state().cost;
     };
 
     int warm_start_count() const {
@@ -1779,33 +2067,79 @@ public:
         return nominator / denominator;
     }
 
+    // Bundle the residual cross-subgraph shortcut (B = cheapest Sink→Src
+    // residual distance globally) with the supply marginal for theo-intensity
+    // changes.
+    //
+    //   supply_marginal_theo = min(C_theo if theo trash added,
+    //                              LP_marginal of the global trash LP)
+    //
+    // The C_theo branch matters when the LP is otherwise saturated: an
+    // intensity bump on a theo peak provides one extra unit of cap on that
+    // peak's theo→sink arc, so the new supply unit can be routed via this
+    // peak's theo-trash slot at cost C_theo.
+    //
+    //   slack > 0:                       cap_saving = 0
+    //   slack = 0:                       cap_saving = min(local_sink[v],
+    //                                                    B + local_src[v])
+    //   supply_fixed_global:             deriv = cap_saving
+    //   !supply_fixed_global:            deriv = supply_marginal_theo + cap_saving
+    struct GlobalDerivState {
+        VALUE_TYPE B;
+        VALUE_TYPE supply_marginal_theo;
+        bool supply_fixed_global;
+    };
+    GlobalDerivState _compute_global_deriv_state(bool fast) const {
+        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
+        VALUE_TYPE B = INF;
+        for (const auto& sg : flow_subgraphs) {
+            const VALUE_TYPE b = sg->local_dist_sink_to_src(fast);
+            if (b < B) B = b;
+        }
+        const auto gs = _compute_global_state();
+        VALUE_TYPE supply_marginal = gs.lp_marginal;
+        if (_theo_trash_added && _theo_trash_cost < supply_marginal)
+            supply_marginal = _theo_trash_cost;
+        return {B, supply_marginal, gs.supply_fixed_global};
+    }
+
+    VALUE_TYPE _isolated_theo_deriv(const GlobalDerivState& gs) const {
+        if (gs.supply_fixed_global) return VALUE_TYPE(0);
+        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
+        return gs.supply_marginal_theo == INF ? VALUE_TYPE(0) : gs.supply_marginal_theo;
+    }
+
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
     _signal_part_derivatives(bool fast) const {
+        const auto gs = _compute_global_deriv_state(fast);
         std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
         for (const auto& sg : flow_subgraphs) {
-            auto sg_derivs = fast ? sg->signal_part_derivatives_fast_approx()
-                                  : sg->signal_part_derivatives();
+            auto sg_derivs = sg->signal_part_derivatives_global(
+                gs.supply_marginal_theo, gs.B, gs.supply_fixed_global, fast);
             result.insert(result.end(), sg_derivs.begin(), sg_derivs.end());
         }
+        const VALUE_TYPE iso_deriv = _isolated_theo_deriv(gs);
         for (LEMON_INDEX dead_end_id : dead_end_node_ids) {
             if (auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&nodes[dead_end_id].get_type()))
-                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), _isolated_theo_trash_cost);
+                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), iso_deriv);
         }
         return result;
     }
 
     std::vector<std::pair<size_t, VALUE_TYPE>>
     _spectrum_proportion_derivatives(bool fast) const {
+        const auto gs = _compute_global_deriv_state(fast);
         std::vector<VALUE_TYPE> accum(_no_theoretical_spectra, VALUE_TYPE(0));
         for (const auto& sg : flow_subgraphs) {
-            auto sg_derivs = fast ? sg->spectrum_proportion_derivatives_fast_approx()
-                                  : sg->spectrum_proportion_derivatives();
+            auto sg_derivs = sg->spectrum_proportion_derivatives_global(
+                gs.supply_marginal_theo, gs.B, gs.supply_fixed_global, fast);
             for (auto& [spec_id, deriv] : sg_derivs)
                 accum[spec_id] += deriv;
         }
+        const VALUE_TYPE iso_deriv = _isolated_theo_deriv(gs);
         for (size_t s = 0; s < _no_theoretical_spectra; ++s) {
             if (_isolated_theoretical_intensity[s] != 0)
-                accum[s] += static_cast<VALUE_TYPE>(_isolated_theo_trash_cost * _isolated_theoretical_intensity[s]);
+                accum[s] += static_cast<VALUE_TYPE>(iso_deriv * _isolated_theoretical_intensity[s]);
         }
         std::vector<std::pair<size_t, VALUE_TYPE>> result;
         result.reserve(_no_theoretical_spectra);
