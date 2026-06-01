@@ -432,7 +432,15 @@ def test_signal_part_derivatives_includes_isolated_peaks():
     """
     A theoretical peak outside max_distance becomes an isolated dead-end node —
     no matching edges, always sent to trash.  Its signal_part_derivative must be
-    present and equal to the trash cost, not silently absent.
+    present, not silently absent.
+
+    Trash is reconciled globally (subgraph splitting is a pure optimization), so
+    values equal the single-graph min-cost flow:
+      matching: 3 units * 10 = 30
+      global excess: Xe = 5-3 = 2, Xt = 7-3 = 4 → max(2,4)=4 forced units * 20 = 80
+      total = 110.
+    Globally theoretical-heavy (Xt=4 > Xe=2): removing an empirical-excess unit
+    saves nothing (mXe=0), while one more theoretical-excess unit costs mXt=20.
     """
     trash = 20
     max_dist = 20
@@ -450,19 +458,18 @@ def test_signal_part_derivatives_includes_isolated_peaks():
     W.build()
     W.solve()
 
-    # 3 matched at cost 10, 2 excess base to trash at 20, isolated peak1 (4 units) to trash at 20
-    assert W.total_cost() == 3 * 10 + 2 * 20 + 4 * 20  # 150
+    assert W.total_cost() == 110
 
     derivs = W.signal_part_derivatives()
-    # peak 0 (connected): emp(5) > theo(3), derivative = distance - trash = 10 - 20 = -10
-    assert derivs[0][0] == -10
-    # peak 1 (isolated): only route is trash
+    # peak 0 (connected): fill one more unit by matching an empirical-excess unit
+    # (dist 10), which saves mXe=0 globally → derivative = 10.
+    assert derivs[0][0] == 10
+    # peak 1 (isolated): one more unit is pure theoretical excess → mXt = 20.
     assert 1 in derivs[0], "isolated peak must appear in signal_part_derivatives"
     assert derivs[0][1] == trash
 
-    # proportion derivative must be consistent: sum(deriv_i * base_intensity_i)
-    # = -10*3 + 20*4 = 50
-    assert W.spectrum_proportion_derivatives()[0] == 50
+    # proportion derivative: sum(deriv_i * base_intensity_i) = 10*3 + 20*4 = 110
+    assert W.spectrum_proportion_derivatives()[0] == 110
 
     # verify both derivatives by perturbation
     def perturb(peak_idx, delta):
@@ -480,8 +487,8 @@ def test_signal_part_derivatives_includes_isolated_peaks():
         W2.solve()
         return W2.total_cost()
 
-    assert perturb(0, 1) - 150 == -10
-    assert perturb(1, 1) - 150 == trash  # extra isolated unit goes straight to trash
+    assert perturb(0, 1) - 110 == 10
+    assert perturb(1, 1) - 110 == trash  # extra isolated unit goes straight to trash
 
 
 @pytest.mark.long

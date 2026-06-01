@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <span>
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -76,6 +77,86 @@ using SolverConfig = std::variant<
 #include <iostream>
 
 
+// Trash/truncation cost model.  Three optional escape mechanisms for mass that
+// is not matched (each cost is +INF when that trash type was not added):
+//   C_s    simple/symmetric (Source->Sink): discards an empirical OR fills a
+//                            theoretical; one such unit can resolve a whole
+//                            (empirical, theoretical) pair at once;
+//   C_exp  experimental      (Emp->Sink):    discards one empirical unit;
+//   C_theo theoretical       (Source->Theo): fills one theoretical unit.
+//
+// The network is solved as independent subgraphs, but the trash cost is
+// reconciled *globally* so that subgraph splitting is a pure optimization: the
+// decomposed result equals the single-graph min-cost flow.  Each subgraph is
+// solved with a single Source->Sink "escape" edge at cost tau() (the matching
+// threshold); the true per-type costs feed only excess() and the derivative
+// marginals.  See excess() for the model and the matching-threshold argument.
+template <typename VALUE_TYPE>
+struct TrashModel {
+    static constexpr VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max() / 2;
+    VALUE_TYPE C_s    = INF;
+    VALUE_TYPE C_exp  = INF;
+    VALUE_TYPE C_theo = INF;
+
+    bool any() const { return C_s < INF || C_exp < INF || C_theo < INF; }
+    bool emp_dischargeable() const { return C_exp < INF || C_s < INF; }
+    bool theo_fillable()     const { return C_theo < INF || C_s < INF; }
+
+    // Per-unit escape cost == matching threshold.  Forgoing a candidate match
+    // adds exactly one empirical and one theoretical excess unit, whose cheapest
+    // joint resolution costs min(C_s, C_exp, C_theo); so a pair is worth matching
+    // iff its distance is below this, *independent* of subgraph or global balance
+    // (hence per-subgraph matching with an escape at tau() reproduces the global
+    // optimum and the closed-form excess() reconciliation below is exact).
+    VALUE_TYPE tau() const { return std::min(C_s, std::min(C_exp, C_theo)); }
+
+    // Minimum cost to resolve Xe unmatched empirical and Xt unfilled theoretical
+    // units (after matching).  Mass that is not forced through to the sink may be
+    // left in place for free; supply max(E,T) forces the larger side through when
+    // that side has an escape, so the number of forced excess units is:
+    //   both sides escapable : max(Xe, Xt)
+    //   only empirical        : Xe   (theoretical surplus is free)
+    //   only theoretical      : Xt   (empirical surplus is free)
+    // The forced units take the cheapest available routes, with capacities
+    //   C_exp up to Xe, C_theo up to Xt, C_s unlimited.  When both sides are
+    //   escapable this reduces to the pairing form
+    //     min(Xe,Xt)*min(C_s,C_exp,C_theo) + surplus*min(C_s,C_side).
+    VALUE_TYPE excess(VALUE_TYPE Xe, VALUE_TYPE Xt) const {
+        const bool emp = emp_dischargeable();
+        const bool theo = theo_fillable();
+        VALUE_TYPE forced;
+        if (emp && theo) forced = std::max(Xe, Xt);
+        else if (emp)    forced = Xe;
+        else if (theo)   forced = Xt;
+        else             return 0;  // no trash present (caller guards this)
+        std::array<std::pair<VALUE_TYPE, VALUE_TYPE>, 3> routes = {{
+            {C_exp,  Xe},                                   // discard empirical
+            {C_theo, Xt},                                   // fill theoretical
+            {C_s,    std::numeric_limits<VALUE_TYPE>::max()} // simple (unlimited)
+        }};
+        std::sort(routes.begin(), routes.end());
+        VALUE_TYPE rem = forced, cost = 0;
+        for (const auto& [unit_cost, cap] : routes) {
+            if (rem == 0 || unit_cost >= INF) break;
+            const VALUE_TYPE take = std::min(rem, cap);
+            cost += take * unit_cost;
+            rem -= take;
+        }
+        return cost;
+    }
+
+    // Marginal cost of one more theoretical excess unit (a theo peak unit left
+    // unfilled), and the saving from removing one empirical excess unit (matching
+    // frees it).  Exact via finite difference on the piecewise-linear excess().
+    VALUE_TYPE marginal_Xt(VALUE_TYPE Xe, VALUE_TYPE Xt) const {
+        return excess(Xe, Xt + 1) - excess(Xe, Xt);
+    }
+    VALUE_TYPE saving_Xe(VALUE_TYPE Xe, VALUE_TYPE Xt) const {
+        return Xe >= 1 ? excess(Xe, Xt) - excess(Xe - 1, Xt) : VALUE_TYPE(0);
+    }
+};
+
+
 template <typename VALUE_TYPE, typename intensity_type>
 class WassersteinNetworkSubgraph {
     std::vector<FlowNode<intensity_type>> nodes;
@@ -90,10 +171,14 @@ class WassersteinNetworkSubgraph {
     std::optional<lemon::CostScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cs_solver;
     std::optional<lemon::CapacityScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cap_solver;
     SolverConfig _config = NetworkSimplexConfig{};
+    // Index of the single Source->Sink "escape" arc (added by the network at
+    // build with cost = TrashModel::tau()).  max() until set in build_impl().
+    // The escape is excluded from the residual graph for derivatives; its flow
+    // (= max(E,T) - matched) lets the network recover matched mass and cost.
     LEMON_INDEX simple_trash_idx;
-    bool simple_trash_added = false;
-    bool experimental_trash_added = false;
-    bool theoretical_trash_added = false;
+    bool escape_added = false;
+    VALUE_TYPE escape_cost_value = 0;
+    TrashModel<VALUE_TYPE> _trash_model;
     VALUE_TYPE lemon_empirical_intensity;
     VALUE_TYPE lemon_theoretical_intensity;
     const size_t no_target_distributions;
@@ -108,13 +193,14 @@ class WassersteinNetworkSubgraph {
     // queries / identical re-solves on the same solution).  Two independent
     // slots: [0] = exact residual, [1] = fast dual-pi approximation, so the
     // same solved solution can be queried in either form without thrash.
+    // Residual shortest-path distances from Source and from Sink to every node,
+    // on the matching/chain residual graph (the escape arc is excluded).  These
+    // are a pure function of the solved flow; the per-theo-node derivative is
+    // assembled at query time from these plus the network-supplied global excess
+    // marginals (saving_Xe, marginal_Xt), so the cache is independent of them.
     struct DerivContext {
         VALUE_TYPE INF;
-        bool supply_fixed;
-        bool asymmetric;
-        VALUE_TYPE trash_cost, src_adjust, sink_adjust;
         std::vector<VALUE_TYPE> dist_src, dist_sink;
-        std::vector<VALUE_TYPE> theo_sink_slack;
     };
     std::uint64_t _solution_version = 0;
     mutable std::uint64_t _deriv_ctx_version[2] = {
@@ -145,9 +231,6 @@ class WassersteinNetworkSubgraph {
     std::vector<double> _chain_pos_buf;              // K; reused by update_positions_and_solve
     mutable std::vector<uint8_t>    _chain_has_src_fwd,  _chain_has_src_rev;
     mutable std::vector<uint8_t>    _chain_has_sink_fwd, _chain_has_sink_rev;
-    mutable std::vector<VALUE_TYPE> _chain_exp_trash_cost, _chain_theo_trash_cost;
-    mutable std::vector<uint8_t>    _chain_exp_trash_fwd, _chain_exp_trash_rev;
-    mutable std::vector<uint8_t>    _chain_theo_trash_fwd, _chain_theo_trash_rev;
 
     struct ChainTopology {
         std::vector<LEMON_INDEX> order;
@@ -395,62 +478,26 @@ public:
     WassersteinNetworkSubgraph(WassersteinNetworkSubgraph&&) = delete;
     WassersteinNetworkSubgraph& operator=(WassersteinNetworkSubgraph&&) = delete;
 
-    void add_simple_trash(VALUE_TYPE cost) {
-        if (simple_trash_added)
-            throw std::runtime_error("Simple trash edge already added.");
-        if (experimental_trash_added || theoretical_trash_added)
-            throw std::runtime_error("add_simple_trash() is exclusive with experimental/theoretical trash.");
+    // Add the single Source->Sink escape edge at cost tau (the matching
+    // threshold).  Called once by the network at build() with the global
+    // TrashModel.  This is the only trash edge a subgraph carries; the per-type
+    // trash costs are reconciled globally by the network.  The model is also
+    // stored so the standalone (per-subgraph) derivative API can compute the
+    // local excess marginals from this subgraph's own Xe/Xt.
+    void add_escape(const TrashModel<VALUE_TYPE>& model) {
+        if (escape_added)
+            throw std::runtime_error("Escape edge already added.");
         if (built)
-            throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
-        edges.emplace_back(
-            edges.size(),
-            nodes[0],
-            nodes[1],
-            SimpleTrashEdge(cost)
-        );
-        simple_trash_added = true;
+            throw std::runtime_error("add_escape() must be called before build(), not after.");
+        _trash_model = model;
+        escape_cost_value = model.tau();
+        edges.emplace_back(edges.size(), nodes[0], nodes[1], SimpleTrashEdge(escape_cost_value));
+        escape_added = true;
     }
 
-    void add_experimental_trash(VALUE_TYPE cost) {
-        if (simple_trash_added)
-            throw std::runtime_error("add_experimental_trash() is exclusive with simple trash.");
-        if (experimental_trash_added)
-            throw std::runtime_error("Experimental trash already added.");
-        if (built)
-            throw std::runtime_error("add_experimental_trash() must be called before build().");
-        // One EmpiricalTrashEdge per empirical node: EmpiricalNode -> Sink.
-        // Capacity is set to max/2 in build(); see comment there.
-        for (const auto& node : nodes) {
-            if (!std::holds_alternative<EmpiricalNode<intensity_type>>(node.get_type())) continue;
-            edges.emplace_back(edges.size(), node, nodes[1], EmpiricalTrashEdge(cost));
-        }
-        experimental_trash_added = true;
-    }
-
-    void add_theoretical_trash(VALUE_TYPE cost) {
-        if (simple_trash_added)
-            throw std::runtime_error("add_theoretical_trash() is exclusive with simple trash.");
-        if (theoretical_trash_added)
-            throw std::runtime_error("Theoretical trash already added.");
-        if (built)
-            throw std::runtime_error("add_theoretical_trash() must be called before build().");
-        // One TheoreticalTrashEdge per theoretical node: Source -> TheoreticalNode.
-        // Capacity is set to max/2 in build(); see comment there.
-        for (const auto& node : nodes) {
-            if (!std::holds_alternative<TheoreticalNode<intensity_type>>(node.get_type())) continue;
-            edges.emplace_back(edges.size(), nodes[0], node, TheoreticalTrashEdge(cost));
-        }
-        theoretical_trash_added = true;
-    }
-
-    VALUE_TYPE simple_trash_cost() const {
-        if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max())
-            throw std::runtime_error("Simple trash edge not added.");
-        return std::visit([](const auto& arg) -> VALUE_TYPE {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, SimpleTrashEdge>) return arg.get_cost();
-            else { throw std::runtime_error("Invalid FlowEdgeType at simple_trash_idx"); };
-        }, edges[simple_trash_idx].get_type());
+    VALUE_TYPE escape_cost() const {
+        if (!escape_added) throw std::runtime_error("Escape edge not added.");
+        return escape_cost_value;
     }
 
     void build_impl() {
@@ -546,9 +593,6 @@ public:
             _chain_dist_buf.resize(nodes.size());
             _chain_has_src_fwd.resize(K);   _chain_has_src_rev.resize(K);
             _chain_has_sink_fwd.resize(K);  _chain_has_sink_rev.resize(K);
-            _chain_exp_trash_cost.resize(K); _chain_theo_trash_cost.resize(K);
-            _chain_exp_trash_fwd.resize(K); _chain_exp_trash_rev.resize(K);
-            _chain_theo_trash_fwd.resize(K); _chain_theo_trash_rev.resize(K);
         }
         built = true;
     }
@@ -572,45 +616,30 @@ public:
             capacities_map[e.arc] = lemon_intensity;
             lemon_theoretical_intensity += lemon_intensity;
         }
-        // Determine how many units to push from source to sink.
-        // When both sides can absorb excess (simple trash, or both asymmetric
-        // trash types), use max so every peak participates.  When only one
-        // asymmetric trash direction is present, cap supply to the side that
-        // has a valid escape route so the MCF is feasible.  No-trash always
-        // throws — see the comment inside the else branch.
-        VALUE_TYPE lemon_total_flow = 0;
-        if (simple_trash_added || (experimental_trash_added && theoretical_trash_added)) {
-            lemon_total_flow = std::max<VALUE_TYPE>(lemon_empirical_intensity, lemon_theoretical_intensity);
-        } else if (experimental_trash_added) {
-            lemon_total_flow = lemon_empirical_intensity;
-        } else if (theoretical_trash_added) {
-            lemon_total_flow = lemon_theoretical_intensity;
-        } else {
-            // No trash edges present.  All MCF solvers are unsafe or produce
-            // incorrect results without a trash escape route:
-            //
-            // NetworkSimplex: signed-integer overflow UB in updatePotential().
-            //   ART_COST = 2^62; potential accumulation during init pivots can
-            //   reach 2^63 — UB.  GCC wraps and terminates; Clang loops forever.
-            //
-            // CostScaling / CapacityScaling: no ART_COST issue, but
-            //   lemon_total_flow = min(emp, theo) is infeasible on sparse graphs
-            //   (some units have no matching path), causing these solvers to
-            //   return INFEASIBLE with totalCost() = 0 — silently wrong.
-            //
-            // The correct fix is to add trash edges before calling solve():
-            //   use add_simple_trash(cost) to give every unit an escape route.
+        // Push max(E,T) units from source to sink.  Every unit either matches or
+        // takes the Source->Sink escape, so matching saturates beneficial pairs
+        // (distance < escape cost = tau) and the escape carries max(E,T) - matched
+        // = max(Xe,Xt).  The escape guarantees feasibility regardless of which
+        // real trash types are present; the per-type cost and the "other side is
+        // free" semantics of single-trash modes are reconciled globally by the
+        // network (TrashModel::excess).  No escape => no trash was requested:
+        // NetworkSimplex would hit signed-overflow UB (ART_COST=2^62) and the
+        // scaling solvers would silently return INFEASIBLE; reject explicitly.
+        if (!escape_added) {
             throw std::runtime_error(
                 "wnet: solve() without trash edges is not supported. "
                 "Without trash edges the MCF may be infeasible (sparse matching "
                 "graph) or cause signed-integer overflow UB in NetworkSimplex "
                 "(ART_COST = 2^62 potential accumulation). "
-                "Call add_simple_trash() before build() to fix this."
+                "Call add_simple_trash()/add_experimental_trash()/"
+                "add_theoretical_trash() before build() to fix this."
             );
         }
-        // Trash cap/cost are fixed at build time (cap = max/2, cost = SimpleTrashEdge.cost);
-        // touching them here would force a warm-restart cold fallback whenever lemon_total_flow
-        // changes between solves. Flow on the trash arc is already bounded by source supply.
+        const VALUE_TYPE lemon_total_flow =
+            std::max<VALUE_TYPE>(lemon_empirical_intensity, lemon_theoretical_intensity);
+        // Escape cap/cost are fixed at build time (cap = max/2, cost = tau);
+        // touching them here would force a warm-restart cold fallback whenever
+        // lemon_total_flow changes. Escape flow is already bounded by source supply.
         node_supply_map[lemon_graph.nodeFromId(0)] = lemon_total_flow;
         node_supply_map[lemon_graph.nodeFromId(1)] = -lemon_total_flow;
         _run_solver();
@@ -620,6 +649,26 @@ public:
         if(!_solver_has_value()) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
         return _solver_total_cost();
     };
+
+    // Total empirical intensity in this subgraph (E_i; fixed at build).
+    VALUE_TYPE empirical_intensity() const { return lemon_empirical_intensity; }
+    // Total theoretical intensity in this subgraph, scaled by the last point
+    // (T_i; set in set_point()).
+    VALUE_TYPE theoretical_intensity() const { return lemon_theoretical_intensity; }
+    // Flow on the Source->Sink escape arc = max(E_i,T_i) - matched.
+    VALUE_TYPE escape_flow() const {
+        if (!escape_added) return 0;
+        return _solver_flow(lemon_graph.arcFromId(simple_trash_idx));
+    }
+    // Matched mass M_i = max(E_i,T_i) - escape_flow.
+    VALUE_TYPE matched_flow() const {
+        return std::max<VALUE_TYPE>(lemon_empirical_intensity, lemon_theoretical_intensity)
+               - escape_flow();
+    }
+    // Pure transport (matching/chain) cost = solver total - tau * escape_flow.
+    VALUE_TYPE matching_cost() const {
+        return _solver_total_cost() - escape_cost_value * escape_flow();
+    }
 
     int warm_start_count() const {
         if (_use_lct())
@@ -894,12 +943,11 @@ public:
     // net (matching the Bellman-Ford bound) but real inputs exit much sooner.
     //
     // Requires: at least one ChainEdge present (the caller is responsible).
-    // Fills _chain_R_buf, _chain_L_buf, and all flag/cost scratch arrays from
+    // Fills _chain_R_buf, _chain_L_buf, and the src/sink relay flag arrays from
     // the current solved flow. Must be called before _chain_run_search().
     void _chain_build_search_state() const {
         const auto& topo = *_chain_topo;
         const size_t K = topo.order.size();
-        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
 
         auto& c_right = _chain_R_buf;
         auto& c_left  = _chain_L_buf;
@@ -912,19 +960,13 @@ public:
 
         auto& has_src_fwd    = _chain_has_src_fwd;   auto& has_src_rev    = _chain_has_src_rev;
         auto& has_sink_fwd   = _chain_has_sink_fwd;  auto& has_sink_rev   = _chain_has_sink_rev;
-        auto& exp_trash_cost = _chain_exp_trash_cost; auto& theo_trash_cost = _chain_theo_trash_cost;
-        auto& exp_trash_fwd  = _chain_exp_trash_fwd;  auto& exp_trash_rev  = _chain_exp_trash_rev;
-        auto& theo_trash_fwd = _chain_theo_trash_fwd; auto& theo_trash_rev = _chain_theo_trash_rev;
         std::fill(has_src_fwd.begin(),     has_src_fwd.end(),     uint8_t(0));
         std::fill(has_src_rev.begin(),     has_src_rev.end(),     uint8_t(0));
         std::fill(has_sink_fwd.begin(),    has_sink_fwd.end(),    uint8_t(0));
         std::fill(has_sink_rev.begin(),    has_sink_rev.end(),    uint8_t(0));
-        std::fill(exp_trash_cost.begin(),  exp_trash_cost.end(),  INF);
-        std::fill(theo_trash_cost.begin(), theo_trash_cost.end(), INF);
-        std::fill(exp_trash_fwd.begin(),   exp_trash_fwd.end(),   uint8_t(0));
-        std::fill(exp_trash_rev.begin(),   exp_trash_rev.end(),   uint8_t(0));
-        std::fill(theo_trash_fwd.begin(),  theo_trash_fwd.end(),  uint8_t(0));
-        std::fill(theo_trash_rev.begin(),  theo_trash_rev.end(),  uint8_t(0));
+        // The escape (SimpleTrashEdge, Source->Sink) is intentionally excluded
+        // from the residual: derivatives use the matching/chain residual only,
+        // and the network supplies the global excess marginals separately.
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             const auto& et = edges[ii].get_type();
             if (std::holds_alternative<SrcToEmpiricalEdge>(et)) {
@@ -941,22 +983,6 @@ public:
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
                 if (flow < cap) has_sink_fwd[pos] = true;
                 if (flow > 0) has_sink_rev[pos] = true;
-            } else if (const auto* e = std::get_if<EmpiricalTrashEdge>(&et)) {
-                const size_t pos = topo.node_to_pos[edges[ii].get_start_node_id()];
-                if (pos == std::numeric_limits<size_t>::max()) continue;
-                auto arc = lemon_graph.arcFromId(ii);
-                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
-                exp_trash_cost[pos] = e->get_cost();
-                if (flow < cap) exp_trash_fwd[pos] = true;
-                if (flow > 0)   exp_trash_rev[pos] = true;
-            } else if (const auto* t = std::get_if<TheoreticalTrashEdge>(&et)) {
-                const size_t pos = topo.node_to_pos[edges[ii].get_end_node_id()];
-                if (pos == std::numeric_limits<size_t>::max()) continue;
-                auto arc = lemon_graph.arcFromId(ii);
-                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
-                theo_trash_cost[pos] = t->get_cost();
-                if (flow < cap) theo_trash_fwd[pos] = true;
-                if (flow > 0)   theo_trash_rev[pos] = true;
             }
         }
     }
@@ -975,9 +1001,6 @@ public:
         auto& c_left       = _chain_L_buf;
         auto& has_src_fwd  = _chain_has_src_fwd;   auto& has_src_rev  = _chain_has_src_rev;
         auto& has_sink_fwd = _chain_has_sink_fwd;  auto& has_sink_rev = _chain_has_sink_rev;
-        auto& exp_trash_cost  = _chain_exp_trash_cost; auto& theo_trash_cost = _chain_theo_trash_cost;
-        auto& exp_trash_fwd   = _chain_exp_trash_fwd;  auto& exp_trash_rev  = _chain_exp_trash_rev;
-        auto& theo_trash_fwd  = _chain_theo_trash_fwd; auto& theo_trash_rev = _chain_theo_trash_rev;
 
         std::fill(dist.begin(), dist.end(), INF);
         dist[source_id] = 0;
@@ -992,20 +1015,12 @@ public:
                 // Cost-0: reverse SrcToEmpiricalEdge, forward TheoreticalToSinkEdge.
                 if (has_src_rev[i])  update_min(dist[src_id],  d);
                 if (has_sink_fwd[i]) update_min(dist[sink_id], d);
-                // Forward EmpiricalTrashEdge (Emp→Sink, cost +C_exp).
-                if (exp_trash_fwd[i]) update_min(dist[sink_id], d + exp_trash_cost[i]);
-                // Reverse TheoreticalTrashEdge (Theo→Source, cost -C_theo).
-                if (theo_trash_rev[i]) update_min(dist[src_id], d - theo_trash_cost[i]);
             }
             const VALUE_TYPE ds = dist[src_id], dk = dist[sink_id];
             for (size_t i = 0; i < K; ++i) {
                 // Cost-0: forward SrcToEmpiricalEdge, reverse TheoreticalToSinkEdge.
                 if (ds != INF && has_src_fwd[i])  update_min(dist[topo.order[i]], ds);
                 if (dk != INF && has_sink_rev[i]) update_min(dist[topo.order[i]], dk);
-                // Forward TheoreticalTrashEdge (Source→Theo, cost +C_theo).
-                if (ds != INF && theo_trash_fwd[i]) update_min(dist[topo.order[i]], ds + theo_trash_cost[i]);
-                // Reverse EmpiricalTrashEdge (Sink→Emp, cost -C_exp).
-                if (dk != INF && exp_trash_rev[i]) update_min(dist[topo.order[i]], dk - exp_trash_cost[i]);
             }
         };
         auto chain_sweep = [&]() {
@@ -1271,44 +1286,30 @@ public:
         return dist;
     }
 
-    // Per-peak marginal cost of increasing each theoretical signal by 1.
-    // Returns vector of (spectrum_id, peak_index, derivative).
+    // Residual shortest-path distances from Source (id 0) and Sink (id 1) to
+    // every node, on the matching/chain residual graph with the escape edge
+    // excluded.  Pure function of the solved flow; combined with the global
+    // excess marginals (mXe, mXt) at query time by _node_deriv().
     //
-    // Simple trash: Bellman-Ford excludes the trash edge; src_adjust/sink_adjust
-    // manually account for the Source↔Sink shortcut it provides.
-    //
-    // Asymmetric trash: full residual already contains the shortcuts (reverse
-    // EmpiricalTrashEdge: Sink→Emp at -C_exp; forward TheoreticalTrashEdge:
-    // Source→Theo at C_theo), so no adjustments are needed.
-    //   E > T (supply fixed): augmenting cycle through T_node uses dist_sink.
-    //   T >= E (supply +1):   extra Source unit routed to T_node uses dist_src.
-    // (DerivContext is declared near the top of the class so it can be cached.)
-
     // want_pi=false: exact residual marginals.  want_pi=true: fast dual-pi
     // approximation (only when the NetworkSimplex solver is in use; chain /
-    // non-NS subgraphs have no potentials so they ignore want_pi and stay
-    // exact).
+    // non-NS subgraphs have no potentials so they ignore want_pi and stay exact).
     DerivContext _make_deriv_context(bool want_pi) const {
         if (!_solver_has_value())
             throw std::runtime_error("Must call solve() before signal_part_derivatives().");
-        if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max()
-                && !experimental_trash_added && !theoretical_trash_added)
+        if (!escape_added)
             throw std::runtime_error("signal_part_derivatives() requires trash edges.");
 
         DerivContext ctx;
         ctx.INF = std::numeric_limits<VALUE_TYPE>::max();
-        ctx.supply_fixed = (lemon_empirical_intensity > lemon_theoretical_intensity);
-        ctx.asymmetric = experimental_trash_added || theoretical_trash_added;
         const LEMON_INDEX sink_id = 1;
         const bool use_chain = has_chain_edges();
         const bool use_dijkstra = !use_chain &&
             (_use_lct() ? ns_lct_solver.has_value() : ns_solver.has_value());
-        const bool need_src  = !ctx.asymmetric || !ctx.supply_fixed;
-        const bool need_sink = !ctx.asymmetric ||  ctx.supply_fixed;
         if (use_chain) {
             _chain_build_search_state();
-            if (need_src)  ctx.dist_src  = _chain_run_search(0);
-            if (need_sink) ctx.dist_sink = _chain_run_search(sink_id);
+            ctx.dist_src  = _chain_run_search(0);
+            ctx.dist_sink = _chain_run_search(sink_id);
         } else {
             const bool use_pi = want_pi && use_dijkstra;
             auto compute_dist = [&](LEMON_INDEX id) -> std::vector<VALUE_TYPE> {
@@ -1316,32 +1317,17 @@ public:
                 return use_dijkstra ? dijkstra_residual(id)
                                     : bellman_ford_residual(id);
             };
-            if (need_src)  ctx.dist_src  = compute_dist(0);
-            if (need_sink) ctx.dist_sink = compute_dist(sink_id);
-        }
-
-        ctx.trash_cost = 0; ctx.src_adjust = 0; ctx.sink_adjust = 0;
-        if (!ctx.asymmetric) {
-            ctx.trash_cost  = simple_trash_cost();
-            ctx.src_adjust  = ctx.supply_fixed ? -ctx.trash_cost : 0;
-            ctx.sink_adjust = ctx.supply_fixed ?  0 : ctx.trash_cost;
-        }
-
-        ctx.theo_sink_slack.assign(nodes.size(), VALUE_TYPE(-1));
-        for (const auto& e : _theo_sink_edge_cache) {
-            const LEMON_INDEX node_id = lemon_graph.id(lemon_graph.source(e.arc));
-            ctx.theo_sink_slack[node_id] = capacities_map[e.arc] - _solver_flow(e.arc);
+            ctx.dist_src  = compute_dist(0);
+            ctx.dist_sink = compute_dist(sink_id);
         }
         return ctx;
     }
 
     // Value-exact memoized accessor: rebuilds the context only when the
     // solution changed since the last build (_solution_version), otherwise
-    // returns the cached one.  Eliminates the redundant residual recompute
-    // when several derivative queries (spectrum + signal + repeated/identical
-    // re-solves) hit the same solved solution.  Bit-identical to
-    // _make_deriv_context() because the context is a pure function of the
-    // post-solve solver state.
+    // returns the cached one.  Bit-identical to _make_deriv_context() because
+    // the residual distances are a pure function of the post-solve solver state.
+    // Independent of (mXe, mXt) — those are applied in _node_deriv().
     const DerivContext& _get_deriv_context(bool use_pi) const {
         const int k = use_pi ? 1 : 0;
         if (_deriv_ctx_version[k] != _solution_version) {
@@ -1351,44 +1337,43 @@ public:
         return _deriv_ctx_cache[k];
     }
 
-    VALUE_TYPE _node_deriv(LEMON_INDEX node_id, const DerivContext& ctx) const {
-        const VALUE_TYPE slack = ctx.theo_sink_slack[node_id];
-        if (slack != VALUE_TYPE(-1) && slack > 0 && ctx.supply_fixed)
-            return VALUE_TYPE(0);
-        VALUE_TYPE deriv;
-        if (ctx.asymmetric) {
-            deriv = ctx.supply_fixed ? ctx.dist_sink[node_id] : ctx.dist_src[node_id];
-            if (deriv == ctx.INF) deriv = 0;
-        } else {
-            deriv = ctx.trash_cost;
-            if (!ctx.dist_src.empty() && ctx.dist_src[node_id] != ctx.INF)
-                deriv = std::min(deriv, ctx.dist_src[node_id] + ctx.src_adjust);
-            if (!ctx.dist_sink.empty() && ctx.dist_sink[node_id] != ctx.INF)
-                deriv = std::min(deriv, ctx.dist_sink[node_id] + ctx.sink_adjust);
-        }
+    // Marginal cost of increasing this theoretical peak's intensity by 1, given
+    // the global excess marginals:
+    //   mXt = cost of leaving one more theoretical unit unfilled,
+    //   mXe = saving from removing one empirical-excess unit (matching frees it).
+    // The new theo capacity unit is either left unfilled (cost mXt) or filled by
+    // a residual augmenting path — from an empirical-excess unit via the source
+    // side (dist_src - mXe) or by re-routing from the sink side (dist_sink + mXt).
+    VALUE_TYPE _node_deriv(LEMON_INDEX node_id, const DerivContext& ctx,
+                           VALUE_TYPE mXe, VALUE_TYPE mXt) const {
+        VALUE_TYPE deriv = mXt;
+        if (!ctx.dist_src.empty() && ctx.dist_src[node_id] != ctx.INF)
+            deriv = std::min(deriv, ctx.dist_src[node_id] - mXe);
+        if (!ctx.dist_sink.empty() && ctx.dist_sink[node_id] != ctx.INF)
+            deriv = std::min(deriv, ctx.dist_sink[node_id] + mXt);
         return deriv;
     }
 
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
-    _signal_part_derivatives_impl(const DerivContext& ctx) const {
+    _signal_part_derivatives_impl(const DerivContext& ctx, VALUE_TYPE mXe, VALUE_TYPE mXt) const {
         std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
         for (const auto& node : nodes) {
             auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
             if (!theo) continue;
             result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(),
-                                _node_deriv(node.get_id(), ctx));
+                                _node_deriv(node.get_id(), ctx, mXe, mXt));
         }
         return result;
     }
 
     std::vector<std::pair<size_t, VALUE_TYPE>>
-    _spectrum_proportion_derivatives_impl(const DerivContext& ctx) const {
+    _spectrum_proportion_derivatives_impl(const DerivContext& ctx, VALUE_TYPE mXe, VALUE_TYPE mXt) const {
         std::vector<VALUE_TYPE> accum(no_target_distributions, VALUE_TYPE(0));
         for (const auto& node : nodes) {
             auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
             if (!theo) continue;
             accum[theo->get_spectrum_id()] +=
-                _node_deriv(node.get_id(), ctx)
+                _node_deriv(node.get_id(), ctx, mXe, mXt)
                 * static_cast<VALUE_TYPE>(theo->get_intensity());
         }
         std::vector<std::pair<size_t, VALUE_TYPE>> result;
@@ -1398,37 +1383,56 @@ public:
         return result;
     }
 
-public:
-    // Per-peak marginal cost of increasing each theoretical signal by 1
-    // (spectrum_id, peak_index, derivative).  Exact: cheapest residual
-    // augmenting route (Dijkstra on reduced costs).
-    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
-        return _signal_part_derivatives_impl(_get_deriv_context(/*use_pi=*/false));
+    // Excess marginals from this subgraph's own Xe/Xt (for the standalone API).
+    std::pair<VALUE_TYPE, VALUE_TYPE> _local_excess_marginals() const {
+        const VALUE_TYPE M  = matched_flow();
+        const VALUE_TYPE Xe = lemon_empirical_intensity   - M;
+        const VALUE_TYPE Xt = lemon_theoretical_intensity - M;
+        return {_trash_model.saving_Xe(Xe, Xt), _trash_model.marginal_Xt(Xe, Xt)};
     }
 
-    // Fast, APPROXIMATE per-peak marginals: the pure dual-potential
-    // difference (pi[v] - pi[src]), skipping the residual search.  A lower
-    // bound on the true marginal — exact only for peaks on the optimal flow
-    // support, basis-dependent at degenerate optima.  Different VALUES from
-    // signal_part_derivatives(); opt-in only.
+public:
+    // ---- Network-driven variants: the caller supplies the GLOBAL excess
+    // marginals (mXe = saving from removing one empirical-excess unit, mXt =
+    // cost of one more theoretical-excess unit) computed across all subgraphs +
+    // isolated nodes, so the aggregated result equals the single-graph value.
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
+    signal_part_derivatives(VALUE_TYPE mXe, VALUE_TYPE mXt) const {
+        return _signal_part_derivatives_impl(_get_deriv_context(/*use_pi=*/false), mXe, mXt);
+    }
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
+    signal_part_derivatives_fast_approx(VALUE_TYPE mXe, VALUE_TYPE mXt) const {
+        return _signal_part_derivatives_impl(_get_deriv_context(/*use_pi=*/true), mXe, mXt);
+    }
+    std::vector<std::pair<size_t, VALUE_TYPE>>
+    spectrum_proportion_derivatives(VALUE_TYPE mXe, VALUE_TYPE mXt) const {
+        return _spectrum_proportion_derivatives_impl(_get_deriv_context(/*use_pi=*/false), mXe, mXt);
+    }
+    std::vector<std::pair<size_t, VALUE_TYPE>>
+    spectrum_proportion_derivatives_fast_approx(VALUE_TYPE mXe, VALUE_TYPE mXt) const {
+        return _spectrum_proportion_derivatives_impl(_get_deriv_context(/*use_pi=*/true), mXe, mXt);
+    }
+
+    // ---- Standalone (single-subgraph) variants: use this subgraph's own Xe/Xt
+    // for the excess marginals.  Exposed for inspection/visualization; the
+    // network's aggregate uses the variants above with global marginals.
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
+        auto [mXe, mXt] = _local_excess_marginals();
+        return signal_part_derivatives(mXe, mXt);
+    }
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
     signal_part_derivatives_fast_approx() const {
-        return _signal_part_derivatives_impl(_get_deriv_context(/*use_pi=*/true));
+        auto [mXe, mXt] = _local_excess_marginals();
+        return signal_part_derivatives_fast_approx(mXe, mXt);
     }
-
-    // Gradient of total cost w.r.t. scaling each spectrum's proportion
-    // (spectrum_id, derivative) = sum_i(peak_derivative_i * intensity_i).
-    // Exact residual marginals.
     std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
-        return _spectrum_proportion_derivatives_impl(_get_deriv_context(/*use_pi=*/false));
+        auto [mXe, mXt] = _local_excess_marginals();
+        return spectrum_proportion_derivatives(mXe, mXt);
     }
-
-    // Fast, APPROXIMATE spectrum-proportion gradient (dual-potential
-    // difference; see signal_part_derivatives_fast_approx for the accuracy
-    // caveat).  Different VALUES from spectrum_proportion_derivatives().
     std::vector<std::pair<size_t, VALUE_TYPE>>
     spectrum_proportion_derivatives_fast_approx() const {
-        return _spectrum_proportion_derivatives_impl(_get_deriv_context(/*use_pi=*/true));
+        auto [mXe, mXt] = _local_excess_marginals();
+        return spectrum_proportion_derivatives_fast_approx(mXe, mXt);
     }
 };
 
@@ -1445,8 +1449,7 @@ class WassersteinNetwork {
 
     intensity_type _isolated_empirical_intensity = 0;
     std::vector<intensity_type> _isolated_theoretical_intensity;
-    VALUE_TYPE _isolated_exp_trash_cost = 0;
-    VALUE_TYPE _isolated_theo_trash_cost = 0;
+    TrashModel<VALUE_TYPE> _trash_model;
     std::vector<double> _last_point;
 
     bool built = false;
@@ -1478,8 +1481,7 @@ public:
         flow_subgraphs(std::move(other.flow_subgraphs)),
         _isolated_empirical_intensity(other._isolated_empirical_intensity),
         _isolated_theoretical_intensity(std::move(other._isolated_theoretical_intensity)),
-        _isolated_exp_trash_cost(other._isolated_exp_trash_cost),
-        _isolated_theo_trash_cost(other._isolated_theo_trash_cost),
+        _trash_model(other._trash_model),
         _last_point(std::move(other._last_point)),
         built(other.built)
     {
@@ -1627,34 +1629,42 @@ public:
         }
     }
 
+    // The three trash types may now be combined freely (any subset).  Each call
+    // sets that type's cost in the shared TrashModel; the per-subgraph escape and
+    // the global excess reconciliation are configured at build()/total_cost().
     void add_simple_trash(VALUE_TYPE cost) {
         if (built)
             throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
-        _isolated_exp_trash_cost = cost;
-        _isolated_theo_trash_cost = cost;
-        for (auto& flow_subgraph : flow_subgraphs)
-            flow_subgraph->add_simple_trash(cost);
+        if (_trash_model.C_s < TrashModel<VALUE_TYPE>::INF)
+            throw std::runtime_error("Simple trash already added.");
+        _trash_model.C_s = cost;
     };
 
     void add_experimental_trash(VALUE_TYPE cost) {
         if (built)
             throw std::runtime_error("add_experimental_trash() must be called before build().");
-        _isolated_exp_trash_cost = cost;
-        for (auto& flow_subgraph : flow_subgraphs)
-            flow_subgraph->add_experimental_trash(cost);
+        if (_trash_model.C_exp < TrashModel<VALUE_TYPE>::INF)
+            throw std::runtime_error("Experimental trash already added.");
+        _trash_model.C_exp = cost;
     };
 
     void add_theoretical_trash(VALUE_TYPE cost) {
         if (built)
             throw std::runtime_error("add_theoretical_trash() must be called before build().");
-        _isolated_theo_trash_cost = cost;
-        for (auto& flow_subgraph : flow_subgraphs)
-            flow_subgraph->add_theoretical_trash(cost);
+        if (_trash_model.C_theo < TrashModel<VALUE_TYPE>::INF)
+            throw std::runtime_error("Theoretical trash already added.");
+        _trash_model.C_theo = cost;
     };
 
     void build(SolverConfig config = NetworkSimplexConfig{}) {
-        for (auto& flow_subgraph : flow_subgraphs)
+        // The escape edge is added only when some trash was requested.  Building
+        // without trash is allowed; solve() then throws via set_point() (no
+        // escape route), matching the long-standing no-trash error contract.
+        for (auto& flow_subgraph : flow_subgraphs) {
+            if (_trash_model.any())
+                flow_subgraph->add_escape(_trash_model);
             flow_subgraph->build(config);
+        }
         built = true;
     };
 
@@ -1673,13 +1683,37 @@ public:
             flow_subgraph->set_point(point);
     };
 
+private:
+    // Global unmatched-empirical (Xe) and unfilled-theoretical (Xt) totals across
+    // all subgraphs and isolated (dead-end) nodes, at the last solved point.
+    // These drive the global trash reconciliation so that subgraph splitting is a
+    // pure optimization (the result equals the single-graph min-cost flow).
+    std::pair<VALUE_TYPE, VALUE_TYPE> _global_excess_state() const {
+        VALUE_TYPE E_total = static_cast<VALUE_TYPE>(_isolated_empirical_intensity);
+        VALUE_TYPE T_total = 0;
+        for (size_t s = 0; s < _no_theoretical_spectra; ++s)
+            T_total += static_cast<VALUE_TYPE>(
+                _isolated_theoretical_intensity[s] * _last_point[s]);
+        VALUE_TYPE M_total = 0;
+        for (const auto& sg : flow_subgraphs) {
+            E_total += sg->empirical_intensity();
+            T_total += sg->theoretical_intensity();
+            M_total += sg->matched_flow();
+        }
+        return {E_total - M_total, T_total - M_total};
+    }
+
+public:
     VALUE_TYPE total_cost() const {
+        // Sum the pure transport (matching) cost of every subgraph, then add the
+        // single global trash term that reconciles all unmatched empirical /
+        // unfilled theoretical mass (subgraphs + isolated nodes) at once.  This
+        // makes the decomposed result equal the single-graph min-cost flow.
         VALUE_TYPE cost = 0;
         for (const auto& flow_subgraph : flow_subgraphs)
-            cost += flow_subgraph->total_cost();
-        cost += _isolated_exp_trash_cost * _isolated_empirical_intensity;
-        for (size_t s = 0; s < _no_theoretical_spectra; ++s)
-            cost += static_cast<VALUE_TYPE>(_isolated_theo_trash_cost * _isolated_theoretical_intensity[s] * _last_point[s]);
+            cost += flow_subgraph->matching_cost();
+        const auto [Xe, Xt] = _global_excess_state();
+        cost += _trash_model.excess(Xe, Xt);
         return cost;
     };
 
@@ -1779,33 +1813,47 @@ public:
         return nominator / denominator;
     }
 
+    // Global excess marginals shared by every subgraph: mXe = saving from
+    // removing one empirical-excess unit, mXt = cost of one more theoretical-
+    // excess unit, evaluated at the global (Xe, Xt).  Using the global state
+    // (not each subgraph's local state) is what makes the aggregated derivative
+    // match the single-graph value.
+    std::pair<VALUE_TYPE, VALUE_TYPE> _global_excess_marginals() const {
+        const auto [Xe, Xt] = _global_excess_state();
+        return {_trash_model.saving_Xe(Xe, Xt), _trash_model.marginal_Xt(Xe, Xt)};
+    }
+
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
     _signal_part_derivatives(bool fast) const {
+        const auto [mXe, mXt] = _global_excess_marginals();
         std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
         for (const auto& sg : flow_subgraphs) {
-            auto sg_derivs = fast ? sg->signal_part_derivatives_fast_approx()
-                                  : sg->signal_part_derivatives();
+            auto sg_derivs = fast ? sg->signal_part_derivatives_fast_approx(mXe, mXt)
+                                  : sg->signal_part_derivatives(mXe, mXt);
             result.insert(result.end(), sg_derivs.begin(), sg_derivs.end());
         }
+        // Isolated theoretical peaks can never be matched; one more unit is pure
+        // theoretical excess, so its marginal is mXt.
         for (LEMON_INDEX dead_end_id : dead_end_node_ids) {
             if (auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&nodes[dead_end_id].get_type()))
-                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), _isolated_theo_trash_cost);
+                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), mXt);
         }
         return result;
     }
 
     std::vector<std::pair<size_t, VALUE_TYPE>>
     _spectrum_proportion_derivatives(bool fast) const {
+        const auto [mXe, mXt] = _global_excess_marginals();
         std::vector<VALUE_TYPE> accum(_no_theoretical_spectra, VALUE_TYPE(0));
         for (const auto& sg : flow_subgraphs) {
-            auto sg_derivs = fast ? sg->spectrum_proportion_derivatives_fast_approx()
-                                  : sg->spectrum_proportion_derivatives();
+            auto sg_derivs = fast ? sg->spectrum_proportion_derivatives_fast_approx(mXe, mXt)
+                                  : sg->spectrum_proportion_derivatives(mXe, mXt);
             for (auto& [spec_id, deriv] : sg_derivs)
                 accum[spec_id] += deriv;
         }
         for (size_t s = 0; s < _no_theoretical_spectra; ++s) {
             if (_isolated_theoretical_intensity[s] != 0)
-                accum[s] += static_cast<VALUE_TYPE>(_isolated_theo_trash_cost * _isolated_theoretical_intensity[s]);
+                accum[s] += mXt * static_cast<VALUE_TYPE>(_isolated_theoretical_intensity[s]);
         }
         std::vector<std::pair<size_t, VALUE_TYPE>> result;
         result.reserve(_no_theoretical_spectra);

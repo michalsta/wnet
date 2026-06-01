@@ -6,7 +6,9 @@ Topology reminder:
   EmpiricalNode → Sink                               (experimental trash)
   Source → TheoreticalNode                           (theoretical trash)
 
-The two asymmetric types are mutually exclusive with SimpleTrashEdge.
+All three trash types may now be combined freely; trash is reconciled globally
+so subgraph splitting does not change the result (it equals the single-graph
+min-cost flow).
 """
 
 import pytest
@@ -152,10 +154,13 @@ def test_theo_trash_equals_simple_trash_excess_theoretical():
 
 def test_both_trash_equals_simple_trash_two_components():
     # Multi-component graph: component 1 has E > T, component 2 has T > E.
-    # Points separated by 1000 → two independent subgraphs.
-    # Component 1: emp=7 @ 0, theo=4 @ 1 → 4*1 + 3*10 = 34
-    # Component 2: emp=3 @ 1000, theo=7 @ 1001 → 3*1 + 4*10 = 43
-    # Total: 77 for both formulations.
+    # Points separated by 1000 → two independent subgraphs.  Trash is reconciled
+    # GLOBALLY (subgraph splitting is a pure optimization), so component 1's
+    # 3 excess empirical units pair with component 2's excess theoretical units
+    # rather than each being charged separately.
+    #   matching: 4*1 (comp1) + 3*1 (comp2) = 7
+    #   excess: global Xe=3, Xt=4 → 4 forced units * 10 = 40
+    #   total = 47 for both formulations (= the single-graph min-cost flow).
     emp = _dist1d([0, 1000], [7, 3])
     theo = _dist1d([1, 1001], [4, 7])
 
@@ -168,7 +173,7 @@ def test_both_trash_equals_simple_trash_two_components():
     W_sym.add_simple_trash(10)
     cost_sym = _solve(W_sym)
 
-    assert cost_asym == cost_sym == 77
+    assert cost_asym == cost_sym == 47
 
 
 # ---------------------------------------------------------------------------
@@ -213,40 +218,50 @@ def test_theoretical_trash_after_build_raises():
         W.add_theoretical_trash(10)
 
 
-def test_experimental_trash_exclusive_with_simple_trash():
-    emp = _dist1d([0], [5])
-    theo = _dist1d([1], [5])
+def test_simple_and_experimental_trash_coexist():
+    # emp=7, theo=4, dist=1. Combined C_s=10, C_exp=5 → emp excess (3) discarded
+    # at the cheaper min(C_exp, C_s)=5. cost = 4*1 + 3*5 = 19.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
     W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
     W.add_simple_trash(10)
-    with pytest.raises(RuntimeError):
-        W.add_experimental_trash(10)
+    W.add_experimental_trash(5)
+    assert _solve(W) == 19
 
 
-def test_theoretical_trash_exclusive_with_simple_trash():
-    emp = _dist1d([0], [5])
-    theo = _dist1d([1], [5])
+def test_simple_and_theoretical_trash_coexist():
+    # emp=3, theo=7, dist=1. Combined C_s=10, C_theo=5 → theo excess (4) filled
+    # at the cheaper min(C_theo, C_s)=5. cost = 3*1 + 4*5 = 23.
+    emp = _dist1d([0], [3])
+    theo = _dist1d([1], [7])
     W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
     W.add_simple_trash(10)
-    with pytest.raises(RuntimeError):
-        W.add_theoretical_trash(10)
+    W.add_theoretical_trash(5)
+    assert _solve(W) == 23
 
 
-def test_simple_trash_exclusive_with_experimental_trash():
-    emp = _dist1d([0], [5])
-    theo = _dist1d([1], [5])
+def test_all_three_trash_types_coexist():
+    # emp=7, theo=4, dist=1. C_s=10, C_exp=5, C_theo=8.
+    # E>T → 3 empirical excess discarded at min(C_exp, C_s)=5. cost = 4 + 15 = 19.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
     W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
-    W.add_experimental_trash(10)
-    with pytest.raises(RuntimeError):
-        W.add_simple_trash(10)
+    W.add_simple_trash(10)
+    W.add_experimental_trash(5)
+    W.add_theoretical_trash(8)
+    assert _solve(W) == 19
 
 
-def test_simple_trash_exclusive_with_theoretical_trash():
-    emp = _dist1d([0], [5])
-    theo = _dist1d([1], [5])
+def test_simple_trash_caps_asymmetric_cost():
+    # emp=7, theo=4, dist=1. C_exp=50 (expensive), C_s=10 (cheap).
+    # 3 empirical excess take the cheaper simple route at 10, not exp at 50.
+    # cost = 4*1 + 3*10 = 34.
+    emp = _dist1d([0], [7])
+    theo = _dist1d([1], [4])
     W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
-    W.add_theoretical_trash(10)
-    with pytest.raises(RuntimeError):
-        W.add_simple_trash(10)
+    W.add_experimental_trash(50)
+    W.add_simple_trash(10)
+    assert _solve(W) == 34
 
 
 def test_experimental_trash_double_add_raises():

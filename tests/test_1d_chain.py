@@ -79,9 +79,10 @@ def test_multiple_peaks(trash_cost):
 def test_unmatched_far_cluster_dropped():
     """
     Empirical cluster far from any theoretical — no cross-side edges, so all
-    peaks become dead-ends and pay trash cost. Both factories must agree.
-    trash_cost=50, max_dist=5: emp cost = 50*(5+5+5)=750, theo cost =
-    50*15*1.0=750, total = 1500.
+    peaks become dead-ends. With simple trash the 15 isolated empirical units
+    pair with the 15 isolated theoretical units through the shared escape (trash
+    is reconciled globally), so the cost is 15*50 = 750 (the single-graph value),
+    not 750+750. Both factories must agree.
     """
     # E peaks at 0,1,2 (cluster); T peaks at 100 (single).
     base = Distribution_1D(np.array([0.0, 1.0, 2.0]), np.array([5, 5, 5]))
@@ -89,7 +90,7 @@ def test_unmatched_far_cluster_dropped():
     # max_dist small enough that no cross-side matching is possible.
     dense, chain, _, _ = _cost_pair(base, [target], 50, 5)
     assert dense == chain
-    assert dense == 1500
+    assert dense == 750
 
 
 # Empty-input behavior: both factories reject empty empirical/theoretical
