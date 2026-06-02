@@ -229,6 +229,8 @@ class Distribution:
 
     # def __setstate__(self, state: dict) -> None: default is fine
 
+    def __str__(self) -> str:
+        return f"Distribution(label={self.label}, dimension={self.dimension}, num_peaks={len(self)}, total_intensity={self.sum_intensities:.4f})"
 
 def Distribution_1D(
     positions: np.ndarray, intensities: np.ndarray, label: Optional[str] = None
