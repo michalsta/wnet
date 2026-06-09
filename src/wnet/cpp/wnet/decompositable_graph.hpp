@@ -10,6 +10,8 @@
 #include <optional>
 #include <deque>
 #include <queue>
+#include <array>
+#include <memory>
 #include <variant>
 
 
@@ -63,10 +65,15 @@ struct CycleCancelingConfig {
 struct CapacityScalingConfig {
     int factor = 4;
 };
+// Chain-native 1-D solver: decomposition + level-batched line-SSP (no LEMON).
+// Only valid for chain (1-D) subgraphs; non-chain subgraphs fall back to NS.
+// warm=true reuses the previous solve's flow+potentials across set_point calls
+// (incremental: de-augment shrunk caps, re-augment beneficial paths).
+struct LineSSPConfig { bool warm = true; };
 
 using SolverConfig = std::variant<
     NetworkSimplexConfig, CostScalingConfig,
-    CycleCancelingConfig, CapacityScalingConfig>;
+    CycleCancelingConfig, CapacityScalingConfig, LineSSPConfig>;
 
 //#include "pylmcf/py_support.h"
 #include "graph_elements.hpp"
@@ -157,6 +164,38 @@ class WassersteinNetworkSubgraph {
         std::vector<size_t> node_to_pos;
     };
     std::optional<ChainTopology> _chain_topo;
+
+    // ---- chain-native line-SSP solution (LineSSPConfig backend) ----------- //
+    // Populated by _line_ssp_solve(); read by the chain-native total_cost /
+    // flows / derivative paths instead of LEMON's solver state.
+    struct ChainSolution {
+        VALUE_TYPE total = 0;
+        std::vector<VALUE_TYPE> emp_matched;   // per chain pos (0 for theo nodes)
+        std::vector<VALUE_TYPE> theo_matched;  // per chain pos (0 for emp nodes)
+        std::vector<VALUE_TYPE> exp_trash;     // per chain pos (emp trash amount)
+        std::vector<VALUE_TYPE> theo_trash;    // per chain pos (theo phantom-fill)
+        std::vector<VALUE_TYPE> R, L;          // per gap forward/reverse flow (K-1)
+        bool valid = false;
+    };
+    mutable ChainSolution _chain_sol;
+    bool _use_linessp() const { return std::holds_alternative<LineSSPConfig>(_config); }
+
+    // Cached chain MCMF for the line-SSP backend: built once (geometry is fixed
+    // across set_point calls), then only caps/flows are reset per solve.
+    struct _LineMCMF;  // defined below
+    mutable std::unique_ptr<_LineMCMF> _line_g;
+    mutable std::vector<int> _line_sa, _line_ka;            // per pos: src/sink fwd-arc id (-1 if N/A)
+    mutable std::vector<VALUE_TYPE> _line_base_cap;         // per fwd-arc-pair: original forward cap
+    mutable std::vector<uint8_t> _line_is_emp;             // per pos
+    mutable std::vector<VALUE_TYPE> _line_emp_w;           // per pos: emp intensity (fixed)
+    mutable VALUE_TYPE _line_E = 0;                        // total empirical intensity (fixed)
+    mutable bool _line_built = false;
+    mutable bool _line_has_flow = false;                  // previous solve's flow is live (for warm)
+    mutable std::vector<VALUE_TYPE> _line_prev_theo;      // per pos: previous scaled theo cap
+    bool _line_warm() const {
+        return std::holds_alternative<LineSSPConfig>(_config) &&
+               std::get<LineSSPConfig>(_config).warm;
+    }
 
     // True when the NetworkSimplex backend is the experimental link-cut-tree
     // implementation (NSWarmMode::LinkCut) rather than LEMON's array solver.
@@ -308,13 +347,18 @@ class WassersteinNetworkSubgraph {
                 cs_solver->costMap(costs_map);
                 cs_solver->supplyMap(node_supply_map);
                 cs_solver->run(static_cast<LemonM>(cfg.method), cfg.factor);
-            } else {
-                static_assert(std::is_same_v<T, CapacityScalingConfig>);
+            } else if constexpr (std::is_same_v<T, CapacityScalingConfig>) {
                 cap_solver.emplace(lemon_graph);
                 cap_solver->upperMap(capacities_map);
                 cap_solver->costMap(costs_map);
                 cap_solver->supplyMap(node_supply_map);
                 cap_solver->run(cfg.factor);
+            } else {
+                static_assert(std::is_same_v<T, LineSSPConfig>);
+                // line-SSP is dispatched from set_point() before _run_solver()
+                // for chain subgraphs; reaching here means a non-chain subgraph.
+                throw std::runtime_error(
+                    "LineSSP backend supports only 1-D chain subgraphs.");
             }
         }, _config);
         // Any solve may have changed potentials/flow -> invalidate the
@@ -611,12 +655,24 @@ public:
         // Trash cap/cost are fixed at build time (cap = max/2, cost = SimpleTrashEdge.cost);
         // touching them here would force a warm-restart cold fallback whenever lemon_total_flow
         // changes between solves. Flow on the trash arc is already bounded by source supply.
+        // Chain-native line-SSP backend: solve the chain directly, bypassing
+        // LEMON. Non-chain subgraphs fall through to _run_solver() (which throws
+        // for LineSSPConfig).
+        if (_use_linessp() && _chain_topo.has_value()) {
+            _line_ssp_solve(point, lemon_total_flow);
+            ++_solution_version;
+            return;
+        }
         node_supply_map[lemon_graph.nodeFromId(0)] = lemon_total_flow;
         node_supply_map[lemon_graph.nodeFromId(1)] = -lemon_total_flow;
         _run_solver();
     }
 
     VALUE_TYPE total_cost() const {
+        if (_use_linessp() && _chain_topo.has_value()) {
+            if (!_chain_sol.valid) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
+            return _chain_sol.total;
+        }
         if(!_solver_has_value()) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
         return _solver_total_cost();
     };
@@ -745,11 +801,15 @@ public:
         const size_t K = topo.order.size();
         if (K < 2) return;  // Isolated node — no gap flow to decompose.
 
-        // Read per-gap forward/reverse flows from the solver.
+        // Read per-gap forward/reverse flows from the active solver.
         std::vector<VALUE_TYPE> R(K - 1), L(K - 1);
-        for (size_t g = 0; g < K - 1; ++g) {
-            R[g] = _solver_flow(lemon_graph.arcFromId(topo.right_arc_ids[g]));
-            L[g] = _solver_flow(lemon_graph.arcFromId(topo.left_arc_ids[g]));
+        if (_use_linessp()) {
+            for (size_t g = 0; g < K - 1; ++g) { R[g] = _chain_sol.R[g]; L[g] = _chain_sol.L[g]; }
+        } else {
+            for (size_t g = 0; g < K - 1; ++g) {
+                R[g] = _solver_flow(lemon_graph.arcFromId(topo.right_arc_ids[g]));
+                L[g] = _solver_flow(lemon_graph.arcFromId(topo.left_arc_ids[g]));
+            }
         }
 
         // Pass 1 — rightward decomposition.
@@ -894,6 +954,317 @@ public:
     // net (matching the Bellman-Ford bound) but real inputs exit much sooner.
     //
     // Requires: at least one ChainEdge present (the caller is responsible).
+  private:
+    // ---- chain-native line-SSP backend ----------------------------------- //
+    // Min-cost flow on flat chain arrays: Dijkstra+potentials with a Dinic-style
+    // blocking flow per shortest-path cost level (port of slope_chain_bench.cpp).
+    struct _LineMCMF {
+        int n;
+        std::vector<int> to;
+        std::vector<VALUE_TYPE> cap, cost;
+        std::vector<std::vector<int>> head;
+        std::vector<VALUE_TYPE> dist, _pot;
+        std::vector<int> _level, _it, _pred, _stk;   // reused scratch (graph is cached)
+        explicit _LineMCMF(int n_) : n(n_), head(n_) {}
+        int add(int u, int v, VALUE_TYPE c, VALUE_TYPE w) {
+            int id = (int)to.size();
+            head[u].push_back(id);     to.push_back(v); cap.push_back(c); cost.push_back(w);
+            head[v].push_back(id + 1); to.push_back(u); cap.push_back(0); cost.push_back(-w);
+            return id;
+        }
+        VALUE_TYPE flow_of(int fwd_id) const { return cap[fwd_id ^ 1]; }
+        // Restore fixed forward caps and zero all reverse (flow) caps.
+        void reset(const std::vector<VALUE_TYPE>& base) {
+            for (size_t p = 0; p < base.size(); ++p) { cap[2 * p] = base[p]; cap[2 * p + 1] = 0; }
+        }
+        bool dijkstra(int s, int t, std::vector<VALUE_TYPE>& pot, VALUE_TYPE INF) {
+            dist.assign(n, INF);
+            dist[s] = 0;
+            using P = std::pair<VALUE_TYPE, int>;
+            std::priority_queue<P, std::vector<P>, std::greater<P>> pq;
+            pq.push({0, s});
+            while (!pq.empty()) {
+                auto [d, u] = pq.top(); pq.pop();
+                if (d > dist[u]) continue;
+                for (int e : head[u]) {
+                    if (cap[e] <= 0) continue;
+                    int v = to[e];
+                    VALUE_TYPE nd = d + cost[e] + pot[u] - pot[v];
+                    if (nd < dist[v]) { dist[v] = nd; pq.push({nd, v}); }
+                }
+            }
+            return dist[t] < INF;
+        }
+        // Recompute valid node potentials for the current residual via SPFA
+        // (Bellman-Ford-Moore) from a virtual super-source 0-connected to all.
+        // Needed on warm restart: increasing an arc's capacity can expose a
+        // previously-saturated arc with negative reduced cost, invalidating the
+        // kept potentials. The current flow is min-cost for its value (no
+        // negative residual cycle), so SPFA terminates with reduced costs >= 0.
+        void recompute_potentials() {
+            std::fill(_pot.begin(), _pot.end(), VALUE_TYPE(0));
+            std::vector<char> inq(n, 1);
+            std::deque<int> q;
+            for (int i = 0; i < n; ++i) q.push_back(i);
+            while (!q.empty()) {
+                int u = q.front(); q.pop_front(); inq[u] = 0;
+                for (int e : head[u]) {
+                    if (cap[e] <= 0) continue;
+                    int v = to[e];
+                    if (_pot[u] + cost[e] < _pot[v]) {
+                        _pot[v] = _pot[u] + cost[e];
+                        if (!inq[v]) { inq[v] = 1; q.push_back(v); }
+                    }
+                }
+            }
+        }
+        // Single-path min-cost augmentation s->t up to `limit` units, reusing
+        // and updating _pot (for warm de-augment: push flow back to source).
+        VALUE_TYPE push_flow(int s, int t, VALUE_TYPE limit, VALUE_TYPE INF) {
+            auto& pot = _pot;
+            VALUE_TYPE pushed = 0;
+            while (pushed < limit) {
+                dist.assign(n, INF); dist[s] = 0;
+                _pred.assign(n, -1);
+                using P = std::pair<VALUE_TYPE, int>;
+                std::priority_queue<P, std::vector<P>, std::greater<P>> pq;
+                pq.push({0, s});
+                while (!pq.empty()) {
+                    auto [d, u] = pq.top(); pq.pop();
+                    if (d > dist[u]) continue;
+                    for (int e : head[u]) {
+                        if (cap[e] <= 0) continue;
+                        int v = to[e];
+                        VALUE_TYPE nd = d + cost[e] + pot[u] - pot[v];
+                        if (nd < dist[v]) { dist[v] = nd; _pred[v] = e; pq.push({nd, v}); }
+                    }
+                }
+                if (dist[t] >= INF) break;
+                for (int i = 0; i < n; i++) if (dist[i] < INF) pot[i] += dist[i];
+                VALUE_TYPE f = limit - pushed;
+                for (int v = t; v != s; ) { int e = _pred[v]; f = std::min(f, cap[e]); v = to[e ^ 1]; }
+                for (int v = t; v != s; ) { int e = _pred[v]; cap[e] -= f; cap[e ^ 1] += f; v = to[e ^ 1]; }
+                pushed += f;
+            }
+            return pushed;
+        }
+        // (level_cost, amount) per distinct shortest-path cost, nondecreasing.
+        std::vector<std::pair<VALUE_TYPE, VALUE_TYPE>>
+        augment_levels(int s, int t, VALUE_TYPE max_marginal, VALUE_TYPE max_flow, VALUE_TYPE INF,
+                       bool keep_pot = false) {
+            auto& pot = _pot; if (!keep_pot) pot.assign(n, 0);
+            std::vector<std::pair<VALUE_TYPE, VALUE_TYPE>> out;
+            VALUE_TYPE total = 0;
+            while (total < max_flow) {
+                if (!dijkstra(s, t, pot, INF)) break;
+                for (int i = 0; i < n; i++) if (dist[i] < INF) pot[i] += dist[i];
+                VALUE_TYPE delta = pot[t] - pot[s];
+                if (delta > max_marginal) break;
+                auto& level = _level; level.assign(n, -1); level[s] = 0;
+                std::deque<int> dq; dq.push_back(s);
+                while (!dq.empty()) {
+                    int u = dq.front(); dq.pop_front();
+                    for (int e : head[u]) {
+                        int v = to[e];
+                        if (level[v] < 0 && cap[e] > 0 && cost[e] + pot[u] - pot[v] == 0) {
+                            level[v] = level[u] + 1; dq.push_back(v);
+                        }
+                    }
+                }
+                if (level[t] < 0) break;
+                auto& it = _it; it.assign(n, 0);
+                auto& pred = _pred; pred.assign(n, -1);
+                auto& stk = _stk; stk.clear();
+                VALUE_TYPE pushed = 0;
+                while (true) {
+                    stk.clear(); stk.push_back(s);
+                    bool found = false;
+                    while (!stk.empty()) {
+                        int u = stk.back();
+                        if (u == t) { found = true; break; }
+                        bool adv = false;
+                        while (it[u] < (int)head[u].size()) {
+                            int e = head[u][it[u]]; int v = to[e];
+                            if (level[v] == level[u] + 1 && cap[e] > 0 && cost[e] + pot[u] - pot[v] == 0) {
+                                pred[v] = e; stk.push_back(v); adv = true; break;
+                            }
+                            it[u]++;
+                        }
+                        if (!adv) { level[u] = -1; stk.pop_back(); }
+                    }
+                    if (!found) break;
+                    VALUE_TYPE f = max_flow - (total + pushed);
+                    for (int v = t; v != s; ) { int e = pred[v]; f = std::min(f, cap[e]); v = to[e ^ 1]; }
+                    for (int v = t; v != s; ) {
+                        int e = pred[v]; cap[e] -= f; cap[e ^ 1] += f;
+                        if (cap[e] == 0) it[to[e ^ 1]]++;
+                        v = to[e ^ 1];
+                    }
+                    pushed += f;
+                    if (total + pushed >= max_flow) break;
+                }
+                total += pushed;
+                out.push_back({delta, pushed});
+            }
+            return out;
+        }
+    };
+
+  public:
+    // Solve this (single-component) chain by the decomposition
+    //   total = min_M [ C_transport(M) + Trash(M) ]
+    // and store the result in _chain_sol.  F = units pushed (set_point's rule).
+    void _line_ssp_solve(const std::vector<double>& point, VALUE_TYPE F) const {
+        const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max() / 4;
+        const auto& topo = *_chain_topo;
+        const int K = (int)topo.order.size();
+        auto& sol = _chain_sol;
+        sol.emp_matched.assign(K, 0);
+        sol.theo_matched.assign(K, 0);
+        sol.exp_trash.assign(K, 0);
+        sol.theo_trash.assign(K, 0);
+        sol.R.assign(K > 0 ? K - 1 : 0, 0);
+        sol.L.assign(K > 0 ? K - 1 : 0, 0);
+
+        // ---- build the chain MCMF once (geometry is fixed); cache it -------
+        const int SS = K, TT = K + 1;
+        if (!_line_built) {
+            _line_is_emp.assign(K, 0);
+            _line_emp_w.assign(K, 0);
+            _line_sa.assign(K, -1);
+            _line_ka.assign(K, -1);
+            _line_base_cap.clear();
+            _line_E = 0;
+            _line_g = std::make_unique<_LineMCMF>(K + 2);
+            auto add = [&](int u, int v, VALUE_TYPE c, VALUE_TYPE wt) {
+                int id = _line_g->add(u, v, c, wt);
+                _line_base_cap.push_back(c);
+                return id;
+            };
+            for (int i = 0; i < K; ++i) {
+                const auto& nt = nodes[topo.order[i]].get_type();
+                if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&nt)) {
+                    _line_is_emp[i] = 1;
+                    _line_emp_w[i] = (VALUE_TYPE)emp->get_intensity();
+                    _line_E += _line_emp_w[i];
+                    _line_sa[i] = add(SS, i, _line_emp_w[i], 0);
+                } else {
+                    _line_ka[i] = add(i, TT, 0, 0);   // theo cap set per solve
+                }
+            }
+            for (int gp = 0; gp + 1 < K; ++gp) {
+                VALUE_TYPE gap = topo.gap_cost[gp];
+                add(gp, gp + 1, INF, gap);
+                add(gp + 1, gp, INF, gap);
+            }
+            _line_built = true;
+        }
+
+        // ---- per solve ---------------------------------------------------- //
+        auto& g = *_line_g;
+        const VALUE_TYPE E = _line_E;
+        if (_line_prev_theo.size() != (size_t)K) _line_prev_theo.assign(K, 0);
+
+        // Gather this solve's scaled theo caps; warm restart is only sound when
+        // no theo cap *increases* — a cap increase can create a negative residual
+        // cycle (the kept flow becomes suboptimal for its own value), which needs
+        // cycle-canceling/dual repair (LEMON's job).  Cap decreases are safe:
+        // de-augment the excess, potentials stay valid.
+        std::vector<VALUE_TYPE> wnew(K, 0);
+        VALUE_TYPE T = 0;
+        bool warm = _line_warm() && _line_has_flow;
+        for (int i = 0; i < K; ++i) {
+            if (_line_is_emp[i]) continue;
+            const auto& theo = std::get<TheoreticalNode<intensity_type>>(nodes[topo.order[i]].get_type());
+            wnew[i] = (VALUE_TYPE)((double)theo.get_intensity() * point[theo.get_spectrum_id()]);
+            T += wnew[i];
+            if (warm && wnew[i] > _line_prev_theo[i]) warm = false;   // a cap grew -> cold
+        }
+        for (int i = 0; i < K; ++i) if (!_line_is_emp[i]) _line_prev_theo[i] = wnew[i];
+
+        if (!warm) g.reset(_line_base_cap);     // cold: zero flow, restore fixed caps
+        for (int i = 0; i < K; ++i) {
+            if (_line_is_emp[i]) continue;
+            const int arc = _line_ka[i];
+            const VALUE_TYPE wi = wnew[i];
+            if (warm) {                          // wi <= prev cap (shrink/same)
+                VALUE_TYPE cur = g.cap[arc ^ 1]; // current theo->sink flow
+                if (wi < cur) {                  // shrank below flow: de-augment excess (pot stays valid)
+                    VALUE_TYPE e = cur - wi;
+                    g.cap[arc] = 0; g.cap[arc ^ 1] = wi;
+                    g.push_flow(i, SS, e, INF);
+                } else {
+                    g.cap[arc] = wi - cur;       // slack above flow
+                }
+            } else {
+                g.cap[arc] = wi;                 // cold: reset() zeroed reverse
+            }
+        }
+
+        VALUE_TYPE c_s   = simple_trash_added ? simple_trash_cost() : (VALUE_TYPE)(-1);
+        VALUE_TYPE c_exp = (VALUE_TYPE)(-1), c_theo = (VALUE_TYPE)(-1);
+        if (experimental_trash_added || theoretical_trash_added) {
+            for (const auto& e : edges) {
+                const auto& et = e.get_type();
+                if (c_exp < 0)  if (const auto* p = std::get_if<EmpiricalTrashEdge>(&et))   c_exp = p->get_cost();
+                if (c_theo < 0) if (const auto* p = std::get_if<TheoreticalTrashEdge>(&et)) c_theo = p->get_cost();
+            }
+        }
+        auto trash_of_M = [&](VALUE_TYPE M) -> VALUE_TYPE {
+            VALUE_TYPE need = F - M;
+            if (need < 0) return INF;
+            std::array<std::pair<VALUE_TYPE, VALUE_TYPE>, 3> srcs;
+            int ns = 0;
+            if (c_exp  >= 0) srcs[ns++] = {c_exp,  E - M};
+            if (c_theo >= 0) srcs[ns++] = {c_theo, T - M};
+            if (c_s    >= 0) srcs[ns++] = {c_s,    INF};
+            std::sort(srcs.begin(), srcs.begin() + ns);
+            VALUE_TYPE cost = 0;
+            for (int k = 0; k < ns && need > 0; ++k) {
+                VALUE_TYPE take = std::min(need, srcs[k].second);
+                cost += srcs[k].first * take; need -= take;
+            }
+            return need <= 0 ? cost : INF;
+        };
+
+        // tau = per-match trash saving (constant in M for all valid trash
+        // configs).  Matching a transport unit is beneficial iff its marginal
+        // delta < tau; the objective is convex, so M* = #{units with delta<tau},
+        // capped at min(E,T).  One augment, no ternary, no second graph.
+        // tau = per-match trash saving (constant in M for all valid trash
+        // configs).  Match a transport unit iff its marginal delta < tau; the
+        // objective is convex, so M* = #{units with delta<tau}, capped min(E,T).
+        const VALUE_TYPE Mtop = std::min(E, T);
+        const VALUE_TYPE tau = (Mtop >= 1) ? (trash_of_M(0) - trash_of_M(1)) : 0;
+        if (warm) {
+            // existing matches stay optimal (costs fixed); only add newly
+            // beneficial ones with the previous potentials still valid.
+            VALUE_TYPE matched_now = 0;
+            for (int i = 0; i < K; ++i)
+                if (_line_is_emp[i]) matched_now += g.flow_of(_line_sa[i]);
+            VALUE_TYPE budget = Mtop - matched_now;
+            if (budget > 0) g.augment_levels(SS, TT, tau - 1, budget, INF, /*keep_pot=*/true);
+        } else {
+            g.augment_levels(SS, TT, tau - 1, Mtop, INF, /*keep_pot=*/false);
+        }
+
+        VALUE_TYPE matched = 0, transport = 0;
+        for (int i = 0; i < K; ++i) {
+            if (_line_is_emp[i]) { sol.emp_matched[i] = g.flow_of(_line_sa[i]); matched += sol.emp_matched[i]; }
+            else                   sol.theo_matched[i] = g.flow_of(_line_ka[i]);
+        }
+        VALUE_TYPE x = 0;
+        for (int gp = 0; gp + 1 < K; ++gp) {
+            x += sol.emp_matched[gp] - sol.theo_matched[gp];
+            sol.R[gp] = x > 0 ? x : 0;
+            sol.L[gp] = x < 0 ? -x : 0;
+            transport += (sol.R[gp] + sol.L[gp]) * topo.gap_cost[gp];
+        }
+        sol.total = transport + trash_of_M(matched);
+        _line_has_flow = true;
+        sol.valid = true;
+    }
+
     // Fills _chain_R_buf, _chain_L_buf, and all flag/cost scratch arrays from
     // the current solved flow. Must be called before _chain_run_search().
     void _chain_build_search_state() const {

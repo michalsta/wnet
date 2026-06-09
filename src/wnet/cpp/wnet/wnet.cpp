@@ -129,6 +129,10 @@ NB_MODULE(wnet_cpp, m) {
         .def(nb::init<>())
         .def_rw("factor", &CapacityScalingConfig::factor);
 
+    nb::class_<LineSSPConfig>(m, "LineSSP")
+        .def(nb::init<>())
+        .def_rw("warm", &LineSSPConfig::warm);
+
     nb::class_<FlowNode<int64_t>>(m, "FlowNode")
         .def(nb::init<LEMON_INDEX, SourceNode>())
         .def(nb::init<LEMON_INDEX, SinkNode>())
