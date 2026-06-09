@@ -96,25 +96,29 @@ public:
 };
 
 
+// Cost-bearing edges hold the *real* (unscaled, possibly fractional) cost as a
+// double.  The integer cost handed to the LEMON solver is produced later, at
+// build time, by quantize_cost() (round(scale * real) for p != 1, truncate for
+// p == 1).  See decompositable_graph.hpp.
 class MatchingEdge
 {
-    const LEMON_INT cost;
+    const double cost;
 public:
     MatchingEdge() = delete;
-    MatchingEdge(LEMON_INT cost)
+    MatchingEdge(double cost)
         : cost(cost) {}
-    LEMON_INT get_cost() const { return cost; }
+    double get_cost() const { return cost; }
 };
 
 class SrcToEmpiricalEdge {};
 class TheoreticalToSinkEdge {};
 class SimpleTrashEdge {
-    const LEMON_INT cost;
+    const double cost;
 public:
     SimpleTrashEdge() = delete;
-    SimpleTrashEdge(LEMON_INT cost)
+    SimpleTrashEdge(double cost)
         : cost(cost) {}
-    LEMON_INT get_cost() const { return cost; }
+    double get_cost() const { return cost; }
 };
 
 // Adjacency edge used by the 1D chain optimization: cost equals the gap
@@ -123,34 +127,34 @@ public:
 // as part of a chain through which flow is routed, with accumulated gap-cost
 // equal to the metric distance in 1D.
 class ChainEdge {
-    const LEMON_INT cost;
+    const double cost;
 public:
     ChainEdge() = delete;
-    ChainEdge(LEMON_INT cost)
+    ChainEdge(double cost)
         : cost(cost) {}
-    LEMON_INT get_cost() const { return cost; }
+    double get_cost() const { return cost; }
 };
 
 // Asymmetric trash: EmpiricalNode → Sink, skipping the theoretical layer.
 // Allows empirical signal to be discarded at a per-unit cost without needing
 // a matching theoretical peak. Exclusive with SimpleTrashEdge.
 class EmpiricalTrashEdge {
-    const LEMON_INT cost;
+    const double cost;
 public:
     EmpiricalTrashEdge() = delete;
-    EmpiricalTrashEdge(LEMON_INT cost) : cost(cost) {}
-    LEMON_INT get_cost() const { return cost; }
+    EmpiricalTrashEdge(double cost) : cost(cost) {}
+    double get_cost() const { return cost; }
 };
 
 // Asymmetric trash: Source → TheoreticalNode, skipping the empirical layer.
 // Allows theoretical capacity to be phantom-filled at a per-unit cost without
 // a matching empirical peak. Exclusive with SimpleTrashEdge.
 class TheoreticalTrashEdge {
-    const LEMON_INT cost;
+    const double cost;
 public:
     TheoreticalTrashEdge() = delete;
-    TheoreticalTrashEdge(LEMON_INT cost) : cost(cost) {}
-    LEMON_INT get_cost() const { return cost; }
+    TheoreticalTrashEdge(double cost) : cost(cost) {}
+    double get_cost() const { return cost; }
 };
 
 using FlowEdgeType = std::variant<MatchingEdge, SrcToEmpiricalEdge, TheoreticalToSinkEdge, SimpleTrashEdge, ChainEdge, EmpiricalTrashEdge, TheoreticalTrashEdge>;
@@ -177,15 +181,16 @@ public:
         return result;
     };
 
-    LEMON_INT get_cost() const {
-        return std::visit([](const auto& arg) -> LEMON_INT {
+    // Real (unscaled) cost.  Quantised to the solver's integer cost at build.
+    double get_cost() const {
+        return std::visit([](const auto& arg) -> double {
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, MatchingEdge>) {
                 return arg.get_cost();
             } else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {
-                return 0;
+                return 0.0;
             } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
-                return 0;
+                return 0.0;
             } else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {
                 return arg.get_cost();
             } else if constexpr (std::is_same_v<T, ChainEdge>) {

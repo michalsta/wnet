@@ -5,7 +5,7 @@ Wasserstein Network (wnet) is a Python/C++ library for working with Wasserstein 
 ## Features
 - Wasserstein and Truncated Wasserstein distance between multidimensional distributions (dimensions 1–20)
 - Three distance metrics: L1, L2, L∞
-- Order-p (Lp) Wasserstein for any integer p ≥ 1 (per-pair cost = `ground_distance**p`, result is the p-th root)
+- Order-p (Lp) Wasserstein for any real p ≥ 1 (per-pair cost = `ground_distance**p`, result is the p-th root; fractional p via automatic cost scaling)
 - Derivatives with respect to peak intensities and spectrum mixture proportions
 - Position gradients (∂cost/∂position) with warm-restart re-solving after peak position updates
 - Support for distribution mixtures and efficient recalculation with changed mixture proportions
@@ -51,11 +51,19 @@ and the returned value is the p-th root of the optimal transport cost:
 # Quadratic (W2) Wasserstein distance with a Euclidean ground metric
 print(WassersteinDistance(S1, S2, DistanceMetric.L2, p=2))
 print(TruncatedWassersteinDistance(S1, S2, DistanceMetric.L2, max_distance=3.0, p=2))
+
+# Fractional orders work too (e.g. p = 1.5)
+print(WassersteinDistance(S1, S2, DistanceMetric.L2, p=1.5))
 ```
 
-`p` must be an integer ≥ 1. The ground metric (L1/L2/L∞) is chosen independently of `p`.
+`p` can be any real number ≥ 1. The ground metric (L1/L2/L∞) is chosen independently of `p`.
 For `p != 1` the dense transport network is always used — the fast 1D chain solver is only
 valid for `p == 1`, since exponentiated step costs are not additive along a chain.
+
+`p == 1` is bit-exact with the classic 1-Wasserstein distance. For `p != 1` the cost
+`d**p` is fractional, so the integer min-cost-flow solver works in automatically scaled
+units (`round(scale_factor() * d**p)`); the public results divide that scale back out, so
+no tuning is needed.
 
 > At the `WassersteinNetwork` level, `total_cost()` and all derivatives are in `W_p**p`
 > units (the sum of `d**p · flow`); take the p-th root for the literal `W_p` distance,

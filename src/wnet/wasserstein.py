@@ -9,7 +9,7 @@ def WassersteinDistance(
     distribution1: Distribution,
     distribution2: Distribution,
     distance: DistanceMetric,
-    p: int = 1,
+    p: float = 1.0,
     force_dense_1d: bool = False,
     solver=None,
     method: str = None,
@@ -24,7 +24,7 @@ def WassersteinDistance(
         distribution1 (Distribution): The first distribution.
         distribution2 (Distribution): The second distribution.
         distance (DistanceMetric): The ground metric to use (e.g. DistanceMetric.L1, DistanceMetric.L2).
-        p (int): Wasserstein transport order (integer >= 1). p=1 is the classic 1-Wasserstein; p=2 is the quadratic W_2. p != 1 forces the dense factory.
+        p (float): Wasserstein transport order, any real number >= 1. p=1 is the classic 1-Wasserstein; p=2 is the quadratic W_2; fractional p (e.g. 1.5) is supported via automatic cost scaling. p != 1 forces the dense factory.
         force_dense_1d (bool): In 1D, force the dense factory. See WassersteinNetwork for details.
         solver: Solver config object (e.g. NetworkSimplex(), CostScaling()). Defaults to NetworkSimplex().
         method (str): Deprecated. Use solver= instead.
@@ -58,7 +58,7 @@ def TruncatedWassersteinDistance(
     distribution2: Distribution,
     distance: DistanceMetric,
     max_distance: float,
-    p: int = 1,
+    p: float = 1.0,
     force_dense_1d: bool = False,
     solver=None,
     method: str = None,
@@ -75,7 +75,7 @@ def TruncatedWassersteinDistance(
         distribution2 (Distribution): The second distribution.
         distance (DistanceMetric): The ground metric to use (e.g. DistanceMetric.L1, DistanceMetric.L2).
         max_distance (float): The maximum allowed per-pair ground distance (in distance units).
-        p (int): Wasserstein transport order (integer >= 1). p != 1 forces the dense factory.
+        p (float): Wasserstein transport order, any real number >= 1. p != 1 forces the dense factory (via automatic cost scaling).
         force_dense_1d (bool): In 1D, force the dense factory. See WassersteinNetwork for details.
         solver: Solver config object (e.g. NetworkSimplex(), CostScaling()). Defaults to NetworkSimplex().
         method (str): Deprecated. Use solver= instead.

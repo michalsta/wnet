@@ -74,6 +74,44 @@ using SolverConfig = std::variant<
 #include "distances.hpp"
 
 #include <iostream>
+#include <cstdint>
+
+// ---------------------------------------------------------------------------
+// Cost scaling for order-p (Lp) Wasserstein.
+//
+// Edges carry their *real* (unscaled, possibly fractional) cost as a double.
+// For p != 1 the cost d^p is fractional, so truncating straight to int64 would
+// destroy precision for small distances.  Instead we pick an integer scale S
+// from the global maximum real cost and store round(S * real) in the solver's
+// integer cost map, undoing /S at the public boundary.  p == 1 is special-cased
+// to S == 1 and plain truncation, reproducing the legacy integer behaviour
+// bit-for-bit.
+// ---------------------------------------------------------------------------
+
+// Choose S so the largest scaled cost lands near TARGET = 2^52: well below the
+// NetworkSimplex potential-overflow ceiling (ART_COST = 2^62) and inside the
+// double exact-integer range, so round(S*cost) and the /S unscale are exact.
+inline int64_t pick_cost_scale(double c_max, bool p_is_one) {
+    if (p_is_one || !(c_max > 0.0)) return 1;
+    constexpr double TARGET = 4503599627370496.0; // 2^52
+    const double s = std::floor(TARGET / c_max);
+    return s >= 1.0 ? static_cast<int64_t>(s) : 1;
+}
+
+// Quantise a real edge cost to the solver's integer cost type.
+// p == 1: truncate the raw value (legacy, exact).  p != 1: round(S * real).
+template <typename VALUE_TYPE>
+inline VALUE_TYPE quantize_cost(double real_cost, int64_t scale, bool p_is_one) {
+    const double scaled = p_is_one ? real_cost : static_cast<double>(scale) * real_cost;
+    if (!std::isfinite(scaled) ||
+        scaled > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
+        throw std::overflow_error(
+            "quantize_cost: scaled cost " + std::to_string(scaled) +
+            " overflows the solver cost type (max " +
+            std::to_string(std::numeric_limits<VALUE_TYPE>::max()) + ")");
+    return p_is_one ? static_cast<VALUE_TYPE>(scaled)
+                    : static_cast<VALUE_TYPE>(std::llround(scaled));
+}
 
 
 template <typename VALUE_TYPE, typename intensity_type>
@@ -99,6 +137,11 @@ class WassersteinNetworkSubgraph {
     const size_t no_target_distributions;
     bool built = false;
     int _cold_starts_via_run = 0;
+
+    // Cost scaling (set by the owning network at build): integer cost map holds
+    // quantize_cost(real, _scale, _p_is_one).  _p_is_one => legacy S=1 truncation.
+    int64_t _scale = 1;
+    bool _p_is_one = true;
 
     // Cached residual/derivative context.  The context is a pure function of
     // the post-solve solver state (potentials, flow, capacities, costs),
@@ -395,7 +438,7 @@ public:
     WassersteinNetworkSubgraph(WassersteinNetworkSubgraph&&) = delete;
     WassersteinNetworkSubgraph& operator=(WassersteinNetworkSubgraph&&) = delete;
 
-    void add_simple_trash(VALUE_TYPE cost) {
+    void add_simple_trash(double cost) {
         if (simple_trash_added)
             throw std::runtime_error("Simple trash edge already added.");
         if (experimental_trash_added || theoretical_trash_added)
@@ -411,7 +454,7 @@ public:
         simple_trash_added = true;
     }
 
-    void add_experimental_trash(VALUE_TYPE cost) {
+    void add_experimental_trash(double cost) {
         if (simple_trash_added)
             throw std::runtime_error("add_experimental_trash() is exclusive with simple trash.");
         if (experimental_trash_added)
@@ -427,7 +470,7 @@ public:
         experimental_trash_added = true;
     }
 
-    void add_theoretical_trash(VALUE_TYPE cost) {
+    void add_theoretical_trash(double cost) {
         if (simple_trash_added)
             throw std::runtime_error("add_theoretical_trash() is exclusive with simple trash.");
         if (theoretical_trash_added)
@@ -443,10 +486,12 @@ public:
         theoretical_trash_added = true;
     }
 
-    VALUE_TYPE simple_trash_cost() const {
+    // Real (unscaled) simple-trash cost.  The scaled value used inside the
+    // solver/derivatives is costs_map[arc at simple_trash_idx].
+    double simple_trash_cost() const {
         if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max())
             throw std::runtime_error("Simple trash edge not added.");
-        return std::visit([](const auto& arg) -> VALUE_TYPE {
+        return std::visit([](const auto& arg) -> double {
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, SimpleTrashEdge>) return arg.get_cost();
             else { throw std::runtime_error("Invalid FlowEdgeType at simple_trash_idx"); };
@@ -471,15 +516,17 @@ public:
             node_supply_map[lemon_graph.nodeFromId(ii)] = 0;
 
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
-            costs_map[lemon_graph.arcFromId(ii)] = std::visit([&](const auto& arg) {
+            costs_map[lemon_graph.arcFromId(ii)] = std::visit([&](const auto& arg) -> VALUE_TYPE {
                     using T = std::decay_t<decltype(arg)>;
-                    if constexpr (std::is_same_v<T, MatchingEdge>) return arg.get_cost();
+                    // Cost-bearing edges hold a real (double) cost; quantise it to
+                    // the integer solver cost here using the network-wide scale.
+                    if constexpr (std::is_same_v<T, MatchingEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
                     else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
-                    else if constexpr (std::is_same_v<T, SimpleTrashEdge>) { simple_trash_idx = ii; return arg.get_cost(); }
-                    else if constexpr (std::is_same_v<T, ChainEdge>) return arg.get_cost();
-                    else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) return arg.get_cost();
-                    else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) return arg.get_cost();
+                    else if constexpr (std::is_same_v<T, SimpleTrashEdge>) { simple_trash_idx = ii; return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one); }
+                    else if constexpr (std::is_same_v<T, ChainEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
+                    else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
+                    else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
 
@@ -551,6 +598,14 @@ public:
             _chain_theo_trash_fwd.resize(K); _chain_theo_trash_rev.resize(K);
         }
         built = true;
+    }
+
+    // Set by the owning network before build() so build_impl() quantises costs
+    // with the network-wide scale.  Kept separate from build() to leave the
+    // Python-facing build(config) signature unchanged.
+    void set_cost_scaling(int64_t scale, bool p_is_one) {
+        _scale = scale;
+        _p_is_one = p_is_one;
     }
 
     void build(SolverConfig config = NetworkSimplexConfig{}) {
@@ -1060,7 +1115,7 @@ public:
         const std::vector<Distribution_t*>& new_theoretical,
         std::span<double> emp_grad,
         std::vector<std::span<double>>& theo_grads,
-        int p = 1
+        double p = 1.0
     ) const {
         static constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
         for (const auto& e : _matching_edge_cache) {
@@ -1070,11 +1125,12 @@ public:
             const auto theo_pt = new_theoretical[e.spectrum_id]->get_point(e.theo_peak_index);
             const auto g = DistMetric::grad_x(emp_pt, theo_pt);
             // Cost is d^p, so d(cost)/dx = p * d^(p-1) * grad_x(d).  p == 1 gives
-            // factor 1 (bit-identical to the legacy W_1 gradient).
+            // factor 1 (bit-identical to the legacy W_1 gradient).  The gradient is
+            // in REAL units (independent of the cost scale).
             double factor = 1.0;
-            if (p != 1) {
+            if (p != 1.0) {
                 const double d = DistMetric::dist(emp_pt, theo_pt);
-                factor = static_cast<double>(p) * std::pow(d, static_cast<double>(p - 1));
+                factor = p * std::pow(d, p - 1.0);
             }
             for (size_t d = 0; d < DIM; ++d) {
                 emp_grad[e.emp_peak_index * DIM + d]                   += static_cast<double>(flow) * factor * g[d];
@@ -1330,7 +1386,9 @@ public:
 
         ctx.trash_cost = 0; ctx.src_adjust = 0; ctx.sink_adjust = 0;
         if (!ctx.asymmetric) {
-            ctx.trash_cost  = simple_trash_cost();
+            // Scaled trash cost (same units as the residual distances, which
+            // come from the scaled costs_map).
+            ctx.trash_cost  = costs_map[lemon_graph.arcFromId(simple_trash_idx)];
             ctx.src_adjust  = ctx.supply_fixed ? -ctx.trash_cost : 0;
             ctx.sink_adjust = ctx.supply_fixed ?  0 : ctx.trash_cost;
         }
@@ -1453,8 +1511,9 @@ class WassersteinNetwork {
 
     intensity_type _isolated_empirical_intensity = 0;
     std::vector<intensity_type> _isolated_theoretical_intensity;
-    VALUE_TYPE _isolated_exp_trash_cost = 0;
-    VALUE_TYPE _isolated_theo_trash_cost = 0;
+    // Real (unscaled) per-unit trash costs for isolated/dead-end nodes.
+    double _isolated_exp_trash_cost = 0;
+    double _isolated_theo_trash_cost = 0;
     std::vector<double> _last_point;
 
     bool built = false;
@@ -1464,7 +1523,14 @@ class WassersteinNetwork {
     // by the high-level Python wrappers.  p == 1 reproduces the legacy behaviour
     // bit-for-bit.  p != 1 requires the dense factory (chain cost is not additive
     // under exponentiation).
-    int _p_order = 1;
+    double _p_order = 1.0;
+
+    // Cost scaling: integer edge costs are quantize_cost(real, _scale, p==1).
+    // _scale is chosen at build() from the largest real cost (matching + trash).
+    // p == 1 forces _scale == 1 (legacy truncation).  _max_real_cost tracks the
+    // running maximum real edge/trash cost so build() can size _scale.
+    int64_t _scale = 1;
+    double _max_real_cost = 0.0;
 
 public:
     WassersteinNetwork(std::vector<FlowNode<intensity_type>>&& nodes_,
@@ -1472,19 +1538,22 @@ public:
                        size_t no_theoretical_spectra_,
                        std::vector<size_t>&& theoretical_spectra_sizes_,
                        std::vector<LEMON_INDEX>&& dead_end_node_ids_,
-                       int p_order = 1
+                       double p_order = 1.0,
+                       double max_real_cost = 0.0
     ) :
     nodes(std::move(nodes_)),
     edges(std::move(edges_)),
     _no_theoretical_spectra(no_theoretical_spectra_),
     _theoretical_spectra_sizes(std::move(theoretical_spectra_sizes_)),
     dead_end_node_ids(std::move(dead_end_node_ids_)),
-    _p_order(p_order)
+    _p_order(p_order),
+    _max_real_cost(max_real_cost)
     {
         build_subgraphs();
     };
 
-    int p_order() const { return _p_order; }
+    double p_order() const { return _p_order; }
+    int64_t scale_factor() const { return _scale; }
 
     WassersteinNetwork(const WassersteinNetwork&) = delete;
     WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
@@ -1501,7 +1570,9 @@ public:
         _isolated_theo_trash_cost(other._isolated_theo_trash_cost),
         _last_point(std::move(other._last_point)),
         built(other.built),
-        _p_order(other._p_order)
+        _p_order(other._p_order),
+        _scale(other._scale),
+        _max_real_cost(other._max_real_cost)
     {
         other.built = false;
     }
@@ -1647,36 +1718,54 @@ public:
         }
     }
 
-    void add_simple_trash(VALUE_TYPE cost) {
+    void add_simple_trash(double cost) {
         if (built)
             throw std::runtime_error("add_simple_trash() must be called before build(), not after.");
         _isolated_exp_trash_cost = cost;
         _isolated_theo_trash_cost = cost;
+        _max_real_cost = std::max(_max_real_cost, cost);
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_simple_trash(cost);
     };
 
-    void add_experimental_trash(VALUE_TYPE cost) {
+    void add_experimental_trash(double cost) {
         if (built)
             throw std::runtime_error("add_experimental_trash() must be called before build().");
         _isolated_exp_trash_cost = cost;
+        _max_real_cost = std::max(_max_real_cost, cost);
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_experimental_trash(cost);
     };
 
-    void add_theoretical_trash(VALUE_TYPE cost) {
+    void add_theoretical_trash(double cost) {
         if (built)
             throw std::runtime_error("add_theoretical_trash() must be called before build().");
         _isolated_theo_trash_cost = cost;
+        _max_real_cost = std::max(_max_real_cost, cost);
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_theoretical_trash(cost);
     };
 
     void build(SolverConfig config = NetworkSimplexConfig{}) {
-        for (auto& flow_subgraph : flow_subgraphs)
+        // Choose one global cost scale from the largest real cost across the whole
+        // network (matching + trash), so every subgraph's integer costs — and the
+        // summed total_cost — share the same units.  p == 1 keeps _scale == 1.
+        _scale = pick_cost_scale(_max_real_cost, _p_order == 1.0);
+        const bool p_is_one = (_p_order == 1.0);
+        for (auto& flow_subgraph : flow_subgraphs) {
+            flow_subgraph->set_cost_scaling(_scale, p_is_one);
             flow_subgraph->build(config);
+        }
         built = true;
     };
+
+    // Quantised (scaled) isolated trash costs, matching the subgraph cost map.
+    VALUE_TYPE _isolated_exp_trash_cost_scaled() const {
+        return quantize_cost<VALUE_TYPE>(_isolated_exp_trash_cost, _scale, _p_order == 1.0);
+    }
+    VALUE_TYPE _isolated_theo_trash_cost_scaled() const {
+        return quantize_cost<VALUE_TYPE>(_isolated_theo_trash_cost, _scale, _p_order == 1.0);
+    }
 
     void solve()
     {
@@ -1693,13 +1782,17 @@ public:
             flow_subgraph->set_point(point);
     };
 
+    // Total cost in SCALED units (sum of scaled per-subgraph costs plus scaled
+    // isolated-trash contributions).  The Python wrapper divides by scale_factor()
+    // to recover the real W_p**p value.
     VALUE_TYPE total_cost() const {
         VALUE_TYPE cost = 0;
         for (const auto& flow_subgraph : flow_subgraphs)
             cost += flow_subgraph->total_cost();
-        cost += _isolated_exp_trash_cost * _isolated_empirical_intensity;
+        cost += _isolated_exp_trash_cost_scaled() * _isolated_empirical_intensity;
+        const VALUE_TYPE theo_trash_scaled = _isolated_theo_trash_cost_scaled();
         for (size_t s = 0; s < _no_theoretical_spectra; ++s)
-            cost += static_cast<VALUE_TYPE>(_isolated_theo_trash_cost * _isolated_theoretical_intensity[s] * _last_point[s]);
+            cost += static_cast<VALUE_TYPE>(theo_trash_scaled * _isolated_theoretical_intensity[s] * _last_point[s]);
         return cost;
     };
 
@@ -1807,9 +1900,10 @@ public:
                                   : sg->signal_part_derivatives();
             result.insert(result.end(), sg_derivs.begin(), sg_derivs.end());
         }
+        const VALUE_TYPE theo_trash_scaled = _isolated_theo_trash_cost_scaled();
         for (LEMON_INDEX dead_end_id : dead_end_node_ids) {
             if (auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&nodes[dead_end_id].get_type()))
-                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), _isolated_theo_trash_cost);
+                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), theo_trash_scaled);
         }
         return result;
     }
@@ -1823,9 +1917,10 @@ public:
             for (auto& [spec_id, deriv] : sg_derivs)
                 accum[spec_id] += deriv;
         }
+        const VALUE_TYPE theo_trash_scaled = _isolated_theo_trash_cost_scaled();
         for (size_t s = 0; s < _no_theoretical_spectra; ++s) {
             if (_isolated_theoretical_intensity[s] != 0)
-                accum[s] += static_cast<VALUE_TYPE>(_isolated_theo_trash_cost * _isolated_theoretical_intensity[s]);
+                accum[s] += static_cast<VALUE_TYPE>(theo_trash_scaled * _isolated_theoretical_intensity[s]);
         }
         std::vector<std::pair<size_t, VALUE_TYPE>> result;
         result.reserve(_no_theoretical_spectra);
@@ -1936,10 +2031,10 @@ public:
                     const double d = DistMetric::dist(
                         new_empirical->get_point(emp_t.get_peak_index()),
                         new_theoretical[theo_t.get_spectrum_id()]->get_point(theo_t.get_peak_index()));
-                    const double cost = (_p_order == 1) ? d : std::pow(d, static_cast<double>(_p_order));
-                    if (cost > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
-                        throw std::overflow_error("update_positions_and_solve(): cost d^p overflows VALUE_TYPE.");
-                    new_costs[ii] = static_cast<VALUE_TYPE>(cost);
+                    const double real_cost = (_p_order == 1.0) ? d : std::pow(d, _p_order);
+                    // Reuse the fixed build-time scale so the warm-restarted basis
+                    // stays in the same cost units.
+                    new_costs[ii] = quantize_cost<VALUE_TYPE>(real_cost, _scale, _p_order == 1.0);
                 } else if (std::holds_alternative<ChainEdge>(edge.get_type())) {
                     auto get_pos_1d = [&](const FlowNode<intensity_type>& n) -> double {
                         const auto& nt = n.get_type();
@@ -1950,9 +2045,8 @@ public:
                         throw std::runtime_error("update_positions_and_solve(): chain edge connects non-peak node.");
                     };
                     const double gap = std::abs(get_pos_1d(edge.get_start_node()) - get_pos_1d(edge.get_end_node()));
-                    if (gap > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
-                        throw std::overflow_error("update_positions_and_solve(): chain gap overflows VALUE_TYPE.");
-                    new_costs[ii] = static_cast<VALUE_TYPE>(gap);
+                    // Chain implies p == 1 (scale == 1): truncate, matching build.
+                    new_costs[ii] = quantize_cost<VALUE_TYPE>(gap, _scale, _p_order == 1.0);
                 }
                 // All other edge types (SrcToEmpirical, TheoreticalToSink, trash, …)
                 // have position-independent costs; apply_new_costs ignores them (new_costs[ii] = 0).
@@ -2066,12 +2160,13 @@ public:
         const Distribution_t* empirical_spectrum,
         const std::vector<Distribution_t*>& theoretical_spectra,
         VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max(),
-        int p = 1
+        double p = 1.0
     )
     {
-        if (p < 1)
-            throw std::invalid_argument("Wasserstein order p must be >= 1.");
+        if (!(std::isfinite(p) && p >= 1.0))
+            throw std::invalid_argument("Wasserstein order p must be a finite number >= 1.");
         using intensity_type = typename Distribution_t::intensity_type;
+        double max_real_cost = 0.0;  // largest matching cost; sizes the build-time scale
         std::vector<FlowNode<intensity_type>> nodes;
         std::vector<FlowEdge<intensity_type>> edges;
         std::vector<LEMON_INDEX> dead_end_node_ids;
@@ -2135,19 +2230,16 @@ public:
             {
                 auto [empirical_idx, theoretical_peak_idx] = it.get_indices();
                 double dist = it.get_distance();
-                // Order-p cost: d^p.  p == 1 leaves dist unchanged (pow(d,1) == d).
-                double cost = (p == 1) ? dist : std::pow(dist, static_cast<double>(p));
-                if (cost > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
-                    throw std::overflow_error(
-                        "Cost d^p = " + std::to_string(cost) +
-                        " (d=" + std::to_string(dist) + ", p=" + std::to_string(p) +
-                        ") overflows VALUE_TYPE (max " +
-                        std::to_string(std::numeric_limits<VALUE_TYPE>::max()) + ")");
+                // Order-p cost: d^p (real, unscaled).  p == 1 leaves dist unchanged
+                // (pow(d,1) == d).  Quantisation to the integer solver cost happens
+                // at build(), once the global scale is known.
+                double real_cost = (p == 1.0) ? dist : std::pow(dist, p);
+                if (real_cost > max_real_cost) max_real_cost = real_cost;
                 edges.emplace_back(FlowEdge<intensity_type>(
                     edges.size(),
                     nodes[empirical_idx + 2], // +2 to skip the source and sink nodes
                     nodes[first_theoretical_node_idx + theoretical_peak_idx],
-                    MatchingEdge(static_cast<VALUE_TYPE>(cost))
+                    MatchingEdge(real_cost)
                 ));
             }
         }
@@ -2165,7 +2257,8 @@ public:
             theoretical_spectra.size(),
             std::move(theoretical_spectra_sizes),
             std::move(dead_end_node_ids),
-            p
+            p,
+            max_real_cost
         );
     };
 
@@ -2175,7 +2268,7 @@ public:
         const std::vector<Distribution_t*>& theoretical_spectra,
         DistanceMetric distance_metric,
         VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max(),
-        int p = 1
+        double p = 1.0
     ) {
         if (distance_metric == DistanceMetric::L1) {
             return create<Distribution_t, L1Metric>(empirical_spectrum, theoretical_spectra, max_dist, p);
@@ -2205,11 +2298,11 @@ public:
         const std::vector<VectorDistribution<1, double, intensity_type_>*>& theoretical_spectra,
         DistanceMetric /* distance_metric */,
         VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max(),
-        int p = 1
+        double p = 1.0
     ) {
         // The chain factory's gap costs are additive along the line, which only
         // equals the transport cost for p == 1 (|a-c|^p != |a-b|^p + |b-c|^p).
-        if (p != 1)
+        if (p != 1.0)
             throw std::invalid_argument(
                 "create_1d (chain factory) only supports p=1; use the dense factory for p!=1.");
         using intensity_type = intensity_type_;
@@ -2315,19 +2408,19 @@ public:
                         "Chain gap " + std::to_string(gap_d) +
                         " overflows VALUE_TYPE (max " +
                         std::to_string(std::numeric_limits<VALUE_TYPE>::max()) + ")");
-                const VALUE_TYPE gap = static_cast<VALUE_TYPE>(gap_d);
-                // Bidirectional: LEMON digraph needs two arcs for flow in
-                // either direction. Both carry cost = gap.
+                // Store the real gap; build() quantises (p==1 => truncation, the
+                // legacy behaviour).  Bidirectional: LEMON needs two arcs for flow
+                // in either direction. Both carry cost = gap.
                 edges.emplace_back(FlowEdge<intensity_type>(
                     edges.size(),
                     nodes[entries[i-1].node_id],
                     nodes[entries[i].node_id],
-                    ChainEdge(gap)));
+                    ChainEdge(gap_d)));
                 edges.emplace_back(FlowEdge<intensity_type>(
                     edges.size(),
                     nodes[entries[i].node_id],
                     nodes[entries[i-1].node_id],
-                    ChainEdge(gap)));
+                    ChainEdge(gap_d)));
             }
         };
 

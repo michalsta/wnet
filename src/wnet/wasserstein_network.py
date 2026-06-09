@@ -32,7 +32,7 @@ class WassersteinNetwork:
         distance (DistanceFunction): A callable that computes the distance between points in the distributions.
         max_distance (float | None): The maximum distance to consider. If None or infinity, it defaults to the maximum representable value.
         force_dense_1d (bool): In 1D, force the O(m*n) dense factory instead of the O(m+n) chain factory. Default False uses the chain factory in 1D. Note: max_distance semantics differ between factories — chain only uses it to split the chain into components, while dense also caps per-pair cost.
-        p (int): Wasserstein transport order (>= 1). Each matching edge costs ground_distance**p, so total_cost() and all derivatives are in W_p**p units; take the p-th root for the literal W_p distance (the high-level WassersteinDistance() does this). p must be an integer. p != 1 always uses the dense factory (the 1D chain factory is invalid for p != 1, since exponentiated gap costs are not additive); in 1D with p != 1 the chain factory is bypassed automatically.
+        p (float): Wasserstein transport order, any real number >= 1. Each matching edge costs ground_distance**p, so total_cost() and all derivatives are in W_p**p units; take the p-th root for the literal W_p distance (the high-level WassersteinDistance() does this). For p != 1 the cost is fractional, so the integer solver works in auto-scaled units (round(scale_factor() * d**p)); the public total_cost()/derivatives divide that back out. p == 1 is bit-exact with the legacy 1-Wasserstein (scale_factor() == 1, truncation). p != 1 always uses the dense factory (the 1D chain factory is invalid for p != 1, since exponentiated gap costs are not additive); in 1D with p != 1 the chain factory is bypassed automatically.
         solver: Solver configuration object. One of NetworkSimplex(), CostScaling(), CycleCanceling(), or CapacityScaling(). Defaults to NetworkSimplex() (warm restarts, BLOCK_SEARCH pivot).
     """
 
@@ -50,7 +50,7 @@ class WassersteinNetwork:
         distance: DistanceMetric,
         max_distance: Optional[float] = None,
         force_dense_1d: bool = False,
-        p: int = 1,
+        p: float = 1.0,
         solver=None,
         method: str = None,
     ) -> None:
@@ -64,16 +64,16 @@ class WassersteinNetwork:
             solver = self._SOLVER_METHODS[method]()
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
-        if int(p) != p or p < 1:
-            raise ValueError(f"Wasserstein order p must be an integer >= 1, got {p!r}.")
-        p = int(p)
+        p = float(p)
+        if not (p >= 1.0) or not np.isfinite(p):
+            raise ValueError(f"Wasserstein order p must be a real number >= 1, got {p!r}.")
         self._distance = distance
         self._p = p
         vec_base = base_distribution.vecdist
         vec_targets = [t.vecdist for t in target_distributions]
         # The 1D chain factory is only valid for p == 1; for p != 1 fall back to
         # the dense factory (whose per-pair d**p costs are the correct transport cost).
-        use_chain = base_distribution.dimension == 1 and not force_dense_1d and p == 1
+        use_chain = base_distribution.dimension == 1 and not force_dense_1d and p == 1.0
         if use_chain:
             self.wnet = CWassersteinNetworkFactory.create_1d(
                 vec_base, vec_targets, distance, max_distance, p
@@ -94,7 +94,7 @@ class WassersteinNetwork:
         self.build = lambda: _wnet.build(_solver)
 
         self.solve = self.wnet.solve
-        self.total_cost = self.wnet.total_cost
+        self.scale_factor = self.wnet.scale_factor
         self.get_subgraph = self.wnet.get_subgraph
         self.no_subgraphs = self.wnet.no_subgraphs
         self.flows_for_target = self.wnet.flows_for_target
@@ -114,26 +114,38 @@ class WassersteinNetwork:
         """Returns a string representation of the Wasserstein network."""
         return self.wnet.__str__()
 
-    def signal_part_derivatives(self) -> dict[int, dict[int, int]]:
+    def total_cost(self) -> float:
+        """Total transport cost in real ``W_p**p`` units (= sum of d**p * flow).
+
+        Internally the integer solver works in scaled units; this divides the raw
+        scaled cost by the auto-chosen ``scale_factor()`` to recover the real
+        value.  For ``p == 1`` the scale is 1, so this is the exact integer cost
+        (as a float).  Take the p-th root for the literal ``W_p`` distance.
+        """
+        return self.wnet.total_cost() / self.wnet.scale_factor()
+
+    def signal_part_derivatives(self) -> dict[int, dict[int, float]]:
         """Compute the marginal cost of increasing each theoretical signal by 1.
 
-        Returns a nested dict mapping spectrum_id -> {peak_index -> derivative}.
-        Aggregates across all subgraphs.
+        Returns a nested dict mapping spectrum_id -> {peak_index -> derivative},
+        in real ``W_p**p`` units (un-scaled by ``scale_factor()``).
         """
-        ret: dict[int, dict[int, int]] = {}
+        s = self.wnet.scale_factor()
+        ret: dict[int, dict[int, float]] = {}
         for spec_id, peak_idx, deriv in self.wnet.signal_part_derivatives():
-            ret.setdefault(spec_id, {})[peak_idx] = deriv
+            ret.setdefault(spec_id, {})[peak_idx] = deriv / s
         return ret
 
     def spectrum_proportion_derivatives(self) -> np.ndarray:
         """Gradient of total cost w.r.t. scaling each spectrum's proportion.
 
         Aggregates across all subgraphs.  Returns array of derivatives indexed
-        by spectrum_id (0..n-1).
+        by spectrum_id (0..n-1), in real ``W_p**p`` units (un-scaled).
         """
-        return np.array([v for _, v in self.wnet.spectrum_proportion_derivatives()])
+        s = self.wnet.scale_factor()
+        return np.array([v / s for _, v in self.wnet.spectrum_proportion_derivatives()])
 
-    def signal_part_derivatives_fast_approx(self) -> dict[int, dict[int, int]]:
+    def signal_part_derivatives_fast_approx(self) -> dict[int, dict[int, float]]:
         """Fast, APPROXIMATE signal_part_derivatives().
 
         Uses the pure dual-potential difference instead of the residual
@@ -141,16 +153,18 @@ class WassersteinNetwork:
         gradient — a lower bound on the true marginal, exact only for peaks on
         the optimal flow support.  Opt-in; not a drop-in for the exact one.
         """
-        ret: dict[int, dict[int, int]] = {}
+        s = self.wnet.scale_factor()
+        ret: dict[int, dict[int, float]] = {}
         for spec_id, peak_idx, deriv in self.wnet.signal_part_derivatives_fast_approx():
-            ret.setdefault(spec_id, {})[peak_idx] = deriv
+            ret.setdefault(spec_id, {})[peak_idx] = deriv / s
         return ret
 
     def spectrum_proportion_derivatives_fast_approx(self) -> np.ndarray:
         """Fast, APPROXIMATE spectrum_proportion_derivatives() (see
         signal_part_derivatives_fast_approx for the accuracy caveat)."""
+        s = self.wnet.scale_factor()
         return np.array(
-            [v for _, v in self.wnet.spectrum_proportion_derivatives_fast_approx()]
+            [v / s for _, v in self.wnet.spectrum_proportion_derivatives_fast_approx()]
         )
 
     def update_positions_and_get_gradient(
