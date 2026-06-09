@@ -438,124 +438,124 @@ NB_MODULE(wnet_cpp, m) {
         .def_ro("index", &Distribution<LEMON_INT>::Point_t::second);
 
     nb::class_<WassersteinNetworkFactory<int64_t>>(m, "CWassersteinNetworkFactory")
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<1, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<1, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #if WNET_MAX_DIM >= 2
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<2, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<2, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 3
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<3, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<3, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 4
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<4, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<4, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 5
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<5, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<5, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 6
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<6, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<6, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 7
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<7, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<7, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 8
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<8, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<8, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 9
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<9, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<9, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 10
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<10, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<10, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 11
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<11, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<11, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 12
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<12, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<12, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 13
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<13, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<13, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 14
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<14, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<14, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 15
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<15, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<15, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 16
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<16, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<16, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 17
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<17, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<17, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 18
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<18, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<18, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 19
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<19, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<19, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 20
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<20, double, LEMON_INT>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<20, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<1, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<1, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #if WNET_MAX_DIM >= 2
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<2, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<2, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 3
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<3, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<3, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 4
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<4, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<4, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 5
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<5, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<5, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 6
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<6, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<6, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 7
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<7, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<7, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 8
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<8, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<8, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 9
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<9, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<9, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 10
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<10, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<10, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 11
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<11, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<11, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 12
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<12, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<12, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 13
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<13, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<13, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 14
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<14, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<14, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 15
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<15, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<15, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 16
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<16, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<16, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 17
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<17, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<17, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 18
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<18, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<18, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 19
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<19, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<19, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
 #if WNET_MAX_DIM >= 20
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<20, double, double>>)
+        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<20, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
 #endif
-        .def_static("create_1d", &WassersteinNetworkFactory<int64_t>::create_1d<LEMON_INT>)
-        .def_static("create_1d", &WassersteinNetworkFactory<int64_t>::create_1d<double>);
+        .def_static("create_1d", &WassersteinNetworkFactory<int64_t>::create_1d<LEMON_INT>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1)
+        .def_static("create_1d", &WassersteinNetworkFactory<int64_t>::create_1d<double>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1);
 
     EXPOSE_VECTOR_DISTRIBUTION(1)
 #if WNET_MAX_DIM >= 2

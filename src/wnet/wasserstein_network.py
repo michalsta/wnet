@@ -32,6 +32,7 @@ class WassersteinNetwork:
         distance (DistanceFunction): A callable that computes the distance between points in the distributions.
         max_distance (float | None): The maximum distance to consider. If None or infinity, it defaults to the maximum representable value.
         force_dense_1d (bool): In 1D, force the O(m*n) dense factory instead of the O(m+n) chain factory. Default False uses the chain factory in 1D. Note: max_distance semantics differ between factories — chain only uses it to split the chain into components, while dense also caps per-pair cost.
+        p (int): Wasserstein transport order (>= 1). Each matching edge costs ground_distance**p, so total_cost() and all derivatives are in W_p**p units; take the p-th root for the literal W_p distance (the high-level WassersteinDistance() does this). p must be an integer. p != 1 always uses the dense factory (the 1D chain factory is invalid for p != 1, since exponentiated gap costs are not additive); in 1D with p != 1 the chain factory is bypassed automatically.
         solver: Solver configuration object. One of NetworkSimplex(), CostScaling(), CycleCanceling(), or CapacityScaling(). Defaults to NetworkSimplex() (warm restarts, BLOCK_SEARCH pivot).
     """
 
@@ -49,6 +50,7 @@ class WassersteinNetwork:
         distance: DistanceMetric,
         max_distance: Optional[float] = None,
         force_dense_1d: bool = False,
+        p: int = 1,
         solver=None,
         method: str = None,
     ) -> None:
@@ -62,16 +64,23 @@ class WassersteinNetwork:
             solver = self._SOLVER_METHODS[method]()
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
+        if int(p) != p or p < 1:
+            raise ValueError(f"Wasserstein order p must be an integer >= 1, got {p!r}.")
+        p = int(p)
         self._distance = distance
+        self._p = p
         vec_base = base_distribution.vecdist
         vec_targets = [t.vecdist for t in target_distributions]
-        if base_distribution.dimension == 1 and not force_dense_1d:
+        # The 1D chain factory is only valid for p == 1; for p != 1 fall back to
+        # the dense factory (whose per-pair d**p costs are the correct transport cost).
+        use_chain = base_distribution.dimension == 1 and not force_dense_1d and p == 1
+        if use_chain:
             self.wnet = CWassersteinNetworkFactory.create_1d(
-                vec_base, vec_targets, distance, max_distance
+                vec_base, vec_targets, distance, max_distance, p
             )
         else:
             self.wnet = CWassersteinNetworkFactory.create(
-                vec_base, vec_targets, distance, max_distance
+                vec_base, vec_targets, distance, max_distance, p
             )
         self.add_simple_trash = self.wnet.add_simple_trash
         self.add_experimental_trash = self.wnet.add_experimental_trash
@@ -150,6 +159,10 @@ class WassersteinNetwork:
         new_targets: Sequence[Distribution],
     ):
         """Update peak positions, re-solve, and return position gradients.
+
+        Gradients are of the network objective total_cost() = sum d**p * flow
+        (i.e. W_p**p, not the rooted W_p). For the gradient of the literal W_p,
+        multiply by (1/p) * total_cost()**(1/p - 1).
 
         Returns
         -------

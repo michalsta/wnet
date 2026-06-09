@@ -1059,18 +1059,26 @@ public:
         const Distribution_t* new_empirical,
         const std::vector<Distribution_t*>& new_theoretical,
         std::span<double> emp_grad,
-        std::vector<std::span<double>>& theo_grads
+        std::vector<std::span<double>>& theo_grads,
+        int p = 1
     ) const {
         static constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
         for (const auto& e : _matching_edge_cache) {
             const VALUE_TYPE flow = _solver_flow(e.arc);
             if (flow == 0) continue;
-            const auto g = DistMetric::grad_x(
-                new_empirical->get_point(e.emp_peak_index),
-                new_theoretical[e.spectrum_id]->get_point(e.theo_peak_index));
+            const auto emp_pt  = new_empirical->get_point(e.emp_peak_index);
+            const auto theo_pt = new_theoretical[e.spectrum_id]->get_point(e.theo_peak_index);
+            const auto g = DistMetric::grad_x(emp_pt, theo_pt);
+            // Cost is d^p, so d(cost)/dx = p * d^(p-1) * grad_x(d).  p == 1 gives
+            // factor 1 (bit-identical to the legacy W_1 gradient).
+            double factor = 1.0;
+            if (p != 1) {
+                const double d = DistMetric::dist(emp_pt, theo_pt);
+                factor = static_cast<double>(p) * std::pow(d, static_cast<double>(p - 1));
+            }
             for (size_t d = 0; d < DIM; ++d) {
-                emp_grad[e.emp_peak_index * DIM + d]                   += static_cast<double>(flow) * g[d];
-                theo_grads[e.spectrum_id][e.theo_peak_index * DIM + d] -= static_cast<double>(flow) * g[d];
+                emp_grad[e.emp_peak_index * DIM + d]                   += static_cast<double>(flow) * factor * g[d];
+                theo_grads[e.spectrum_id][e.theo_peak_index * DIM + d] -= static_cast<double>(flow) * factor * g[d];
             }
         }
     }
@@ -1451,21 +1459,32 @@ class WassersteinNetwork {
 
     bool built = false;
 
+    // Wasserstein transport order p.  Edge cost = ground_distance^p, so the
+    // network optimises/reports the W_p^p objective; the ^(1/p) root is applied
+    // by the high-level Python wrappers.  p == 1 reproduces the legacy behaviour
+    // bit-for-bit.  p != 1 requires the dense factory (chain cost is not additive
+    // under exponentiation).
+    int _p_order = 1;
+
 public:
     WassersteinNetwork(std::vector<FlowNode<intensity_type>>&& nodes_,
                        std::vector<FlowEdge<intensity_type>>&& edges_,
                        size_t no_theoretical_spectra_,
                        std::vector<size_t>&& theoretical_spectra_sizes_,
-                       std::vector<LEMON_INDEX>&& dead_end_node_ids_
+                       std::vector<LEMON_INDEX>&& dead_end_node_ids_,
+                       int p_order = 1
     ) :
     nodes(std::move(nodes_)),
     edges(std::move(edges_)),
     _no_theoretical_spectra(no_theoretical_spectra_),
     _theoretical_spectra_sizes(std::move(theoretical_spectra_sizes_)),
-    dead_end_node_ids(std::move(dead_end_node_ids_))
+    dead_end_node_ids(std::move(dead_end_node_ids_)),
+    _p_order(p_order)
     {
         build_subgraphs();
     };
+
+    int p_order() const { return _p_order; }
 
     WassersteinNetwork(const WassersteinNetwork&) = delete;
     WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
@@ -1481,7 +1500,8 @@ public:
         _isolated_exp_trash_cost(other._isolated_exp_trash_cost),
         _isolated_theo_trash_cost(other._isolated_theo_trash_cost),
         _last_point(std::move(other._last_point)),
-        built(other.built)
+        built(other.built),
+        _p_order(other._p_order)
     {
         other.built = false;
     }
@@ -1916,9 +1936,10 @@ public:
                     const double d = DistMetric::dist(
                         new_empirical->get_point(emp_t.get_peak_index()),
                         new_theoretical[theo_t.get_spectrum_id()]->get_point(theo_t.get_peak_index()));
-                    if (d > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
-                        throw std::overflow_error("update_positions_and_solve(): distance overflows VALUE_TYPE.");
-                    new_costs[ii] = static_cast<VALUE_TYPE>(d);
+                    const double cost = (_p_order == 1) ? d : std::pow(d, static_cast<double>(_p_order));
+                    if (cost > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
+                        throw std::overflow_error("update_positions_and_solve(): cost d^p overflows VALUE_TYPE.");
+                    new_costs[ii] = static_cast<VALUE_TYPE>(cost);
                 } else if (std::holds_alternative<ChainEdge>(edge.get_type())) {
                     auto get_pos_1d = [&](const FlowNode<intensity_type>& n) -> double {
                         const auto& nt = n.get_type();
@@ -1982,7 +2003,7 @@ public:
                         "update_positions_and_get_gradient: chain edges require DIM == 1");
             } else {
                 sg_ptr->template accumulate_position_gradients<Distribution_t, DistMetric>(
-                    new_empirical, new_theoretical, emp_grad, theo_grads);
+                    new_empirical, new_theoretical, emp_grad, theo_grads, _p_order);
             }
         }
     }
@@ -2044,9 +2065,12 @@ public:
     static WassersteinNetwork<VALUE_TYPE, typename Distribution_t::intensity_type> create(
         const Distribution_t* empirical_spectrum,
         const std::vector<Distribution_t*>& theoretical_spectra,
-        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
+        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max(),
+        int p = 1
     )
     {
+        if (p < 1)
+            throw std::invalid_argument("Wasserstein order p must be >= 1.");
         using intensity_type = typename Distribution_t::intensity_type;
         std::vector<FlowNode<intensity_type>> nodes;
         std::vector<FlowEdge<intensity_type>> edges;
@@ -2111,16 +2135,19 @@ public:
             {
                 auto [empirical_idx, theoretical_peak_idx] = it.get_indices();
                 double dist = it.get_distance();
-                if (dist > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
+                // Order-p cost: d^p.  p == 1 leaves dist unchanged (pow(d,1) == d).
+                double cost = (p == 1) ? dist : std::pow(dist, static_cast<double>(p));
+                if (cost > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
                     throw std::overflow_error(
-                        "Distance " + std::to_string(dist) +
-                        " overflows VALUE_TYPE (max " +
+                        "Cost d^p = " + std::to_string(cost) +
+                        " (d=" + std::to_string(dist) + ", p=" + std::to_string(p) +
+                        ") overflows VALUE_TYPE (max " +
                         std::to_string(std::numeric_limits<VALUE_TYPE>::max()) + ")");
                 edges.emplace_back(FlowEdge<intensity_type>(
                     edges.size(),
                     nodes[empirical_idx + 2], // +2 to skip the source and sink nodes
                     nodes[first_theoretical_node_idx + theoretical_peak_idx],
-                    MatchingEdge(static_cast<VALUE_TYPE>(dist))
+                    MatchingEdge(static_cast<VALUE_TYPE>(cost))
                 ));
             }
         }
@@ -2137,7 +2164,8 @@ public:
             std::move(edges),
             theoretical_spectra.size(),
             std::move(theoretical_spectra_sizes),
-            std::move(dead_end_node_ids)
+            std::move(dead_end_node_ids),
+            p
         );
     };
 
@@ -2146,14 +2174,15 @@ public:
         const Distribution_t* empirical_spectrum,
         const std::vector<Distribution_t*>& theoretical_spectra,
         DistanceMetric distance_metric,
-        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
+        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max(),
+        int p = 1
     ) {
         if (distance_metric == DistanceMetric::L1) {
-            return create<Distribution_t, L1Metric>(empirical_spectrum, theoretical_spectra, max_dist);
+            return create<Distribution_t, L1Metric>(empirical_spectrum, theoretical_spectra, max_dist, p);
         } else if (distance_metric == DistanceMetric::L2) {
-            return create<Distribution_t, L2Metric>(empirical_spectrum, theoretical_spectra, max_dist);
+            return create<Distribution_t, L2Metric>(empirical_spectrum, theoretical_spectra, max_dist, p);
         } else if (distance_metric == DistanceMetric::LINF) {
-            return create<Distribution_t, LinfMetric>(empirical_spectrum, theoretical_spectra, max_dist);
+            return create<Distribution_t, LinfMetric>(empirical_spectrum, theoretical_spectra, max_dist, p);
         } else {
             throw std::runtime_error("Unsupported distance metric.");
         }
@@ -2175,8 +2204,14 @@ public:
         const VectorDistribution<1, double, intensity_type_>* empirical_spectrum,
         const std::vector<VectorDistribution<1, double, intensity_type_>*>& theoretical_spectra,
         DistanceMetric /* distance_metric */,
-        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max()
+        VALUE_TYPE max_dist = std::numeric_limits<VALUE_TYPE>::max(),
+        int p = 1
     ) {
+        // The chain factory's gap costs are additive along the line, which only
+        // equals the transport cost for p == 1 (|a-c|^p != |a-b|^p + |b-c|^p).
+        if (p != 1)
+            throw std::invalid_argument(
+                "create_1d (chain factory) only supports p=1; use the dense factory for p!=1.");
         using intensity_type = intensity_type_;
         std::vector<FlowNode<intensity_type>> nodes;
         std::vector<FlowEdge<intensity_type>> edges;
