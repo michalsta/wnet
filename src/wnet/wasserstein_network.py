@@ -71,9 +71,20 @@ class WassersteinNetwork:
         self._p = p
         vec_base = base_distribution.vecdist
         vec_targets = [t.vecdist for t in target_distributions]
+        # CostScaling / CapacityScaling cannot solve the 1D chain factory: the
+        # bidirectional chain arcs carry max/2 capacity, on which these two
+        # LEMON algorithms return INFEASIBLE (garbage total cost) or loop. Only
+        # NetworkSimplex / CycleCanceling handle the chain. Force the dense
+        # factory for them so 1D results stay correct.
+        chain_incompatible = isinstance(solver, (CostScaling, CapacityScaling))
         # The 1D chain factory is only valid for p == 1; for p != 1 fall back to
         # the dense factory (whose per-pair d**p costs are the correct transport cost).
-        use_chain = base_distribution.dimension == 1 and not force_dense_1d and p == 1.0
+        use_chain = (
+            base_distribution.dimension == 1
+            and not force_dense_1d
+            and p == 1.0
+            and not chain_incompatible
+        )
         if use_chain:
             self.wnet = CWassersteinNetworkFactory.create_1d(
                 vec_base, vec_targets, distance, max_distance, p
