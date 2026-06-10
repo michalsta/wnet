@@ -19,5 +19,5 @@ fi
 
 # Local dev only: instantiate dimensions 1-3 instead of 1-20 (the dominant
 # wnet.cpp compile cost). CI/wheel builds omit this and keep the default 20.
-SKBUILD_BUILD_DIR="_skbuild_${TAG}" VERBOSE=1 pip install -v -e . $ISOLATION \
-    -C cmake.define.WNET_MAX_DIM=3
+SKBUILD_BUILD_DIR="_skbuild_${TAG}" VERBOSE=1 pip install -v -e . $ISOLATION # \
+#    -C cmake.define.WNET_MAX_DIM=3
