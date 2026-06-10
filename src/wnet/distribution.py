@@ -68,9 +68,13 @@ class Distribution:
 
     @cached_property
     def vecdist(self):
-        cfun = globals()[f"CVectorDistribution{self.dimension}"]
+        # Real (double) intensities — the network quantizes to int64 supplies
+        # internally at build/solve, so we no longer truncate here. (Previously
+        # this built the int64 CVectorDistribution, silently flooring fractional
+        # intensities; see CVectorDistributionFloat.)
+        cfun = globals()[f"CVectorDistributionFloat{self.dimension}"]
         return cfun(
-            self.positions.astype(np.float64), self.intensities.astype(np.int64)
+            self.positions.astype(np.float64), self.intensities.astype(np.float64)
         )
 
     def n_highest(self, n: int) -> "Distribution":
