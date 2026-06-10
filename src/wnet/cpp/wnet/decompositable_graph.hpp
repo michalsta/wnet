@@ -88,13 +88,30 @@ using SolverConfig = std::variant<
 // bit-for-bit.
 // ---------------------------------------------------------------------------
 
-// Choose S so the largest scaled cost lands near TARGET = 2^52: well below the
-// NetworkSimplex potential-overflow ceiling (ART_COST = 2^62) and inside the
-// double exact-integer range, so round(S*cost) and the /S unscale are exact.
-inline int64_t pick_cost_scale(double c_max, bool p_is_one) {
+// Choose the integer cost scale S subject to two ceilings:
+//
+//  * per-edge: S * c_max <= 2^52, so every round(S*cost) lands inside the
+//    double exact-integer range (round and the /S unscale are both exact) and
+//    well below the NetworkSimplex potential-overflow ceiling (ART_COST=2^62).
+//
+//  * accumulator: the solver sums sum(scaled_cost * flow) in int64, and the
+//    total flow is bounded by the total intensity, so S * c_max * total_flow
+//    must stay within the int64 accumulator.  Bounding only the per-edge cost
+//    (the old behaviour) silently overflowed totalCost() once total_flow grew
+//    past ~2^11 — e.g. p=2 over a single peak-pair of mass 1e4 wrapped to a
+//    negative total, yielding a complex distance after the ^(1/p) root.
+//
+// S is the floor of the tighter of the two ceilings (>= 1).  total_flow <= 0
+// (unknown / p==1) falls back to the per-edge bound alone.
+inline int64_t pick_cost_scale(double c_max, double total_flow, bool p_is_one) {
     if (p_is_one || !(c_max > 0.0)) return 1;
-    constexpr double TARGET = 4503599627370496.0; // 2^52
-    const double s = std::floor(TARGET / c_max);
+    constexpr double PER_EDGE_TARGET = 4503599627370496.0;   // 2^52
+    constexpr double ACCUMULATOR_TARGET = 4611686018427387904.0; // 2^62
+    double s = std::floor(PER_EDGE_TARGET / c_max);
+    if (total_flow > 0.0) {
+        const double s_acc = std::floor(ACCUMULATOR_TARGET / (c_max * total_flow));
+        if (s_acc < s) s = s_acc;
+    }
     return s >= 1.0 ? static_cast<int64_t>(s) : 1;
 }
 
@@ -1747,10 +1764,23 @@ public:
     };
 
     void build(SolverConfig config = NetworkSimplexConfig{}) {
+        // Total flow upper bound for the cost-scale accumulator ceiling: the
+        // per-subgraph flow is max(emp, theo) intensity, so summing all node
+        // intensities over-estimates the network-wide flow (safe — it only
+        // shrinks the scale).  Assumes solve()'s point ~ O(1); a point that
+        // scales theoretical intensity far above 1 can still overflow.
+        double total_flow = 0.0;
+        for (const auto& node : nodes)
+            std::visit([&](const auto& n) {
+                using T = std::decay_t<decltype(n)>;
+                if constexpr (std::is_same_v<T, EmpiricalNode<intensity_type>> ||
+                              std::is_same_v<T, TheoreticalNode<intensity_type>>)
+                    total_flow += static_cast<double>(n.get_intensity());
+            }, node.get_type());
         // Choose one global cost scale from the largest real cost across the whole
         // network (matching + trash), so every subgraph's integer costs — and the
         // summed total_cost — share the same units.  p == 1 keeps _scale == 1.
-        _scale = pick_cost_scale(_max_real_cost, _p_order == 1.0);
+        _scale = pick_cost_scale(_max_real_cost, total_flow, _p_order == 1.0);
         const bool p_is_one = (_p_order == 1.0);
         for (auto& flow_subgraph : flow_subgraphs) {
             flow_subgraph->set_cost_scaling(_scale, p_is_one);
