@@ -40,6 +40,23 @@ class Distribution:
             label (str | None): Optional label for the distribution.
         """
         # super().__init__(positions, intensities.astype(np.int64, copy=False))
+        positions = np.asarray(positions)
+        intensities = np.asarray(intensities)
+        # positions is (dimension, n_points); a bare 1D array is the classic
+        # footgun (its length gets read as the dimension), so reject it early
+        # and point at the helper instead of failing cryptically downstream.
+        if positions.ndim != 2:
+            raise ValueError(
+                f"positions must be a 2D array of shape (dimension, n_points), "
+                f"got shape {positions.shape}. For 1D data use "
+                f"Distribution_1D(positions, intensities) or pass "
+                f"positions[np.newaxis, :]."
+            )
+        if intensities.ndim != 1 or intensities.shape[0] != positions.shape[1]:
+            raise ValueError(
+                f"intensities must be a 1D array with one value per point "
+                f"(n_points={positions.shape[1]}), got shape {intensities.shape}."
+            )
         self.positions = positions
         self.intensities = intensities
         dimension = positions.shape[0]
@@ -99,7 +116,8 @@ class Distribution:
         """
         new_positions = self.positions
         new_intensities = self.intensities * scale_factor
-        return Distribution(new_positions, new_intensities, label=self.label)
+        # Polymorphic: subclasses (e.g. Spectrum) get back their own type.
+        return type(self)(new_positions, new_intensities, label=self.label)
 
     def positions_intensities_scaled(self, scale_factor: float) -> "Distribution":
         """
@@ -113,7 +131,7 @@ class Distribution:
         """
         new_positions = self.positions.astype(np.float64, copy=False) * scale_factor
         new_intensities = self.intensities.astype(np.float64, copy=False) * scale_factor
-        return Distribution(new_positions, new_intensities, label=self.label)
+        return type(self)(new_positions, new_intensities, label=self.label)
 
     def normalized(self) -> "Distribution":
         """
@@ -129,7 +147,20 @@ class Distribution:
             )
         new_positions = self.positions
         new_intensities = self.intensities / total_intensity
-        return Distribution(new_positions, new_intensities, label=self.label)
+        return type(self)(new_positions, new_intensities, label=self.label)
+
+    def as_distribution(self) -> "Distribution":
+        """
+        Returns a plain Distribution with the same positions and intensities.
+
+        For a bare Distribution this is a typed copy; for subclasses (e.g.
+        Spectrum) it strips the subclass-specific state, yielding a base
+        Distribution. Always returns a Distribution, never ``type(self)``.
+
+        Returns:
+            Distribution: A base Distribution with the same data.
+        """
+        return Distribution(self.positions, self.intensities, label=self.label)
 
     @cached_property
     def sum_intensities(self) -> float:

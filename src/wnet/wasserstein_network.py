@@ -1,3 +1,5 @@
+import math
+import warnings
 from typing import Optional
 from collections.abc import Sequence
 
@@ -64,6 +66,21 @@ class WassersteinNetwork:
             solver = self._SOLVER_METHODS[method]()
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
+        else:
+            # The C++ factory takes an integer distance threshold (matching arcs
+            # are kept when the ground distance <= max_dist; 1D chain components
+            # split on gaps exceeding it). Accept a float for convenience but
+            # coerce to int with an inclusive (round-up) rule so nothing within
+            # the stated cap is dropped, and warn when a fractional part is lost.
+            md_int = int(math.ceil(max_distance))
+            if md_int != max_distance:
+                warnings.warn(
+                    f"max_distance={max_distance!r} is not an integer; the solver "
+                    f"uses an integer distance threshold, so it was rounded up to "
+                    f"{md_int}. Pass an integer max_distance to avoid this.",
+                    stacklevel=2,
+                )
+            max_distance = md_int
         p = float(p)
         if not (p >= 1.0) or not np.isfinite(p):
             raise ValueError(f"Wasserstein order p must be a real number >= 1, got {p!r}.")
