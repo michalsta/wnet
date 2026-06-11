@@ -119,6 +119,10 @@ public:
         return intensities_vector;
     }
 
+    double sum_intensities() const {
+        return std::accumulate(intensities_vector.begin(), intensities_vector.end(), 0.0);
+    }
+
     /* std::pair<std::vector<size_t>, std::vector<intensity_type>> closer_than(
         const Point_t& point,
         const DistanceMetric dist_fun,
