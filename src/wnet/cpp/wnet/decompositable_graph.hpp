@@ -159,6 +159,11 @@ class WassersteinNetworkSubgraph {
     // quantize_cost(real, _scale, _p_is_one).  _p_is_one => legacy S=1 truncation.
     int64_t _scale = 1;
     bool _p_is_one = true;
+    // Intensity scaling (set by the owning network at build): real (double) node
+    // intensities are mapped to integer LEMON supplies/capacities as
+    // round-toward-zero(real * _intensity_scale).  1.0 reproduces the legacy
+    // behaviour (intensities consumed verbatim, truncated to the integer type).
+    double _intensity_scale = 1.0;
 
     // Cached residual/derivative context.  The context is a pure function of
     // the post-solve solver state (potentials, flow, capacities, costs),
@@ -553,7 +558,8 @@ public:
                     using T = std::decay_t<decltype(arg)>;
                     if constexpr (std::is_same_v<T, MatchingEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {
-                        VALUE_TYPE lemon_intensity = std::get<EmpiricalNode<intensity_type>>(edges[ii].get_end_node().get_type()).get_intensity();
+                        VALUE_TYPE lemon_intensity = static_cast<VALUE_TYPE>(
+                            std::get<EmpiricalNode<intensity_type>>(edges[ii].get_end_node().get_type()).get_intensity() * _intensity_scale);
                         lemon_empirical_intensity += lemon_intensity;
                         return lemon_intensity;
                     }
@@ -620,9 +626,10 @@ public:
     // Set by the owning network before build() so build_impl() quantises costs
     // with the network-wide scale.  Kept separate from build() to leave the
     // Python-facing build(config) signature unchanged.
-    void set_cost_scaling(int64_t scale, bool p_is_one) {
+    void set_cost_scaling(int64_t scale, bool p_is_one, double intensity_scale = 1.0) {
         _scale = scale;
         _p_is_one = p_is_one;
+        _intensity_scale = intensity_scale;
     }
 
     void build(SolverConfig config = NetworkSimplexConfig{}) {
@@ -636,11 +643,11 @@ public:
         lemon_theoretical_intensity = 0;
         for (const auto& e : _matching_edge_cache) {
             capacities_map[e.arc] = (VALUE_TYPE) std::min<double>(
-                e.theo_intensity * point[e.spectrum_id],
-                e.emp_intensity);
+                e.theo_intensity * point[e.spectrum_id] * _intensity_scale,
+                e.emp_intensity * _intensity_scale);
         }
         for (const auto& e : _theo_sink_edge_cache) {
-            VALUE_TYPE lemon_intensity = (VALUE_TYPE) (e.theo_intensity * point[e.spectrum_id]);
+            VALUE_TYPE lemon_intensity = (VALUE_TYPE) (e.theo_intensity * point[e.spectrum_id] * _intensity_scale);
             capacities_map[e.arc] = lemon_intensity;
             lemon_theoretical_intensity += lemon_intensity;
         }
@@ -1464,17 +1471,23 @@ public:
         return result;
     }
 
-    std::vector<std::pair<size_t, VALUE_TYPE>>
+    std::vector<std::pair<size_t, double>>
     _spectrum_proportion_derivatives_impl(const DerivContext& ctx) const {
-        std::vector<VALUE_TYPE> accum(no_target_distributions, VALUE_TYPE(0));
+        // Weight each peak's integer per-supply marginal by its REAL (double)
+        // intensity — d(cost)/dw = sum_i marginal_i * real_intensity_i.  The
+        // intensity scale is deliberately absent (it cancels: it enters both
+        // dS/dw and the total_cost unscale), and the real intensity may be
+        // fractional, so this must accumulate in double, not the integer
+        // VALUE_TYPE (which would floor sub-unit intensities to zero).
+        std::vector<double> accum(no_target_distributions, 0.0);
         for (const auto& node : nodes) {
             auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
             if (!theo) continue;
             accum[theo->get_spectrum_id()] +=
-                _node_deriv(node.get_id(), ctx)
-                * static_cast<VALUE_TYPE>(theo->get_intensity());
+                static_cast<double>(_node_deriv(node.get_id(), ctx))
+                * static_cast<double>(theo->get_intensity());
         }
-        std::vector<std::pair<size_t, VALUE_TYPE>> result;
+        std::vector<std::pair<size_t, double>> result;
         result.reserve(no_target_distributions);
         for (size_t s = 0; s < no_target_distributions; ++s)
             result.emplace_back(s, accum[s]);
@@ -1502,14 +1515,14 @@ public:
     // Gradient of total cost w.r.t. scaling each spectrum's proportion
     // (spectrum_id, derivative) = sum_i(peak_derivative_i * intensity_i).
     // Exact residual marginals.
-    std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
+    std::vector<std::pair<size_t, double>> spectrum_proportion_derivatives() const {
         return _spectrum_proportion_derivatives_impl(_get_deriv_context(/*use_pi=*/false));
     }
 
     // Fast, APPROXIMATE spectrum-proportion gradient (dual-potential
     // difference; see signal_part_derivatives_fast_approx for the accuracy
     // caveat).  Different VALUES from spectrum_proportion_derivatives().
-    std::vector<std::pair<size_t, VALUE_TYPE>>
+    std::vector<std::pair<size_t, double>>
     spectrum_proportion_derivatives_fast_approx() const {
         return _spectrum_proportion_derivatives_impl(_get_deriv_context(/*use_pi=*/true));
     }
@@ -1549,6 +1562,15 @@ class WassersteinNetwork {
     int64_t _scale = 1;
     double _max_real_cost = 0.0;
 
+    // Intensity scaling: real (double) node intensities map to integer LEMON
+    // supplies as round-toward-zero(real * _intensity_scale).  Set via
+    // set_intensity_scale() before build(); propagated to every subgraph in
+    // build().  1.0 (the default) reproduces the legacy verbatim-intensity
+    // behaviour.  total_cost() and the proportion derivatives are in scaled
+    // units (cost_scale * intensity_scale); the Python wrapper unscales by
+    // scale_factor() * intensity_scale_factor().
+    double _intensity_scale = 1.0;
+
 public:
     WassersteinNetwork(std::vector<FlowNode<intensity_type>>&& nodes_,
                        std::vector<FlowEdge<intensity_type>>&& edges_,
@@ -1571,6 +1593,10 @@ public:
 
     double p_order() const { return _p_order; }
     int64_t scale_factor() const { return _scale; }
+    double intensity_scale_factor() const { return _intensity_scale; }
+    // Must be called before build() to take effect (build() propagates it to
+    // the subgraphs and folds it into the cost-scale overflow budget).
+    void set_intensity_scale(double s) { _intensity_scale = s; }
 
     WassersteinNetwork(const WassersteinNetwork&) = delete;
     WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
@@ -1780,10 +1806,12 @@ public:
         // Choose one global cost scale from the largest real cost across the whole
         // network (matching + trash), so every subgraph's integer costs — and the
         // summed total_cost — share the same units.  p == 1 keeps _scale == 1.
-        _scale = pick_cost_scale(_max_real_cost, total_flow, _p_order == 1.0);
+        // The integer flow the accumulator actually sees is the real flow times
+        // the intensity scale, so size the cost-scale ceiling against that.
+        _scale = pick_cost_scale(_max_real_cost, total_flow * _intensity_scale, _p_order == 1.0);
         const bool p_is_one = (_p_order == 1.0);
         for (auto& flow_subgraph : flow_subgraphs) {
-            flow_subgraph->set_cost_scaling(_scale, p_is_one);
+            flow_subgraph->set_cost_scaling(_scale, p_is_one, _intensity_scale);
             flow_subgraph->build(config);
         }
         built = true;
@@ -1819,10 +1847,10 @@ public:
         VALUE_TYPE cost = 0;
         for (const auto& flow_subgraph : flow_subgraphs)
             cost += flow_subgraph->total_cost();
-        cost += _isolated_exp_trash_cost_scaled() * _isolated_empirical_intensity;
+        cost += _isolated_exp_trash_cost_scaled() * _isolated_empirical_intensity * _intensity_scale;
         const VALUE_TYPE theo_trash_scaled = _isolated_theo_trash_cost_scaled();
         for (size_t s = 0; s < _no_theoretical_spectra; ++s)
-            cost += static_cast<VALUE_TYPE>(theo_trash_scaled * _isolated_theoretical_intensity[s] * _last_point[s]);
+            cost += static_cast<VALUE_TYPE>(theo_trash_scaled * _isolated_theoretical_intensity[s] * _last_point[s] * _intensity_scale);
         return cost;
     };
 
@@ -1938,9 +1966,9 @@ public:
         return result;
     }
 
-    std::vector<std::pair<size_t, VALUE_TYPE>>
+    std::vector<std::pair<size_t, double>>
     _spectrum_proportion_derivatives(bool fast) const {
-        std::vector<VALUE_TYPE> accum(_no_theoretical_spectra, VALUE_TYPE(0));
+        std::vector<double> accum(_no_theoretical_spectra, 0.0);
         for (const auto& sg : flow_subgraphs) {
             auto sg_derivs = fast ? sg->spectrum_proportion_derivatives_fast_approx()
                                   : sg->spectrum_proportion_derivatives();
@@ -1950,9 +1978,9 @@ public:
         const VALUE_TYPE theo_trash_scaled = _isolated_theo_trash_cost_scaled();
         for (size_t s = 0; s < _no_theoretical_spectra; ++s) {
             if (_isolated_theoretical_intensity[s] != 0)
-                accum[s] += static_cast<VALUE_TYPE>(theo_trash_scaled * _isolated_theoretical_intensity[s]);
+                accum[s] += static_cast<double>(theo_trash_scaled) * static_cast<double>(_isolated_theoretical_intensity[s]);
         }
-        std::vector<std::pair<size_t, VALUE_TYPE>> result;
+        std::vector<std::pair<size_t, double>> result;
         result.reserve(_no_theoretical_spectra);
         for (size_t s = 0; s < _no_theoretical_spectra; ++s)
             result.emplace_back(s, accum[s]);
@@ -1965,7 +1993,7 @@ public:
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
         return _signal_part_derivatives(/*fast=*/false);
     }
-    std::vector<std::pair<size_t, VALUE_TYPE>> spectrum_proportion_derivatives() const {
+    std::vector<std::pair<size_t, double>> spectrum_proportion_derivatives() const {
         return _spectrum_proportion_derivatives(/*fast=*/false);
     }
 
@@ -1977,7 +2005,7 @@ public:
     signal_part_derivatives_fast_approx() const {
         return _signal_part_derivatives(/*fast=*/true);
     }
-    std::vector<std::pair<size_t, VALUE_TYPE>>
+    std::vector<std::pair<size_t, double>>
     spectrum_proportion_derivatives_fast_approx() const {
         return _spectrum_proportion_derivatives(/*fast=*/true);
     }

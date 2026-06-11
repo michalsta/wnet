@@ -22,6 +22,50 @@ from wnet.distances import DistanceMetric
 from wnet.visualization import show_graph
 
 
+def _auto_intensity_scale(base_distribution, target_distributions, p, max_distance):
+    """Pick an intensity scale that maps real intensities onto a fine integer
+    supply grid without overflowing the int64 cost accumulator.
+
+    Returns 1.0 (verbatim, bit-compatible with the legacy int backend) when the
+    intensities are already integer-valued, or when ``p != 1`` (scaling the
+    intensity and cost budgets jointly for p != 1 is future work).  Otherwise it
+    targets a total scaled flow of ~2**30 (a fine grid, modest magnitude),
+    clamped below an overflow ceiling and never below 1.
+    """
+    dists = [base_distribution] + list(target_distributions)
+    all_integer = all(
+        bool(np.all(d.intensities == np.round(d.intensities))) for d in dists
+    )
+    if p != 1.0 or all_integer:
+        return 1.0
+    total = float(sum(np.sum(np.abs(d.intensities)) for d in dists))
+    nonzero = [np.abs(d.intensities)[d.intensities != 0] for d in dists]
+    nonzero = [a for a in nonzero if a.size]
+    if not (total > 0.0) or not nonzero:
+        return 1.0
+    min_pos = float(min(float(a.min()) for a in nonzero))
+    # Conservative ground-distance bound: the L1 extent of the combined bounding
+    # box dominates the L2/Linf distance between any two points; cap by
+    # max_distance since arcs beyond it carry no flow. (p == 1 here, cost == d.)
+    gmin = np.min([d.positions.min(axis=1) for d in dists], axis=0)
+    gmax = np.max([d.positions.max(axis=1) for d in dists], axis=0)
+    span = float(np.sum(gmax - gmin))
+    cost_bound = max(min(span, float(max_distance)), 1.0)
+    # 2**60 leaves headroom below NetworkSimplex's 2**62 ART_COST ceiling.
+    overflow_cap = (2.0 ** 60) / (cost_bound * total)
+    target = (2.0 ** 30) / total
+    scale = max(1.0, min(target, overflow_cap))
+    if scale * min_pos < 1.0:
+        warnings.warn(
+            f"intensity auto-scale {scale:.3g} cannot represent the smallest "
+            f"nonzero intensity {min_pos:.3g} as >=1 supply unit (overflow cap "
+            f"{overflow_cap:.3g}); small peaks may be dropped. Normalize the "
+            f"intensities or pass an explicit intensity_scale.",
+            stacklevel=3,
+        )
+    return scale
+
+
 class WassersteinNetwork:
     """
     A network class for computing Wasserstein distances between a base distribution and multiple target distributions.
@@ -55,6 +99,7 @@ class WassersteinNetwork:
         p: float = 1.0,
         solver=None,
         method: str = None,
+        intensity_scale: Optional[float] = None,
     ) -> None:
         if solver is None and method is None:
             solver = NetworkSimplex()
@@ -110,6 +155,19 @@ class WassersteinNetwork:
             self.wnet = CWassersteinNetworkFactory.create(
                 vec_base, vec_targets, distance, max_distance, p
             )
+        # Intensities are carried as real doubles into the int64 solver, which
+        # quantizes them to integer supplies as round(real * intensity_scale).
+        # None => auto: 1.0 for integer-valued intensities (bit-compatible) or
+        # p != 1 (the joint cost/intensity budget is future work), else a scale
+        # that lifts fractional intensities onto a fine integer grid without
+        # overflowing the cost accumulator. An explicit value (e.g. 1.0) is used
+        # verbatim. Must be set before build().
+        if intensity_scale is None:
+            intensity_scale = _auto_intensity_scale(
+                base_distribution, target_distributions, p, max_distance
+            )
+        self.wnet.set_intensity_scale(float(intensity_scale))
+
         self.add_simple_trash = self.wnet.add_simple_trash
         self.add_experimental_trash = self.wnet.add_experimental_trash
         self.add_theoretical_trash = self.wnet.add_theoretical_trash
@@ -123,6 +181,7 @@ class WassersteinNetwork:
 
         self.solve = self.wnet.solve
         self.scale_factor = self.wnet.scale_factor
+        self.intensity_scale_factor = self.wnet.intensity_scale_factor
         self.get_subgraph = self.wnet.get_subgraph
         self.no_subgraphs = self.wnet.no_subgraphs
         self.flows_for_target = self.wnet.flows_for_target
@@ -150,7 +209,11 @@ class WassersteinNetwork:
         value.  For ``p == 1`` the scale is 1, so this is the exact integer cost
         (as a float).  Take the p-th root for the literal ``W_p`` distance.
         """
-        return self.wnet.total_cost() / self.wnet.scale_factor()
+        # Scaled cost is in cost_scale * intensity_scale units (flow carries the
+        # intensity scale, edge costs carry the cost scale).
+        return self.wnet.total_cost() / (
+            self.wnet.scale_factor() * self.wnet.intensity_scale_factor()
+        )
 
     def signal_part_derivatives(self) -> dict[int, dict[int, float]]:
         """Compute the marginal cost of increasing each theoretical signal by 1.
@@ -170,6 +233,11 @@ class WassersteinNetwork:
         Aggregates across all subgraphs.  Returns array of derivatives indexed
         by spectrum_id (0..n-1), in real ``W_p**p`` units (un-scaled).
         """
+        # Only the cost scale divides out here: the C++ already weights the
+        # per-supply marginal by the REAL (unscaled) theoretical intensity, so
+        # the intensity scale is absent from this derivative (verified by finite
+        # difference). This still equals d(total_cost)/dw because total_cost
+        # carries 1/(cost_scale*intensity_scale) and P_cpp carries 1/intensity_scale.
         s = self.wnet.scale_factor()
         return np.array([v / s for _, v in self.wnet.spectrum_proportion_derivatives()])
 
