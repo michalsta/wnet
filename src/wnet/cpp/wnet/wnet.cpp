@@ -47,6 +47,18 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
         .def("size", &VectorDistribution_##DIM::size) \
         .def("py_get_positions", &VectorDistribution_##DIM::py_get_positions) \
         .def("py_get_intensities", &VectorDistribution_##DIM::py_get_intensities) \
+        .def("positions_view", [](nb::object self_obj) { \
+            auto& d = nb::cast<VectorDistribution_##DIM&>(self_obj); \
+            const auto& pos = d.get_positions(); \
+            return nb::ndarray<nb::numpy, double>( \
+                (void*)pos.data(), {pos.size(), (size_t)DIM}, self_obj); \
+        }) \
+        .def("intensities_view", [](nb::object self_obj) { \
+            auto& d = nb::cast<VectorDistribution_##DIM&>(self_obj); \
+            const auto& ints = d.get_intensities(); \
+            return nb::ndarray<nb::numpy, LEMON_INT>( \
+                (void*)ints.data(), {ints.size()}, self_obj); \
+        }) \
         .def("get_point", &VectorDistribution_##DIM::get_point) \
         .def("n_highest", &VectorDistribution_##DIM::n_highest) \
         .def("p_trim", &VectorDistribution_##DIM::p_trim) \
@@ -59,6 +71,18 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
         .def("size", &VectorDistributionFloat_##DIM::size) \
         .def("py_get_positions", &VectorDistributionFloat_##DIM::py_get_positions) \
         .def("py_get_intensities", &VectorDistributionFloat_##DIM::py_get_intensities) \
+        .def("positions_view", [](nb::object self_obj) { \
+            auto& d = nb::cast<VectorDistributionFloat_##DIM&>(self_obj); \
+            const auto& pos = d.get_positions(); \
+            return nb::ndarray<nb::numpy, double>( \
+                (void*)pos.data(), {pos.size(), (size_t)DIM}, self_obj); \
+        }) \
+        .def("intensities_view", [](nb::object self_obj) { \
+            auto& d = nb::cast<VectorDistributionFloat_##DIM&>(self_obj); \
+            const auto& ints = d.get_intensities(); \
+            return nb::ndarray<nb::numpy, double>( \
+                (void*)ints.data(), {ints.size()}, self_obj); \
+        }) \
         .def("get_point", &VectorDistributionFloat_##DIM::get_point) \
         .def("n_highest", &VectorDistributionFloat_##DIM::n_highest) \
         .def("p_trim", &VectorDistributionFloat_##DIM::p_trim) \

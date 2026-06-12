@@ -123,6 +123,34 @@ public:
         return std::accumulate(intensities_vector.begin(), intensities_vector.end(), 0.0);
     }
 
+    // Returns a copy with intensities multiplied by `factor` and positions
+    // unchanged (mirrors the Python Distribution.scaled()).  NOTE: for an
+    // integer intensity_type the product truncates toward zero.
+    VectorDistribution scaled(double factor) const {
+        std::vector<std::array<position_type, DIM>> pos = positions;
+        std::vector<intensity_type> scaled_int;
+        scaled_int.reserve(intensities_vector.size());
+        for (const auto& v : intensities_vector)
+            scaled_int.push_back(static_cast<intensity_type>(static_cast<double>(v) * factor));
+        return VectorDistribution(std::move(pos), std::move(scaled_int));
+    }
+
+    // Returns a copy with intensities scaled to sum to 1 (mirrors the Python
+    // Distribution.normalized()).  NOTE: for an integer intensity_type the
+    // normalized values (< 1) truncate toward zero, so this is only meaningful
+    // for the double-intensity instantiation.
+    VectorDistribution normalized() const {
+        const double total = sum_intensities();
+        if (total == 0.0)
+            throw std::runtime_error("Cannot normalize a distribution with zero total intensity.");
+        std::vector<std::array<position_type, DIM>> pos = positions;
+        std::vector<intensity_type> norm;
+        norm.reserve(intensities_vector.size());
+        for (const auto& v : intensities_vector)
+            norm.push_back(static_cast<intensity_type>(static_cast<double>(v) / total));
+        return VectorDistribution(std::move(pos), std::move(norm));
+    }
+
     /* std::pair<std::vector<size_t>, std::vector<intensity_type>> closer_than(
         const Point_t& point,
         const DistanceMetric dist_fun,
