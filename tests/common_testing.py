@@ -6,7 +6,7 @@ from wnet.distances import DistanceMetric
 def create_large_distribution(seed, dimension, pos_range, int_range, size):
     rng = np.random.default_rng(seed)
     data = rng.uniform(size=(dimension, size)) * pos_range
-    intensities = rng.uniform(size=(size,)) * int_range
+    intensities = np.floor(rng.uniform(size=(size,)) * int_range).astype(float)
     return Distribution(data, intensities)
 
 
