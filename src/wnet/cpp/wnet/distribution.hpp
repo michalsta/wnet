@@ -40,35 +40,36 @@ public:
     using Point_t = std::array<position_type, DIM>;
     // using distance_fun_t = std::function<intensity_type(const Point_t&, const Point_t&)>;
 
-    const std::span<const intensity_type> intensities;
+    // View over the owning intensities vector. Computed on access rather than
+    // cached as a member so the class retains default value semantics
+    // (copy/move/assign); a cached span member would alias the source object.
+    std::span<const intensity_type> intensities() const { return intensities_vector; }
 
     VectorDistribution(
         const std::vector<std::array<position_type, DIM>>& positions_,
         const std::vector<intensity_type>& intensities_
-    ) : positions(positions_), intensities_vector(intensities_), intensities(intensities_vector) {
+    ) : positions(positions_), intensities_vector(intensities_) {
         init();
     }
 
     VectorDistribution(
         std::vector<std::array<position_type, DIM>>&& positions_,
         std::vector<intensity_type>&& intensities_
-    ) : positions(std::move(positions_)), intensities_vector(std::move(intensities_)), intensities(intensities_vector) {
+    ) : positions(std::move(positions_)), intensities_vector(std::move(intensities_)) {
         init();
     }
 
     #if defined(INCLUDE_NANOBIND_STUFF)
     VectorDistribution(const nb::ndarray<position_type_, nb::shape<DIM, -1>>& positions_arg, const nb::ndarray<intensity_type_, nb::shape<-1>>& intensities_arg) :
         positions(numpy_to_vector_of_arrays<position_type_ , DIM>(positions_arg)),
-        intensities_vector(numpy_to_vector<intensity_type_>(intensities_arg)),
-        intensities(intensities_vector)
+        intensities_vector(numpy_to_vector<intensity_type_>(intensities_arg))
     {
         init();
     }
 
     VectorDistribution(const nb::ndarray<position_type_, nb::shape<-1, -1>>& positions_arg, const nb::ndarray<intensity_type_, nb::shape<-1>>& intensities_arg) :
         positions(numpy_to_vector_of_arrays<position_type_ , DIM>(positions_arg)),
-        intensities_vector(numpy_to_vector<intensity_type_>(intensities_arg)),
-        intensities(intensities_vector)
+        intensities_vector(numpy_to_vector<intensity_type_>(intensities_arg))
     {
         init();
     }
@@ -84,7 +85,7 @@ public:
         return vector_of_arrays_to_numpy<position_type_, DIM>(positions);
     }
     nb::ndarray<nb::numpy, intensity_type_, nb::shape<-1>> py_get_intensities() const {
-        return span_to_numpy<intensity_type_>(intensities);
+        return span_to_numpy<intensity_type_>(intensities());
     }
 
     #endif // INCLUDE_NANOBIND_STUFF

@@ -2260,7 +2260,7 @@ public:
                                     nodes.size(),
                                     EmpiricalNode(
                                         empirical_idx,
-                                        empirical_spectrum->intensities[empirical_idx])));
+                                        empirical_spectrum->intensities()[empirical_idx])));
         }
 
         for (size_t theoretical_spectrum_idx = 0; theoretical_spectrum_idx < theoretical_spectra.size(); ++theoretical_spectrum_idx)
@@ -2279,7 +2279,7 @@ public:
                                             TheoreticalNode(
                                                 theoretical_spectrum_idx,
                                                 theoretical_peak_idx,
-                                                theoretical_spectrum->intensities[theoretical_peak_idx])));
+                                                theoretical_spectrum->intensities()[theoretical_peak_idx])));
             }
 
             // Calculate the distances between the empirical and theoretical peaks
@@ -2413,7 +2413,7 @@ public:
                 nodes.size(),
                 EmpiricalNode<intensity_type>(
                     empirical_idx,
-                    empirical_spectrum->intensities[empirical_idx])));
+                    empirical_spectrum->intensities()[empirical_idx])));
             entries.push_back(PosEntry{
                 empirical_spectrum->get_point(empirical_idx)[0],
                 static_cast<LEMON_INDEX>(nodes.size() - 1),
@@ -2432,7 +2432,7 @@ public:
                     TheoreticalNode<intensity_type>(
                         theoretical_spectrum_idx,
                         peak_idx,
-                        ts->intensities[peak_idx])));
+                        ts->intensities()[peak_idx])));
                 entries.push_back(PosEntry{
                     ts->get_point(peak_idx)[0],
                     static_cast<LEMON_INDEX>(nodes.size() - 1),
