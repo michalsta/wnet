@@ -484,7 +484,7 @@ public:
         if (built)
             throw std::runtime_error("add_experimental_trash() must be called before build().");
         // One EmpiricalTrashEdge per empirical node: EmpiricalNode -> Sink.
-        // Capacity is set to max/2 in build(); see comment there.
+        // Capacity is set to INF in build(); non-binding (bounded by source supply).
         for (const auto& node : nodes) {
             if (!std::holds_alternative<EmpiricalNode<intensity_type>>(node.get_type())) continue;
             edges.emplace_back(edges.size(), node, nodes[1], EmpiricalTrashEdge(cost));
@@ -500,7 +500,7 @@ public:
         if (built)
             throw std::runtime_error("add_theoretical_trash() must be called before build().");
         // One TheoreticalTrashEdge per theoretical node: Source -> TheoreticalNode.
-        // Capacity is set to max/2 in build(); see comment there.
+        // Capacity is set to INF in build(); non-binding (bounded by source supply).
         for (const auto& node : nodes) {
             if (!std::holds_alternative<TheoreticalNode<intensity_type>>(node.get_type())) continue;
             edges.emplace_back(edges.size(), nodes[0], node, TheoreticalTrashEdge(cost));
@@ -567,19 +567,23 @@ public:
                     // Simple trash carries flow up to lemon_total_flow (the supply set on
                     // source/sink). A tight cap = lemon_total_flow is redundant — flow is
                     // already bounded by supply — and causes warm-restart to fail whenever
-                    // lemon_total_flow shrinks below the previous trash flow. Use max/2 like
-                    // ChainEdge so the cap is non-binding and never needs updating.
-                    else if constexpr (std::is_same_v<T, SimpleTrashEdge>) return std::numeric_limits<VALUE_TYPE>::max() / 2;
-                    // Chain edges carry unlimited flow; max/2 avoids any
-                    // accidental overflow when LEMON internals sum caps.
-                    else if constexpr (std::is_same_v<T, ChainEdge>) return std::numeric_limits<VALUE_TYPE>::max() / 2;
+                    // lemon_total_flow shrinks below the previous trash flow. Use INF so the
+                    // cap is non-binding and never needs updating.
+                    else if constexpr (std::is_same_v<T, SimpleTrashEdge>) return std::numeric_limits<VALUE_TYPE>::max();
+                    // Chain, empirical-trash, and theoretical-trash edges carry unlimited
+                    // flow. Use INF (= numeric_limits::max() for int64, which equals LEMON's
+                    // INF sentinel). LEMON's findLeavingArc guards c >= MAX → INF so residual
+                    // capacity is correctly treated as infinite; LEMON uses this same value
+                    // for its own artificial arcs. max/2 was wrong: it bypassed the guard,
+                    // returning max/2 - flow (finite) instead of INF.
+                    else if constexpr (std::is_same_v<T, ChainEdge>) return std::numeric_limits<VALUE_TYPE>::max();
                     // Asymmetric trash edges: the adjacent anchor edge is always the
                     // binding constraint (SrcToEmpiricalEdge caps empirical inflow;
                     // TheoreticalToSinkEdge caps theoretical outflow), so a redundant
                     // tight cap here adds pivot candidates without shrinking the feasible
-                    // region. Use max/2 like ChainEdge and skip set_point updates.
-                    else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) return std::numeric_limits<VALUE_TYPE>::max() / 2;
-                    else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) return std::numeric_limits<VALUE_TYPE>::max() / 2;
+                    // region. Use INF like ChainEdge and skip set_point updates.
+                    else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) return std::numeric_limits<VALUE_TYPE>::max();
+                    else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) return std::numeric_limits<VALUE_TYPE>::max();
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
         }
@@ -687,7 +691,7 @@ public:
                 "Call add_simple_trash() before build() to fix this."
             );
         }
-        // Trash cap/cost are fixed at build time (cap = max/2, cost = SimpleTrashEdge.cost);
+        // Trash cap/cost are fixed at build time (cap = INF, cost = SimpleTrashEdge.cost);
         // touching them here would force a warm-restart cold fallback whenever lemon_total_flow
         // changes between solves. Flow on the trash arc is already bounded by source supply.
         node_supply_map[lemon_graph.nodeFromId(0)] = lemon_total_flow;
