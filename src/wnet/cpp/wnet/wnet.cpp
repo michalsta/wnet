@@ -176,6 +176,22 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_base_capacity", &FlowEdge<int64_t>::get_base_capacity)
         .def("to_string", &FlowEdge<int64_t>::to_string);
 
+    // Double-intensity variants used by CWassersteinNetworkSubgraphFloat.
+    nb::class_<FlowNode<double>>(m, "FlowNodeFloat")
+        .def("get_id", &FlowNode<double>::get_id)
+        .def("layer", &FlowNode<double>::layer)
+        .def("type_str", &FlowNode<double>::type_str)
+        .def("__str__", &FlowNode<double>::to_string);
+
+    nb::class_<FlowEdge<double>>(m, "FlowEdgeFloat")
+        .def("get_id", &FlowEdge<double>::get_id)
+        .def("get_start_node_id", &FlowEdge<double>::get_start_node_id)
+        .def("get_end_node_id", &FlowEdge<double>::get_end_node_id)
+        .def("get_type", &FlowEdge<double>::get_type)
+        .def("get_cost", &FlowEdge<double>::get_cost)
+        .def("get_base_capacity", &FlowEdge<double>::get_base_capacity)
+        .def("to_string", &FlowEdge<double>::to_string);
+
     nb::class_<WassersteinNetworkSubgraph<int64_t, int64_t>>(m, "CWassersteinNetworkSubgraph")
         .def(nb::init<const std::vector<LEMON_INDEX>&, const std::vector<FlowNode<int64_t>>&, const std::vector<FlowEdge<int64_t>*>&, size_t>())
         .def("add_simple_trash", &WassersteinNetworkSubgraph<int64_t, int64_t>::add_simple_trash)
