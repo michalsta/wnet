@@ -268,6 +268,53 @@ class Distribution:
         return self.__mul__(scalar)
 
     @staticmethod
+    def LinearCombination(
+        distributions: "list[Distribution]",
+        weights: np.ndarray,
+        label: Optional[str] = None,
+    ) -> "Distribution":
+        """
+        Returns the linear combination ``sum_i weights[i] *
+        distributions[i]``: the union of every peak of every input (each
+        intensity scaled by that input's weight), with peaks sharing an
+        identical position merged (intensities summed) and the result sorted
+        lexicographically.
+
+        Mirrors masserstein's ``Spectrum.ScalarProduct``. The combine is
+        performed in C++ in a single pass.
+
+        Args:
+            distributions (list[Distribution]): The distributions to combine;
+                all must share the same dimension.
+            weights (array-like): One weight per distribution.
+            label (str | None): Optional label for the result.
+
+        Returns:
+            Distribution: A new distribution holding the combined peaks.
+        """
+        distributions = list(distributions)
+        weights = np.ascontiguousarray(weights, dtype=np.float64)
+        if not distributions:
+            raise ValueError("LinearCombination requires at least one distribution.")
+        if len(distributions) != weights.shape[0]:
+            raise ValueError(
+                f"number of distributions ({len(distributions)}) must match "
+                f"number of weights ({weights.shape[0]})."
+            )
+        dim = distributions[0].dimension
+        for d in distributions:
+            if d.dimension != dim:
+                raise ValueError(
+                    "all distributions must have the same dimension "
+                    f"(got {d.dimension} and {dim})."
+                )
+        cpp_cls = type(distributions[0].vecdist)
+        result = cpp_cls.linear_combination([d.vecdist for d in distributions], weights)
+        return Distribution(
+            result.py_get_positions(), result.py_get_intensities(), label=label
+        )
+
+    @staticmethod
     def _combined_label(a: Optional[str], b: Optional[str]) -> Optional[str]:
         if a is None and b is None:
             return None

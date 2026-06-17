@@ -293,6 +293,95 @@ def test_binned_multidim_bins_every_axis():
     assert b.intensities[0] == pytest.approx(7.0)
 
 
+# ---------------------------------------------------------------------------
+# LinearCombination: weighted linear combination Σ wᵢ·dᵢ (masserstein ScalarProduct)
+# ---------------------------------------------------------------------------
+
+def test_linear_combination_weighted_combination():
+    a = _d1([1.0, 2.0], [10.0, 20.0])
+    b = _d1([2.0, 3.0], [5.0, 7.0])
+    r = Distribution.LinearCombination([a, b], [2.0, 3.0])
+    # position 2.0 shared → 2·20 + 3·5 = 55
+    assert np.allclose(r.positions.ravel(), [1.0, 2.0, 3.0])
+    assert np.allclose(r.intensities, [20.0, 55.0, 21.0])
+
+
+def test_linear_combination_matches_add_and_mul():
+    a = _d1([1.0, 2.0], [10.0, 20.0])
+    b = _d1([2.0, 3.0], [5.0, 7.0])
+    r = Distribution.LinearCombination([a, b], [2.0, 3.0])
+    ref = (a * 2.0) + (b * 3.0)
+    assert np.allclose(r.positions, ref.positions)
+    assert np.allclose(r.intensities, ref.intensities)
+
+
+def test_linear_combination_single_distribution():
+    a = _d1([2.0, 1.0], [20.0, 10.0])
+    r = Distribution.LinearCombination([a], [1.0])
+    # weight 1 on a lone distribution → itself, sorted
+    assert np.allclose(r.positions.ravel(), [1.0, 2.0])
+    assert np.allclose(r.intensities, [10.0, 20.0])
+
+
+def test_linear_combination_accepts_ndarray_weights():
+    a = _d1([1.0], [4.0])
+    b = _d1([2.0], [6.0])
+    r = Distribution.LinearCombination([a, b], np.array([0.5, 2.0]))
+    assert np.allclose(r.intensities, [2.0, 12.0])
+
+
+def test_linear_combination_sets_label():
+    a = _d1([1.0], [1.0])
+    r = Distribution.LinearCombination([a], [1.0], label="mix")
+    assert r.label == "mix"
+
+
+def test_linear_combination_preserves_weighted_total():
+    rng = np.random.default_rng(1)
+    ds = [Distribution(rng.random((3, 4)), rng.random(4)) for _ in range(3)]
+    w = np.array([0.2, 0.3, 0.5])
+    out = Distribution.LinearCombination(ds, w)
+    expected = sum(wi * d.sum_intensities for wi, d in zip(w, ds))
+    assert out.sum_intensities == pytest.approx(expected)
+
+
+def test_linear_combination_multidim_merges_shared_point():
+    p = Distribution(np.array([[0.0, 1.0], [0.0, 1.0]]), np.array([5.0, 6.0]))
+    q = Distribution(np.array([[1.0, 2.0], [1.0, 2.0]]), np.array([7.0, 8.0]))
+    r = Distribution.LinearCombination([p, q], [2.0, 3.0])
+    # point (1,1) shared → 2·6 + 3·7 = 33
+    assert len(r) == 3
+    assert np.allclose(r.positions, [[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]])
+    assert np.allclose(r.intensities, [10.0, 33.0, 24.0])
+
+
+def test_linear_combination_length_mismatch_raises():
+    a = _d1([1.0], [1.0])
+    b = _d1([2.0], [1.0])
+    with pytest.raises(ValueError, match="match"):
+        Distribution.LinearCombination([a, b], [1.0])
+
+
+def test_linear_combination_empty_raises():
+    with pytest.raises(ValueError, match="at least one"):
+        Distribution.LinearCombination([], [])
+
+
+def test_linear_combination_dimension_mismatch_raises():
+    a = _d1([1.0], [1.0])
+    b = Distribution(np.array([[1.0], [2.0]]), np.array([1.0]))
+    with pytest.raises(ValueError, match="dimension"):
+        Distribution.LinearCombination([a, b], [1.0, 1.0])
+
+
+def test_linear_combination_is_immutable():
+    a = _d1([1.0, 2.0], [10.0, 20.0])
+    b = _d1([2.0], [5.0])
+    Distribution.LinearCombination([a, b], [2.0, 3.0])
+    assert np.allclose(a.intensities, [10.0, 20.0])
+    assert np.allclose(b.intensities, [5.0])
+
+
 def test_bounding_box():
     d = Distribution(np.array([[1.0, 3.0], [2.0, 4.0]]), np.array([1.0, 1.0]))
     lo, hi = d.bounding_box()

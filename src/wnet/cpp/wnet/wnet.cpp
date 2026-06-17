@@ -66,6 +66,10 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
         .def("add", &VectorDistribution_##DIM::add) \
         .def("binned", &VectorDistribution_##DIM::binned) \
         .def("sorted_by_positions", &VectorDistribution_##DIM::sorted_by_positions) \
+        .def_static("linear_combination", [](const std::vector<VectorDistribution_##DIM>& dists, const nb::ndarray<double, nb::shape<-1>>& weights) { \
+            std::vector<double> w(weights.data(), weights.data() + weights.shape(0)); \
+            return VectorDistribution_##DIM::linear_combination(dists, w); \
+        }) \
         .def("__len__", &VectorDistribution_##DIM::size); \
     using VectorDistributionFloat_##DIM = VectorDistribution<DIM, double, double>; \
     nb::class_<VectorDistributionFloat_##DIM>(m, "CVectorDistributionFloat" #DIM) \
@@ -94,6 +98,10 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
         .def("add", &VectorDistributionFloat_##DIM::add) \
         .def("binned", &VectorDistributionFloat_##DIM::binned) \
         .def("sorted_by_positions", &VectorDistributionFloat_##DIM::sorted_by_positions) \
+        .def_static("linear_combination", [](const std::vector<VectorDistributionFloat_##DIM>& dists, const nb::ndarray<double, nb::shape<-1>>& weights) { \
+            std::vector<double> w(weights.data(), weights.data() + weights.shape(0)); \
+            return VectorDistributionFloat_##DIM::linear_combination(dists, w); \
+        }) \
         .def("__len__", &VectorDistributionFloat_##DIM::size);
 
 NB_MODULE(wnet_cpp, m) {

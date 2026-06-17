@@ -433,6 +433,36 @@ public:
         return merge_identical(std::move(pos), std::move(ints));
     }
 
+    // Weighted linear combination Sum_i weights[i] * dists[i]: concatenates
+    // every peak of every input (each intensity scaled by that input's
+    // weight), merges peaks sharing an identical position (intensities summed)
+    // and returns the result sorted lexicographically. The wnet analogue of
+    // masserstein's Spectrum.ScalarProduct, generalised to DIM dimensions.
+    // (For an integer intensity_type the weighted product truncates, as in
+    // `scaled`.)
+    static VectorDistribution linear_combination(
+        const std::vector<VectorDistribution>& dists,
+        const std::vector<double>& weights
+    ) {
+        if (dists.size() != weights.size())
+            throw std::invalid_argument(
+                "scalar_product: number of distributions must match number of weights");
+        size_t total = 0;
+        for (const auto& d : dists) total += d.size();
+        std::vector<std::array<position_type, DIM>> pos;
+        std::vector<intensity_type> ints;
+        pos.reserve(total);
+        ints.reserve(total);
+        for (size_t k = 0; k < dists.size(); ++k) {
+            const double w = weights[k];
+            const auto& d = dists[k];
+            pos.insert(pos.end(), d.positions.begin(), d.positions.end());
+            for (const auto& v : d.intensities_vector)
+                ints.push_back(static_cast<intensity_type>(static_cast<double>(v) * w));
+        }
+        return merge_identical(std::move(pos), std::move(ints));
+    }
+
     static VectorDistribution CreateRandom(size_t no_points,
                                            position_type position_range,
                                            intensity_type intensity_range,
