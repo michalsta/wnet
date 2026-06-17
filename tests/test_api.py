@@ -133,6 +133,166 @@ def test_as_distribution_returns_base():
     assert np.allclose(b.positions, d.positions)
 
 
+# ---------------------------------------------------------------------------
+# masserstein-style algebra: sorted_by_positions / __mul__ / __add__ / binned
+#
+# All four are implemented in C++ and return a new (immutable) Distribution.
+# ---------------------------------------------------------------------------
+
+def test_sorted_by_positions_orders_lexicographically():
+    d = _d1([3.0, 1.0, 2.0], [30.0, 10.0, 20.0])
+    s = d.sorted_by_positions()
+    assert np.allclose(s.positions.ravel(), [1.0, 2.0, 3.0])
+    assert np.allclose(s.intensities, [10.0, 20.0, 30.0])
+
+
+def test_sorted_by_positions_does_not_merge_duplicates():
+    # Two peaks at the same position must remain two peaks (no merging).
+    d = _d1([2.0, 1.0, 2.0], [5.0, 1.0, 7.0])
+    s = d.sorted_by_positions()
+    assert len(s) == 3
+    assert np.allclose(s.positions.ravel(), [1.0, 2.0, 2.0])
+
+
+def test_sorted_by_positions_is_immutable():
+    d = _d1([3.0, 1.0, 2.0], [30.0, 10.0, 20.0])
+    d.sorted_by_positions()
+    # The original ordering is untouched.
+    assert np.allclose(d.positions.ravel(), [3.0, 1.0, 2.0])
+
+
+def test_sorted_by_positions_multidim():
+    # Lexicographic: dim 0 first, ties broken by dim 1.
+    pos = np.array([[2.0, 1.0, 1.0], [0.0, 9.0, 3.0]])
+    d = Distribution(pos, np.array([1.0, 2.0, 3.0]))
+    s = d.sorted_by_positions()
+    assert np.allclose(s.positions, [[1.0, 1.0, 2.0], [3.0, 9.0, 0.0]])
+
+
+def test_mul_scales_intensities_only():
+    d = _d1([1.0, 2.0], [3.0, 4.0])
+    m = d * 2.0
+    assert np.allclose(m.positions, d.positions)
+    assert np.allclose(m.intensities, [6.0, 8.0])
+
+
+def test_rmul_is_commutative():
+    d = _d1([1.0, 2.0], [3.0, 4.0])
+    assert np.allclose((3.0 * d).intensities, (d * 3.0).intensities)
+
+
+def test_mul_is_immutable():
+    d = _d1([1.0, 2.0], [3.0, 4.0])
+    d * 5.0
+    assert np.allclose(d.intensities, [3.0, 4.0])
+
+
+def test_mul_preserves_label():
+    d = Distribution_1D(np.array([1.0]), np.array([2.0]), label="lbl")
+    assert (d * 2.0).label == "lbl"
+
+
+def test_add_merges_shared_position():
+    a = _d1([1.0, 2.0, 3.0], [10.0, 20.0, 30.0])
+    b = _d1([2.0, 4.0], [5.0, 7.0])
+    c = a + b
+    # Position 2.0 is shared → its intensities (20 + 5) are summed.
+    assert np.allclose(c.positions.ravel(), [1.0, 2.0, 3.0, 4.0])
+    assert np.allclose(c.intensities, [10.0, 25.0, 30.0, 7.0])
+
+
+def test_add_disjoint_positions_concatenates():
+    a = _d1([1.0, 3.0], [1.0, 3.0])
+    b = _d1([2.0, 4.0], [2.0, 4.0])
+    c = a + b
+    assert len(c) == 4
+    assert np.allclose(c.positions.ravel(), [1.0, 2.0, 3.0, 4.0])
+    assert np.allclose(c.intensities, [1.0, 2.0, 3.0, 4.0])
+
+
+def test_add_is_immutable():
+    a = _d1([1.0, 2.0], [10.0, 20.0])
+    b = _d1([2.0], [5.0])
+    a + b
+    assert np.allclose(a.intensities, [10.0, 20.0])
+    assert len(a) == 2
+
+
+def test_add_combines_labels():
+    a = Distribution_1D(np.array([1.0]), np.array([1.0]), label="A")
+    b = Distribution_1D(np.array([2.0]), np.array([1.0]), label="B")
+    assert (a + b).label == "A + B"
+
+
+def test_add_both_labels_none():
+    a = _d1([1.0], [1.0])
+    b = _d1([2.0], [1.0])
+    assert (a + b).label is None
+
+
+def test_add_dimension_mismatch_raises():
+    a = _d1([1.0], [1.0])
+    b = Distribution(np.array([[1.0], [2.0]]), np.array([1.0]))
+    with pytest.raises(ValueError, match="dimension"):
+        a + b
+
+
+def test_add_merges_shared_position_multidim():
+    p = Distribution(np.array([[0.0, 1.0], [0.0, 1.0]]), np.array([5.0, 6.0]))
+    q = Distribution(np.array([[1.0, 2.0], [1.0, 2.0]]), np.array([7.0, 8.0]))
+    r = p + q
+    # The point (1, 1) appears in both → merged (6 + 7 = 13).
+    assert len(r) == 3
+    assert np.allclose(r.positions, [[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]])
+    assert np.allclose(r.intensities, [5.0, 13.0, 8.0])
+
+
+def test_binned_rounds_to_nearest_multiple():
+    d = _d1([1.02, 1.07, 1.93, 2.02], [1.0, 2.0, 3.0, 4.0])
+    b = d.binned(0.1)
+    assert np.allclose(b.positions.ravel(), [1.0, 1.1, 1.9, 2.0])
+    assert np.allclose(b.intensities, [1.0, 2.0, 3.0, 4.0])
+
+
+def test_binned_merges_peaks_in_same_bin():
+    d = _d1([1.1, 1.4, 1.9, 2.1], [1.0, 2.0, 3.0, 4.0])
+    b = d.binned(1.0)
+    # 1.1, 1.4 → bin 1.0 (1+2); 1.9, 2.1 → bin 2.0 (3+4)
+    assert np.allclose(b.positions.ravel(), [1.0, 2.0])
+    assert np.allclose(b.intensities, [3.0, 7.0])
+
+
+def test_binned_preserves_total_intensity():
+    d = _d1([0.1, 0.2, 0.35, 0.9], [1.0, 2.0, 3.0, 4.0])
+    b = d.binned(0.25)
+    assert b.sum_intensities == pytest.approx(d.sum_intensities)
+
+
+def test_binned_is_immutable():
+    d = _d1([1.1, 1.4], [1.0, 2.0])
+    d.binned(1.0)
+    assert len(d) == 2
+    assert np.allclose(d.positions.ravel(), [1.1, 1.4])
+
+
+def test_binned_rejects_nonpositive_width():
+    d = _d1([1.0, 2.0], [1.0, 1.0])
+    with pytest.raises((ValueError, RuntimeError)):
+        d.binned(0.0)
+    with pytest.raises((ValueError, RuntimeError)):
+        d.binned(-0.5)
+
+
+def test_binned_multidim_bins_every_axis():
+    pos = np.array([[1.1, 1.4], [2.1, 2.4]])
+    d = Distribution(pos, np.array([3.0, 4.0]))
+    b = d.binned(1.0)
+    # Both points round to (1, 2) on every axis → single merged bin.
+    assert len(b) == 1
+    assert np.allclose(b.positions, [[1.0], [2.0]])
+    assert b.intensities[0] == pytest.approx(7.0)
+
+
 def test_bounding_box():
     d = Distribution(np.array([[1.0, 3.0], [2.0, 4.0]]), np.array([1.0, 1.0]))
     lo, hi = d.bounding_box()
