@@ -1,14 +1,14 @@
 [build-system]
-requires = ["scikit-build-core", "nanobind", "pylmcf>=0.9.13"]
+requires = ["scikit-build-core", "nanobind", "pylmcf>=1.0.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "wnet"
-version = "0.9.16"
+version = "1.0.0"
 description = "Tools for calculation of Wasserstein metric between distributions based on Network Flow algorithm"
 authors = [{ name="Michał Startek", email="michal.startek@mimuw.edu.pl" }]
 maintainers = [{ name="Michał Startek", email="michal.startek@mimuw.edu.pl" }]
-dependencies = ["pylmcf>=0.9.13", "numpy"]
+dependencies = ["pylmcf>=1.0.0", "numpy"]
 license = "MIT"
 license-files = ["LICENCE"]
 readme = "README.md"
@@ -16,7 +16,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Mathematics",
     "Topic :: Software Development :: Libraries :: Python Modules",
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
 
 ]
 keywords = ["Wasserstein", "Optimal Transport", "Network Flow", "Earth Mover's Distance"]
