@@ -15,7 +15,7 @@ relative tolerance rather than exact equality.
 import numpy as np
 import pytest
 
-from wnet import Distribution, Scaler
+from wnet import Distribution, Scaler, WassersteinNetwork
 from wnet.distribution import Distribution_1D
 from wnet.distances import DistanceMetric
 
@@ -452,3 +452,107 @@ def test_auto_vs_explicit_geometric_mean_consistency():
     # auto factors are unequal here (max_sum != min_cost), explicit ties them
     assert auto.sf_distance() != pytest.approx(auto.sf_intensity(), rel=RTOL)
     assert explicit.sf_distance() == pytest.approx(explicit.sf_intensity(), rel=RTOL)
+
+
+# ---------------------------------------------------------------------------
+# End-to-end scaling invariance — the property the whole machinery exists for:
+# solving the SAME real problem at different sensible scales must recover (very
+# nearly) the same real transport cost.  Quantization error shrinks as the
+# scale grows, so coarse scales sit slightly off and fine scales converge.
+#
+# Wiring mirrors the consumers exactly: positions pre-scaled by sf_distance,
+# intensities quantized via intensity_scale=sf_intensity, trash costs scaled by
+# sf_distance, and the real cost recovered as total_cost() / sf_distance (for
+# p == 1 the network's own cost scale_factor() is 1).
+# ---------------------------------------------------------------------------
+
+def _scaled(spec, sfd):
+    return Distribution(np.asarray(spec.positions) * sfd, np.asarray(spec.intensities))
+
+
+def _solve_real_cost(emp, theo, max_distance, exp_cost, theo_cost,
+                     *, precision=1e-3, explicit=0.0, point=None):
+    """Recover the real transport cost solving at the scale the Scaler picks."""
+    sc = Scaler(emp, [theo] if isinstance(theo, Distribution) else theo,
+                DistanceMetric.LINF, max_distance,
+                [exp_cost, theo_cost], precision=precision,
+                explicit_scale_factor=explicit, max_dropped_fraction=1.0)
+    sfd, sfi = sc.sf_distance(), sc.sf_intensity()
+    targets = [theo] if isinstance(theo, Distribution) else theo
+    net = WassersteinNetwork(
+        _scaled(emp, sfd), [_scaled(t, sfd) for t in targets],
+        DistanceMetric.LINF, max_distance=int(round(max_distance * sfd)),
+        intensity_scale=sfi,
+    )
+    net.add_experimental_trash(int(exp_cost * sfd))
+    net.add_theoretical_trash(int(theo_cost * sfd))
+    net.build()
+    net.solve(point if point is not None else [1.0] * len(targets))
+    return net.total_cost() / sfd
+
+
+def _emp_theo_1d():
+    emp = Distribution_1D(np.array([0.0, 1.0, 2.0, 3.0, 4.0]),
+                          np.array([0.30, 0.10, 0.20, 0.20, 0.20]))
+    theo = Distribution_1D(np.array([0.2, 1.1, 2.0, 3.3, 4.1]),
+                           np.array([0.25, 0.15, 0.20, 0.20, 0.20]))
+    return emp, theo
+
+
+def _emp_theo_2d():
+    rng = np.random.default_rng(7)
+    emp = Distribution(rng.uniform(0, 5, (2, 8)), rng.uniform(0.05, 0.3, 8))
+    theo = Distribution(rng.uniform(0, 5, (2, 7)), rng.uniform(0.05, 0.3, 7))
+    return emp, theo
+
+
+def test_cost_stable_across_precision_sweep_1d():
+    emp, theo = _emp_theo_1d()
+    costs = [_solve_real_cost(emp, theo, 1.0, 1.0, 1.0, precision=p)
+             for p in (1e-3, 1e-4, 1e-5)]
+    spread = (max(costs) - min(costs)) / np.mean(costs)
+    assert spread < 5e-3, f"costs {costs} spread {spread:.2%} too large"
+
+
+def test_cost_stable_across_explicit_scale_sweep_1d():
+    # CLAUDE.md's "safe" intensity scale range 1e4–1e6 (plus 1e3) must agree.
+    emp, theo = _emp_theo_1d()
+    costs = [_solve_real_cost(emp, theo, 1.0, 1.0, 1.0, explicit=K)
+             for K in (1e3, 1e4, 1e5, 1e6)]
+    spread = (max(costs) - min(costs)) / np.mean(costs)
+    assert spread < 5e-3, f"costs {costs} spread {spread:.2%} too large"
+
+
+def test_coarse_scale_within_two_percent_of_fine_1d():
+    emp, theo = _emp_theo_1d()
+    coarse = _solve_real_cost(emp, theo, 1.0, 1.0, 1.0, precision=1e-2)
+    fine = _solve_real_cost(emp, theo, 1.0, 1.0, 1.0, precision=1e-4)
+    assert coarse == pytest.approx(fine, rel=2e-2)
+
+
+def test_cost_stable_across_explicit_scale_sweep_2d():
+    emp, theo = _emp_theo_2d()
+    costs = [_solve_real_cost(emp, theo, 2.0, 1.0, 1.0, explicit=K)
+             for K in (1e3, 1e4, 1e5, 1e6)]
+    spread = (max(costs) - min(costs)) / np.mean(costs)
+    assert spread < 1e-2, f"costs {costs} spread {spread:.2%} too large"
+
+
+@pytest.mark.parametrize("point", [[0.5], [1.0], [1.5]])
+def test_cost_stable_at_various_points_across_scale(point):
+    # at any fixed proportion, the recovered cost is scale-stable
+    emp, theo = _emp_theo_1d()
+    lo = _solve_real_cost(emp, theo, 1.0, 1.0, 1.0, explicit=1e4, point=point)
+    hi = _solve_real_cost(emp, theo, 1.0, 1.0, 1.0, explicit=1e6, point=point)
+    assert lo == pytest.approx(hi, rel=5e-3)
+
+
+def test_all_sensible_scales_near_fine_reference():
+    # Quantization error is bounded (not monotone) in the scale: every sensible
+    # scale stays within a small band of a fine-scale reference.  (A coarse
+    # scale may coincidentally hit the exact value, so we assert closeness, not
+    # monotone convergence.)
+    emp, theo = _emp_theo_1d()
+    ref = _solve_real_cost(emp, theo, 1.0, 1.0, 1.0, explicit=1e7)
+    for K in (1e3, 1e4, 1e5, 1e6):
+        assert _solve_real_cost(emp, theo, 1.0, 1.0, 1.0, explicit=K) == pytest.approx(ref, rel=1e-2)
