@@ -179,6 +179,100 @@ class Distribution:
         new_intensities = self.intensities / total_intensity
         return type(self)(new_positions, new_intensities, label=self.label)
 
+    def sorted_by_positions(self) -> "Distribution":
+        """
+        Returns a new Distribution with peaks sorted lexicographically by
+        position (dimension 0 first, then 1, ...). Peaks are not merged.
+
+        Mirrors masserstein's ``Spectrum.sort_confs``, generalised to N
+        dimensions. The sort is performed in C++.
+
+        Returns:
+            Distribution: A new, position-sorted distribution.
+        """
+        result = self.vecdist.sorted_by_positions()
+        return type(self)(
+            result.py_get_positions(), result.py_get_intensities(), label=self.label
+        )
+
+    def binned(self, bin_width: float) -> "Distribution":
+        """
+        Returns a new Distribution with each position coordinate rounded to the
+        nearest multiple of ``bin_width``, then peaks falling in the same bin
+        merged (intensities summed) and the result sorted lexicographically.
+
+        The wnet analogue of masserstein's ``coarse_bin``, generalised to N
+        dimensions and parameterised by bin width rather than decimal digits.
+        Performed in C++.
+
+        Args:
+            bin_width (float): Width of each bin; must be positive.
+
+        Returns:
+            Distribution: A new, binned distribution.
+        """
+        result = self.vecdist.binned(float(bin_width))
+        return type(self)(
+            result.py_get_positions(), result.py_get_intensities(), label=self.label
+        )
+
+    def __add__(self, other: "Distribution") -> "Distribution":
+        """
+        Returns the sum of two distributions: the union of their peaks, with
+        peaks sharing an identical position merged (intensities summed) and the
+        result sorted lexicographically.
+
+        Mirrors masserstein's ``Spectrum.__add__``. The merge is performed in
+        C++.
+
+        Args:
+            other (Distribution): The distribution to add; must have the same
+                dimension as ``self``.
+
+        Returns:
+            Distribution: A new distribution holding the merged peaks.
+        """
+        if not isinstance(other, Distribution):
+            return NotImplemented
+        if other.dimension != self.dimension:
+            raise ValueError(
+                f"Cannot add distributions of differing dimension "
+                f"({self.dimension} and {other.dimension})."
+            )
+        result = self.vecdist.add(other.vecdist)
+        label = self._combined_label(self.label, other.label)
+        return type(self)(
+            result.py_get_positions(), result.py_get_intensities(), label=label
+        )
+
+    def __mul__(self, scalar: float) -> "Distribution":
+        """
+        Returns a new Distribution with intensities multiplied by ``scalar``
+        and positions unchanged (the C++ analogue of :meth:`scaled`).
+
+        Mirrors masserstein's ``Spectrum.__mul__``. Performed in C++.
+
+        Args:
+            scalar (float): The factor by which to scale the intensities.
+
+        Returns:
+            Distribution: A new distribution with scaled intensities.
+        """
+        result = self.vecdist.scaled(float(scalar))
+        return type(self)(
+            result.py_get_positions(), result.py_get_intensities(), label=self.label
+        )
+
+    def __rmul__(self, scalar: float) -> "Distribution":
+        # Scalar multiplication is commutative.
+        return self.__mul__(scalar)
+
+    @staticmethod
+    def _combined_label(a: Optional[str], b: Optional[str]) -> Optional[str]:
+        if a is None and b is None:
+            return None
+        return f"{a} + {b}"
+
     def as_distribution(self) -> "Distribution":
         """
         Returns a plain Distribution with the same positions and intensities.

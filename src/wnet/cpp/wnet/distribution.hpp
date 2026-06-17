@@ -1,7 +1,9 @@
 #ifndef WNET_DISTRIBUTION_HPP
 #define WNET_DISTRIBUTION_HPP
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <functional>
 #include <limits>
 #include <numeric>
@@ -335,6 +337,100 @@ public:
             if (cumsum >= threshold) break;
         }
         return VectorDistribution(std::move(new_positions), std::move(new_intensities));
+    }
+
+    // Lexicographic (dimension-by-dimension) ordering of two points.
+    static bool point_less(const Point_t& a, const Point_t& b) {
+        for (size_t d = 0; d < DIM; ++d) {
+            if (a[d] < b[d]) return true;
+            if (a[d] > b[d]) return false;
+        }
+        return false;
+    }
+
+    // Build a distribution from the given (unordered) points/intensities,
+    // sorted lexicographically by position and with peaks sharing an identical
+    // position merged into one (their intensities summed). This is the wnet
+    // analogue of masserstein's sort_confs + merge_confs.
+    static VectorDistribution merge_identical(
+        std::vector<std::array<position_type, DIM>>&& pos,
+        std::vector<intensity_type>&& ints
+    ) {
+        std::vector<size_t> idx(pos.size());
+        std::iota(idx.begin(), idx.end(), 0);
+        std::sort(idx.begin(), idx.end(),
+            [&pos](size_t a, size_t b) { return point_less(pos[a], pos[b]); });
+        std::vector<std::array<position_type, DIM>> out_pos;
+        std::vector<intensity_type> out_ints;
+        out_pos.reserve(pos.size());
+        out_ints.reserve(pos.size());
+        for (size_t i : idx) {
+            if (!out_pos.empty() && out_pos.back() == pos[i]) {
+                out_ints.back() += ints[i];
+            } else {
+                out_pos.push_back(pos[i]);
+                out_ints.push_back(ints[i]);
+            }
+        }
+        return VectorDistribution(std::move(out_pos), std::move(out_ints));
+    }
+
+    // Returns a copy with peaks sorted lexicographically by position
+    // (dimension 0 first, then 1, ...). Mirrors masserstein's sort_confs,
+    // generalised to DIM dimensions. Peaks are not merged.
+    VectorDistribution sorted_by_positions() const {
+        std::vector<std::array<position_type, DIM>> pos(positions);
+        std::vector<intensity_type> ints(intensities_vector);
+        std::vector<size_t> idx(pos.size());
+        std::iota(idx.begin(), idx.end(), 0);
+        std::sort(idx.begin(), idx.end(),
+            [&pos](size_t a, size_t b) { return point_less(pos[a], pos[b]); });
+        std::vector<std::array<position_type, DIM>> new_positions;
+        std::vector<intensity_type> new_intensities;
+        new_positions.reserve(pos.size());
+        new_intensities.reserve(pos.size());
+        for (size_t i : idx) {
+            new_positions.push_back(pos[i]);
+            new_intensities.push_back(ints[i]);
+        }
+        return VectorDistribution(std::move(new_positions), std::move(new_intensities));
+    }
+
+    // Returns the sum of this distribution and `other`: the concatenation of
+    // their peaks, with peaks sharing an identical position merged (intensities
+    // summed) and the result sorted lexicographically. Mirrors masserstein's
+    // Spectrum.__add__.
+    VectorDistribution add(const VectorDistribution& other) const {
+        std::vector<std::array<position_type, DIM>> pos;
+        std::vector<intensity_type> ints;
+        pos.reserve(size() + other.size());
+        ints.reserve(size() + other.size());
+        pos.insert(pos.end(), positions.begin(), positions.end());
+        pos.insert(pos.end(), other.positions.begin(), other.positions.end());
+        ints.insert(ints.end(), intensities_vector.begin(), intensities_vector.end());
+        ints.insert(ints.end(), other.intensities_vector.begin(), other.intensities_vector.end());
+        return merge_identical(std::move(pos), std::move(ints));
+    }
+
+    // Returns a copy with each position coordinate rounded to the nearest
+    // multiple of `bin_width`, then peaks falling in the same bin merged
+    // (intensities summed) and the result sorted lexicographically. This is the
+    // wnet analogue of masserstein's coarse_bin, generalised to DIM dimensions
+    // and parameterised by bin width rather than decimal digits.
+    VectorDistribution binned(double bin_width) const {
+        if (bin_width <= 0.0)
+            throw std::invalid_argument("bin_width must be positive");
+        std::vector<std::array<position_type, DIM>> pos;
+        std::vector<intensity_type> ints(intensities_vector);
+        pos.reserve(size());
+        for (const auto& p : positions) {
+            std::array<position_type, DIM> binned_p;
+            for (size_t d = 0; d < DIM; ++d)
+                binned_p[d] = static_cast<position_type>(
+                    std::round(static_cast<double>(p[d]) / bin_width) * bin_width);
+            pos.push_back(binned_p);
+        }
+        return merge_identical(std::move(pos), std::move(ints));
     }
 
     static VectorDistribution CreateRandom(size_t no_points,
