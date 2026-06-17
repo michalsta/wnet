@@ -31,7 +31,9 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
 #include "decompositable_graph.hpp"
 #include "graph_elements.hpp"
 #include "distribution.hpp"
+#include "scaling.hpp"
 #include "misc.hpp"
+#include <new>
 
 
 #ifndef WNET_MAX_DIM
@@ -102,7 +104,29 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
             std::vector<double> w(weights.data(), weights.data() + weights.shape(0)); \
             return VectorDistributionFloat_##DIM::linear_combination(dists, w); \
         }) \
-        .def("__len__", &VectorDistributionFloat_##DIM::size);
+        .def("__len__", &VectorDistributionFloat_##DIM::size); \
+    using Scaler_##DIM = Scaler<DIM>; \
+    nb::class_<Scaler_##DIM>(m, "CScalerFloat" #DIM) \
+        .def("__init__", [](Scaler_##DIM* self, \
+                const VectorDistributionFloat_##DIM& empirical, \
+                const std::vector<VectorDistributionFloat_##DIM>& theoretical, \
+                DistanceMetric metric, double max_distance, \
+                const nb::ndarray<double, nb::shape<-1>>& trash_costs, \
+                double precision, double explicit_scale_factor, bool tie_factors, \
+                double max_dropped_fraction, bool enforce_distance_resolution, \
+                double max_int) { \
+            std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
+            ptrs.reserve(theoretical.size()); \
+            for (const auto& t : theoretical) ptrs.push_back(&t); \
+            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
+            new (self) Scaler_##DIM(empirical, ptrs, metric, max_distance, tc, \
+                precision, explicit_scale_factor, tie_factors, \
+                max_dropped_fraction, enforce_distance_resolution, max_int); \
+        }) \
+        .def("sf_distance", &Scaler_##DIM::sf_distance) \
+        .def("sf_intensity", &Scaler_##DIM::sf_intensity) \
+        .def("scale_factor", &Scaler_##DIM::scale_factor) \
+        .def("ftol", &Scaler_##DIM::ftol);
 
 NB_MODULE(wnet_cpp, m) {
     m.doc() = "WNet C++ imlementation module";
