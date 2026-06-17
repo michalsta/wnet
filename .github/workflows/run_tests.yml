@@ -115,6 +115,10 @@ jobs:
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
           echo "CMAKE_ARGS=-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++" >> $GITHUB_ENV
+      - name: Limit arm64 build parallelism
+        if: matrix.os == 'linux-arm64'
+        run: |
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=1" >> $GITHUB_ENV
       - name: Install package
         env:
           VERBOSE: '1'
@@ -211,6 +215,10 @@ jobs:
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
           echo "CMAKE_ARGS=-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++" >> $GITHUB_ENV
+      - name: Limit arm64 build parallelism
+        if: matrix.os == 'linux-arm64'
+        run: |
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=1" >> $GITHUB_ENV
       - name: Install package
         env:
           VERBOSE: '1'
