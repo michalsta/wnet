@@ -11,6 +11,7 @@
 #include <deque>
 #include <queue>
 #include <variant>
+#include <type_traits>
 
 
 #define LEMON_ONLY_TEMPLATES
@@ -1606,7 +1607,19 @@ public:
     double intensity_scale_factor() const { return _intensity_scale; }
     // Must be called before build() to take effect (build() propagates it to
     // the subgraphs and folds it into the cost-scale overflow budget).
-    void set_intensity_scale(double s) { _intensity_scale = s; }
+    // The integer-intensity backend does no scaling at all: intensities are
+    // already exact integers, so the only legal scale is 1.
+    void set_intensity_scale(double s) {
+        if constexpr (std::is_integral_v<intensity_type>) {
+            if (s != 1.0)
+                throw std::invalid_argument(
+                    "Integer intensity backend does not support intensity scaling "
+                    "(set_intensity_scale requires 1; use the double-intensity backend).");
+            _intensity_scale = 1.0;
+        } else {
+            _intensity_scale = s;
+        }
+    }
 
     WassersteinNetwork(const WassersteinNetwork&) = delete;
     WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
@@ -2234,6 +2247,13 @@ public:
         if (!(std::isfinite(p) && p >= 1.0))
             throw std::invalid_argument("Wasserstein order p must be a finite number >= 1.");
         using intensity_type = typename Distribution_t::intensity_type;
+        // The integer-intensity backend is the bit-exact p == 1 legacy: it does
+        // no cost/intensity scaling, so fractional-cost orders are unsupported.
+        if constexpr (std::is_integral_v<intensity_type>)
+            if (p != 1.0)
+                throw std::invalid_argument(
+                    "Integer intensity backend supports only p == 1; use the "
+                    "double-intensity backend for p != 1.");
         double max_real_cost = 0.0;  // largest matching cost; sizes the build-time scale
         std::vector<FlowNode<intensity_type>> nodes;
         std::vector<FlowEdge<intensity_type>> edges;

@@ -114,14 +114,15 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
                 const nb::ndarray<double, nb::shape<-1>>& trash_costs, \
                 double precision, double explicit_scale_factor, bool tie_factors, \
                 double max_dropped_fraction, bool enforce_distance_resolution, \
-                double max_int) { \
+                double max_int, double p, bool fine_grid_intensity) { \
             std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
             ptrs.reserve(theoretical.size()); \
             for (const auto& t : theoretical) ptrs.push_back(&t); \
             std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
             new (self) Scaler_##DIM(empirical, ptrs, metric, max_distance, tc, \
                 precision, explicit_scale_factor, tie_factors, \
-                max_dropped_fraction, enforce_distance_resolution, max_int); \
+                max_dropped_fraction, enforce_distance_resolution, max_int, \
+                p, fine_grid_intensity); \
         }) \
         .def("sf_distance", &Scaler_##DIM::sf_distance) \
         .def("sf_intensity", &Scaler_##DIM::sf_intensity) \

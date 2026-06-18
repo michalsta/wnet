@@ -396,10 +396,14 @@ def test_metric_does_not_change_factors():
 # Input validation
 # ---------------------------------------------------------------------------
 
-def test_empty_trash_costs_raises():
+def test_empty_trash_costs_allowed():
+    # Trash is optional (the pure-distance path has none); cost bounds then come
+    # from max_distance alone.
     emp, theo = big_pair()
-    with pytest.raises(ValueError):
-        Scaler(emp, theo, DistanceMetric.LINF, 1.0, [], max_dropped_fraction=1.0)
+    s = Scaler(emp, theo, DistanceMetric.LINF, 2.0, [], max_dropped_fraction=1.0)
+    # min_cost == max_cost == max_distance == 2.0
+    assert s.sf_distance() == pytest.approx(1.0 / (1e-3 * 2.0), rel=RTOL)
+    assert s.sf_intensity() == pytest.approx(1.0 / (1e-3 * 600.0), rel=RTOL)
 
 
 def test_zero_intensity_spectra_raises():
@@ -556,3 +560,166 @@ def test_all_sensible_scales_near_fine_reference():
     ref = _solve_real_cost(emp, theo, 1.0, 1.0, 1.0, explicit=1e7)
     for K in (1e3, 1e4, 1e5, 1e6):
         assert _solve_real_cost(emp, theo, 1.0, 1.0, 1.0, explicit=K) == pytest.approx(ref, rel=1e-2)
+
+
+# ---------------------------------------------------------------------------
+# p-awareness: fractional intensities are finely scaled regardless of p (the
+# old "pin to 1 for p != 1" hack is gone); only integer-valued data returns 1.
+# ---------------------------------------------------------------------------
+
+def test_fine_grid_integer_valued_p_not_one_returns_one():
+    # big_pair has integer-valued intensities → scale 1 (bit-compatible),
+    # independent of p.
+    emp, theo = big_pair()
+    s = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [], p=2.0, fine_grid_intensity=True)
+    assert s.sf_intensity() == pytest.approx(1.0, rel=RTOL)
+
+
+def test_fine_grid_fractional_p_not_one_scales():
+    # fractional intensities at p != 1 are now finely scaled (no longer pinned
+    # to 1): the cap uses cost_bound**p so the network's cost scale stays >= 1.
+    emp = d1([0.0, 5.0], [0.5, 0.5])
+    theo = d1([1.0, 6.0], [0.5, 0.5])
+    s = Scaler(emp, [theo], DistanceMetric.L2, 10.0, [], p=2.0, fine_grid_intensity=True)
+    assert s.sf_intensity() > 1.0
+    # cap = max_int / (cost_bound**p * total); cost_bound = min(span=6, md=10) = 6,
+    # so cap = 2**60 / (6**2 * 2.0) ≈ huge; target = 2**30 / 2.0 dominates.
+    assert s.sf_intensity() == pytest.approx(2.0 ** 30 / 2.0, rel=1e-9)
+
+
+def test_fine_grid_p_not_one_cost_bound_cap_can_bind():
+    # a large ground span at p=2 makes cost_bound**p huge → the overflow cap
+    # (not the fine-grid target) limits the intensity scale, but it stays >= 1.
+    emp = d1([0.0, 1e7], [0.5, 0.5])
+    theo = d1([1.0, 1e7 + 1], [0.5, 0.5])
+    s = Scaler(emp, [theo], DistanceMetric.L2, 2e7, [], p=2.0, fine_grid_intensity=True)
+    assert s.sf_intensity() >= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Fine-grid intensity policy (the WassersteinNetwork/WassersteinDistance path)
+# ---------------------------------------------------------------------------
+
+def test_fine_grid_sf_distance_is_one():
+    # fine-grid never pre-scales positions
+    emp = d1([0.0, 5.0], [0.5, 0.5])
+    theo = d1([1.0, 6.0], [0.5, 0.5])
+    s = Scaler(emp, [theo], DistanceMetric.L1, 10.0, [], fine_grid_intensity=True)
+    assert s.sf_distance() == pytest.approx(1.0, rel=RTOL)
+
+
+def test_fine_grid_integer_valued_returns_one():
+    # already-integer intensities → scale 1 (bit-compatible with the int backend)
+    emp = d1([0.0, 5.0], [3.0, 2.0])
+    theo = d1([1.0, 6.0], [2.0, 3.0])
+    s = Scaler(emp, [theo], DistanceMetric.L1, 10.0, [], fine_grid_intensity=True)
+    assert s.sf_intensity() == pytest.approx(1.0, rel=RTOL)
+
+
+def test_fine_grid_fractional_uses_fine_grid():
+    # fractional intensities → ~2**30 total-flow grid (here total = 1.0+1.0 = 2)
+    emp = d1([0.0, 5.0], [0.5, 0.5])
+    theo = d1([1.0, 6.0], [0.5, 0.5])
+    s = Scaler(emp, [theo], DistanceMetric.L1, 10.0, [], fine_grid_intensity=True)
+    assert s.sf_intensity() == pytest.approx(2.0 ** 30 / 2.0, rel=1e-9)
+
+
+def test_fine_grid_matches_wassersteinnetwork():
+    # WassersteinNetwork must derive its intensity scale from this exact policy.
+    emp = d1([0.0, 5.0], [0.5, 0.5])
+    theo = d1([1.0, 6.0], [0.5, 0.5])
+    net = WassersteinNetwork(emp, [theo], DistanceMetric.L1, max_distance=10.0)
+    net.build()
+    scaler_val = Scaler(emp, [theo], DistanceMetric.L1, 10.0, [],
+                        fine_grid_intensity=True).sf_intensity()
+    assert net.intensity_scale_factor() == pytest.approx(scaler_val, rel=RTOL)
+
+
+def test_fine_grid_zero_intensity_returns_one():
+    emp = d1([0.0, 1.0], [0.0, 0.0])
+    theo = d1([1.0], [0.0])
+    s = Scaler(emp, [theo], DistanceMetric.L1, 10.0, [], fine_grid_intensity=True)
+    assert s.sf_intensity() == pytest.approx(1.0, rel=RTOL)
+
+
+# ---------------------------------------------------------------------------
+# Integer backend = no scaling at all, p == 1 only (raw C++ network).
+# ---------------------------------------------------------------------------
+
+def _int_dist(positions, intens):
+    import wnet.wnet_cpp as cpp
+    return cpp.CVectorDistribution1(
+        np.array(positions, dtype=float), np.array(intens, dtype=np.int64)
+    )
+
+
+def test_integer_backend_forbids_p_not_one():
+    import wnet.wnet_cpp as cpp
+    D = _int_dist([[0.0, 1.0, 5.0]], [3, 2, 5])
+    T = _int_dist([[1.0, 6.0]], [5, 5])
+    with pytest.raises(Exception, match="p == 1|double-intensity"):
+        cpp.CWassersteinNetworkFactory.create(D, [T], DistanceMetric.L1, 100, 2.0)
+
+
+def test_integer_backend_rejects_intensity_scaling():
+    import wnet.wnet_cpp as cpp
+    D = _int_dist([[0.0, 1.0, 5.0]], [3, 2, 5])
+    T = _int_dist([[1.0, 6.0]], [5, 5])
+    net = cpp.CWassersteinNetworkFactory.create(D, [T], DistanceMetric.L1, 100, 1.0)
+    with pytest.raises(Exception, match="does not support intensity scaling"):
+        net.set_intensity_scale(2.0)
+    net.set_intensity_scale(1.0)  # the identity scale is fine
+
+
+def test_integer_backend_identity_cost():
+    # p == 1, scale 1: total_cost is the exact integer transport cost.
+    import wnet.wnet_cpp as cpp
+    D = _int_dist([[0.0, 5.0]], [5, 5])
+    T = _int_dist([[1.0, 6.0]], [5, 5])
+    net = cpp.CWassersteinNetworkFactory.create(D, [T], DistanceMetric.L1, 100, 1.0)
+    assert net.intensity_scale_factor() == 1.0
+    assert net.scale_factor() == 1
+    net.build()
+    net.solve([1.0])
+    # move 5 units a distance 1 + 5 units a distance 1 = 10
+    assert net.total_cost() == 10.0
+
+
+def test_float_backend_allows_p_not_one_and_scaling():
+    import wnet.wnet_cpp as cpp
+    D = cpp.CVectorDistributionFloat1(np.array([[0.0, 5.0]]), np.array([0.5, 0.5]))
+    T = cpp.CVectorDistributionFloat1(np.array([[1.0, 6.0]]), np.array([0.5, 0.5]))
+    net = cpp.CWassersteinNetworkFactory.create(D, [T], DistanceMetric.L2, 100, 2.0)
+    net.set_intensity_scale(8.0)  # must not raise on the float backend
+    assert net.intensity_scale_factor() == 8.0
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: fractional intensities at p != 1 are now accurate (the pin is
+# gone), while integer-intensity p != 1 stays bit-identical and large masses
+# don't overflow.
+# ---------------------------------------------------------------------------
+
+def test_wd_fractional_p2_accurate():
+    from wnet.wasserstein import WassersteinDistance
+    # mass 0.5 moves 0->1 (d=1) and 0.5 moves 5->6 (d=1); W2 = (0.5+0.5)^(1/2) = 1
+    F1 = Distribution(np.array([[0.0, 5.0]]), np.array([0.5, 0.5]))
+    F2 = Distribution(np.array([[1.0, 6.0]]), np.array([0.5, 0.5]))
+    assert WassersteinDistance(F1, F2, DistanceMetric.L2, p=2) == pytest.approx(1.0, rel=1e-6)
+
+
+def test_wd_integer_p2_bit_identical():
+    # integer intensities → intensity scale 1 regardless of p (unchanged)
+    from wnet.wasserstein import WassersteinDistance
+    S1 = Distribution(np.array([[0, 1, 5, 10], [0, 0, 0, 3]]), np.array([10, 5, 5, 5]))
+    S2 = Distribution(np.array([[1, 10], [0, 0]]), np.array([20, 5]))
+    assert WassersteinDistance(S1, S2, DistanceMetric.L2, p=2) == 11.61895003862225
+
+
+def test_wd_large_mass_p2_no_overflow():
+    from wnet.wasserstein import WassersteinDistance
+    G1 = Distribution(np.array([[0.0, 5.0]]), np.array([1234.5, 8765.5]))
+    G2 = Distribution(np.array([[1.0, 6.0]]), np.array([1234.5, 8765.5]))
+    v = WassersteinDistance(G1, G2, DistanceMetric.L2, p=2)
+    # total cost = 1^2*1234.5 + 1^2*8765.5 = 10000; W2 = sqrt(10000) = 100
+    assert np.isfinite(v) and v == pytest.approx(100.0, rel=1e-6)

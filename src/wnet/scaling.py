@@ -48,6 +48,15 @@ class Scaler:
         Distance-resolution guard (auto mode only).  Default True.
     max_int : float, optional
         int64 overflow cap.  Default ``2**60``.
+    p : float, optional
+        Wasserstein order.  For ``p != 1`` the intensity is left unscaled
+        (``sf_intensity == 1``); fractional intensities are handled jointly with
+        the cost scale inside the network.  Default 1.0.
+    fine_grid_intensity : bool, optional
+        Use the WassersteinNetwork/WassersteinDistance intensity policy: no
+        position pre-scaling (``sf_distance == 1``), intensities mapped onto a
+        fine grid (~2**30 total flow), warn-not-throw on under-resolution.
+        Default False (the precision policy used by the solvers).
     """
 
     def __init__(
@@ -63,6 +72,8 @@ class Scaler:
         max_dropped_fraction: float = 0.05,
         enforce_distance_resolution: bool = True,
         max_int: float = float(1 << 60),
+        p: float = 1.0,
+        fine_grid_intensity: bool = False,
     ) -> None:
         theoretical = list(theoretical)
         dim = empirical.dimension
@@ -78,9 +89,10 @@ class Scaler:
                 f"Dimension {dim} is unavailable in this build of the wnet C++ "
                 f"extension (compiled with a smaller WNET_MAX_DIM)."
             )
+        # trash_costs is optional (the pure-distance path supplies none).
         trash = np.ascontiguousarray(trash_costs, dtype=np.float64)
-        if trash.ndim != 1 or trash.shape[0] == 0:
-            raise ValueError("trash_costs must be a non-empty 1D array.")
+        if trash.ndim != 1:
+            raise ValueError("trash_costs must be a 1D array (may be empty).")
         self._cpp = cls(
             empirical.vecdist,
             [t.vecdist for t in theoretical],
@@ -93,6 +105,8 @@ class Scaler:
             float(max_dropped_fraction),
             bool(enforce_distance_resolution),
             float(max_int),
+            float(p),
+            bool(fine_grid_intensity),
         )
 
     def sf_distance(self) -> float:

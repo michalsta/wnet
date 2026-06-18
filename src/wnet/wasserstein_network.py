@@ -19,51 +19,8 @@ from wnet.wnet_cpp import (
 )
 from wnet.distribution import Distribution
 from wnet.distances import DistanceMetric
+from wnet.scaling import Scaler
 from wnet.visualization import show_graph
-
-
-def _auto_intensity_scale(base_distribution, target_distributions, p, max_distance):
-    """Pick an intensity scale that maps real intensities onto a fine integer
-    supply grid without overflowing the int64 cost accumulator.
-
-    Returns 1.0 (verbatim, bit-compatible with the legacy int backend) when the
-    intensities are already integer-valued, or when ``p != 1`` (scaling the
-    intensity and cost budgets jointly for p != 1 is future work).  Otherwise it
-    targets a total scaled flow of ~2**30 (a fine grid, modest magnitude),
-    clamped below an overflow ceiling and never below 1.
-    """
-    dists = [base_distribution] + list(target_distributions)
-    all_integer = all(
-        bool(np.all(d.intensities == np.round(d.intensities))) for d in dists
-    )
-    if p != 1.0 or all_integer:
-        return 1.0
-    total = float(sum(np.sum(np.abs(d.intensities)) for d in dists))
-    nonzero = [np.abs(d.intensities)[d.intensities != 0] for d in dists]
-    nonzero = [a for a in nonzero if a.size]
-    if not (total > 0.0) or not nonzero:
-        return 1.0
-    min_pos = float(min(float(a.min()) for a in nonzero))
-    # Conservative ground-distance bound: the L1 extent of the combined bounding
-    # box dominates the L2/Linf distance between any two points; cap by
-    # max_distance since arcs beyond it carry no flow. (p == 1 here, cost == d.)
-    gmin = np.min([d.positions.min(axis=1) for d in dists], axis=0)
-    gmax = np.max([d.positions.max(axis=1) for d in dists], axis=0)
-    span = float(np.sum(gmax - gmin))
-    cost_bound = max(min(span, float(max_distance)), 1.0)
-    # 2**60 leaves headroom below NetworkSimplex's 2**62 ART_COST ceiling.
-    overflow_cap = (2.0 ** 60) / (cost_bound * total)
-    target = (2.0 ** 30) / total
-    scale = max(1.0, min(target, overflow_cap))
-    if scale * min_pos < 1.0:
-        warnings.warn(
-            f"intensity auto-scale {scale:.3g} cannot represent the smallest "
-            f"nonzero intensity {min_pos:.3g} as >=1 supply unit (overflow cap "
-            f"{overflow_cap:.3g}); small peaks may be dropped. Normalize the "
-            f"intensities or pass an explicit intensity_scale.",
-            stacklevel=3,
-        )
-    return scale
 
 
 class WassersteinNetwork:
@@ -163,9 +120,20 @@ class WassersteinNetwork:
         # overflowing the cost accumulator. An explicit value (e.g. 1.0) is used
         # verbatim. Must be set before build().
         if intensity_scale is None:
-            intensity_scale = _auto_intensity_scale(
-                base_distribution, target_distributions, p, max_distance
-            )
+            # Float-backend intensity scaling is owned by the shared Scaler
+            # (fine-grid policy: no position pre-scale, maps intensities onto a
+            # ~2**30 total-flow grid, capped by cost_bound**p so the network's
+            # own cost scale stays >= 1).  Returns 1.0 for integer-valued data.
+            intensity_scale = Scaler(
+                base_distribution,
+                list(target_distributions),
+                distance,
+                max_distance,
+                trash_costs=[],
+                p=p,
+                fine_grid_intensity=True,
+                enforce_distance_resolution=False,
+            ).sf_intensity()
         self.wnet.set_intensity_scale(float(intensity_scale))
 
         self.add_simple_trash = self.wnet.add_simple_trash
