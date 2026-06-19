@@ -19,7 +19,7 @@ from wnet.wnet_cpp import (
 )
 from wnet.distribution import Distribution
 from wnet.distances import DistanceMetric
-from wnet.scaling import Scaler
+from wnet.scaling import FineGridScaler
 from wnet.visualization import show_graph
 
 
@@ -86,7 +86,9 @@ class WassersteinNetwork:
             max_distance = md_int
         p = float(p)
         if not (p >= 1.0) or not np.isfinite(p):
-            raise ValueError(f"Wasserstein order p must be a real number >= 1, got {p!r}.")
+            raise ValueError(
+                f"Wasserstein order p must be a real number >= 1, got {p!r}."
+            )
         self._distance = distance
         self._p = p
         vec_base = base_distribution.vecdist
@@ -121,19 +123,17 @@ class WassersteinNetwork:
         # overflowing the cost accumulator. An explicit value (e.g. 1.0) is used
         # verbatim. Must be set before build().
         if intensity_scale is None:
-            # Float-backend intensity scaling is owned by the shared Scaler
-            # (fine-grid policy: no position pre-scale, maps intensities onto a
-            # ~2**30 total-flow grid, capped by cost_bound**p so the network's
-            # own cost scale stays >= 1).  Returns 1.0 for integer-valued data.
-            intensity_scale = Scaler(
+            # Float-backend intensity scaling uses the FineGridScaler:
+            # no position pre-scale, intensities mapped onto a ~2**30 total-flow
+            # grid, capped by cost_bound**p so the network's own cost scale
+            # stays >= 1. Returns 1.0 for integer-valued data.
+            intensity_scale = FineGridScaler(
                 base_distribution,
                 list(target_distributions),
                 distance,
                 max_distance,
                 trash_costs=[],
                 p=p,
-                fine_grid_intensity=True,
-                enforce_distance_resolution=False,
             ).sf_intensity()
         self.wnet.set_intensity_scale(float(intensity_scale))
 

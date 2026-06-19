@@ -105,29 +105,81 @@ NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>
             return VectorDistributionFloat_##DIM::linear_combination(dists, w); \
         }) \
         .def("__len__", &VectorDistributionFloat_##DIM::size); \
-    using Scaler_##DIM = Scaler<DIM>; \
-    nb::class_<Scaler_##DIM>(m, "CScalerFloat" #DIM) \
-        .def("__init__", [](Scaler_##DIM* self, \
+    using WNetAlignScaler_##DIM = WNetAlignScaler<DIM>; \
+    nb::class_<WNetAlignScaler_##DIM>(m, "CWNetAlignScalerFloat" #DIM) \
+        .def("__init__", [](WNetAlignScaler_##DIM* self, \
                 const VectorDistributionFloat_##DIM& empirical, \
                 const std::vector<VectorDistributionFloat_##DIM>& theoretical, \
                 DistanceMetric metric, double max_distance, \
                 const nb::ndarray<double, nb::shape<-1>>& trash_costs, \
-                double precision, double explicit_scale_factor, bool tie_factors, \
-                double max_dropped_fraction, bool enforce_distance_resolution, \
-                double max_int, double p, bool fine_grid_intensity) { \
+                double max_int) { \
             std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
             ptrs.reserve(theoretical.size()); \
             for (const auto& t : theoretical) ptrs.push_back(&t); \
             std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
-            new (self) Scaler_##DIM(empirical, ptrs, metric, max_distance, tc, \
-                precision, explicit_scale_factor, tie_factors, \
-                max_dropped_fraction, enforce_distance_resolution, max_int, \
-                p, fine_grid_intensity); \
+            new (self) WNetAlignScaler_##DIM(empirical, ptrs, metric, max_distance, tc, max_int); \
         }) \
-        .def("sf_distance", &Scaler_##DIM::sf_distance) \
-        .def("sf_intensity", &Scaler_##DIM::sf_intensity) \
-        .def("scale_factor", &Scaler_##DIM::scale_factor) \
-        .def("ftol", &Scaler_##DIM::ftol);
+        .def("sf_distance", &WNetAlignScaler_##DIM::sf_distance) \
+        .def("sf_intensity", &WNetAlignScaler_##DIM::sf_intensity) \
+        .def("scale_factor", &WNetAlignScaler_##DIM::scale_factor) \
+        .def("ftol",         &WNetAlignScaler_##DIM::ftol); \
+    using WNetDeconvScaler_##DIM = WNetDeconvScaler<DIM>; \
+    nb::class_<WNetDeconvScaler_##DIM>(m, "CWNetDeconvScalerFloat" #DIM) \
+        .def("__init__", [](WNetDeconvScaler_##DIM* self, \
+                const VectorDistributionFloat_##DIM& empirical, \
+                const std::vector<VectorDistributionFloat_##DIM>& theoretical, \
+                DistanceMetric metric, double max_distance, \
+                const nb::ndarray<double, nb::shape<-1>>& trash_costs, \
+                double max_int, double max_dropped_fraction) { \
+            std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
+            ptrs.reserve(theoretical.size()); \
+            for (const auto& t : theoretical) ptrs.push_back(&t); \
+            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
+            new (self) WNetDeconvScaler_##DIM(empirical, ptrs, metric, max_distance, tc, \
+                max_int, max_dropped_fraction); \
+        }) \
+        .def("sf_distance", &WNetDeconvScaler_##DIM::sf_distance) \
+        .def("sf_intensity", &WNetDeconvScaler_##DIM::sf_intensity) \
+        .def("scale_factor", &WNetDeconvScaler_##DIM::scale_factor) \
+        .def("ftol",         &WNetDeconvScaler_##DIM::ftol); \
+    using FineGridScaler_##DIM = FineGridScaler<DIM>; \
+    nb::class_<FineGridScaler_##DIM>(m, "CFineGridScalerFloat" #DIM) \
+        .def("__init__", [](FineGridScaler_##DIM* self, \
+                const VectorDistributionFloat_##DIM& empirical, \
+                const std::vector<VectorDistributionFloat_##DIM>& theoretical, \
+                DistanceMetric metric, double max_distance, \
+                const nb::ndarray<double, nb::shape<-1>>& trash_costs, \
+                double p, double max_int) { \
+            std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
+            ptrs.reserve(theoretical.size()); \
+            for (const auto& t : theoretical) ptrs.push_back(&t); \
+            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
+            new (self) FineGridScaler_##DIM(empirical, ptrs, metric, max_distance, tc, p, max_int); \
+        }) \
+        .def("sf_distance", &FineGridScaler_##DIM::sf_distance) \
+        .def("sf_intensity", &FineGridScaler_##DIM::sf_intensity) \
+        .def("scale_factor", &FineGridScaler_##DIM::scale_factor) \
+        .def("ftol",         &FineGridScaler_##DIM::ftol); \
+    using GenericScaler_##DIM = GenericScaler<DIM>; \
+    nb::class_<GenericScaler_##DIM>(m, "CGenericScalerFloat" #DIM) \
+        .def("__init__", [](GenericScaler_##DIM* self, \
+                const VectorDistributionFloat_##DIM& empirical, \
+                const std::vector<VectorDistributionFloat_##DIM>& theoretical, \
+                DistanceMetric metric, double max_distance, \
+                const nb::ndarray<double, nb::shape<-1>>& trash_costs, \
+                double p95_frac, double rounding_tol, \
+                double max_dropped_frac, double max_int) { \
+            std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
+            ptrs.reserve(theoretical.size()); \
+            for (const auto& t : theoretical) ptrs.push_back(&t); \
+            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
+            new (self) GenericScaler_##DIM(empirical, ptrs, metric, max_distance, tc, \
+                p95_frac, rounding_tol, max_dropped_frac, max_int); \
+        }) \
+        .def("sf_distance", &GenericScaler_##DIM::sf_distance) \
+        .def("sf_intensity", &GenericScaler_##DIM::sf_intensity) \
+        .def("scale_factor", &GenericScaler_##DIM::scale_factor) \
+        .def("ftol",         &GenericScaler_##DIM::ftol);
 
 NB_MODULE(wnet_cpp, m) {
     m.doc() = "WNet C++ imlementation module";

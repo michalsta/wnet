@@ -13,173 +13,168 @@
 #include "distances.hpp"
 #include "distribution.hpp"
 
-// Scaler — single source of truth for the distance/intensity scale factors that
-// turn real-valued spectra into the scaled-integer min-cost-flow network.
+// =============================================================================
+// ScalerBase<DIM> — shared interface and static helper utilities
+// =============================================================================
 //
-// Defaults reproduce wnetdeconv's precision-driven behaviour (two independent
-// factors derived from a relative `precision` target, an int64-overflow cap,
-// a distance-resolution guard and a per-spectrum intensity-loss guard).  The
-// `tie_factors` / `max_dropped_fraction` / `enforce_distance_resolution` knobs
-// reproduce wnetalign's cruder single-overflow-cap behaviour.
+// Pure advisor: computes sf_distance_ / sf_intensity_ at construction time and
+// exposes them.  The caller applies them to the network (scale positions,
+// set_intensity_scale, unscale total_cost).  Construction is the entire failure
+// surface — guards throw std::invalid_argument (→ Python ValueError).
 //
-// It is a pure advisor: it computes the factors at construction and exposes
-// them; the caller still applies them (scale positions, set_intensity_scale,
-// unscale total_cost).  Construction is the entire failure surface — guards
-// throw std::invalid_argument (→ Python ValueError via nanobind).
-//
-// The full distributions and the DistanceMetric are taken by the constructor so
-// future versions can make position-/metric-aware decisions without an API
-// change; today only intensity sums and per-peak intensities are consulted.
+// Subclasses set sf_distance_ and sf_intensity_ directly and call
+// validate_factors() before returning from their constructor.  All helpers are
+// static so they can be called without an object.
 template<size_t DIM>
-class Scaler {
+class ScalerBase {
 public:
     using VecDist = VectorDistribution<DIM, double, double>;
 
-    Scaler(
-        const VecDist& empirical,
-        const std::vector<const VecDist*>& theoretical,
-        DistanceMetric metric,
-        double max_distance,
-        const std::vector<double>& trash_costs,
-        double precision = 1e-3,
-        double explicit_scale_factor = 0.0,
-        bool tie_factors = false,
-        double max_dropped_fraction = 0.05,
-        bool enforce_distance_resolution = true,
-        double max_int = static_cast<double>(int64_t(1) << 60),
-        double p = 1.0,
-        bool fine_grid_intensity = false
-    ) : metric_(metric) {
-        const double empirical_sum = empirical.sum_intensities();
-        double theoretical_sum = 0.0;
-        for (const auto* t : theoretical) theoretical_sum += t->sum_intensities();
-        const double max_sum = std::max(empirical_sum, theoretical_sum);
-        // The fine-grid policy degrades gracefully to scale 1 for zero total
-        // intensity; the other policies divide by max_sum and must reject it.
-        if (max_sum <= 0.0 && !fine_grid_intensity)
-            throw std::invalid_argument(
-                "Scaler: max intensity sum must be positive (are all spectra empty?).");
+    double sf_distance() const { return sf_distance_; }
+    double sf_intensity() const { return sf_intensity_; }
+    // Geometric mean: scale_factor**2 == sf_distance * sf_intensity.
+    double scale_factor() const { return std::sqrt(sf_distance_ * sf_intensity_); }
+    double ftol()         const { return 1.0 / (sf_distance_ * sf_intensity_); }
+    DistanceMetric metric() const { return metric_; }
 
-        // Cost-per-unit-flow bounds: max_distance plus any trash costs.  Trash is
-        // optional (the pure-distance WassersteinDistance path supplies none).
-        double max_cost = max_distance;
-        double min_cost = max_distance;
-        for (double c : trash_costs) {
-            max_cost = std::max(max_cost, c);
-            min_cost = std::min(min_cost, c);
-        }
+protected:
+    double sf_distance_ = 1.0;
+    double sf_intensity_ = 1.0;
+    DistanceMetric metric_ = DistanceMetric::L2;
+
+    // ---- Validation ---------------------------------------------------------
+
+    static void validate_positive_costs(double max_cost, double min_cost) {
         if (max_cost <= 0.0 || min_cost <= 0.0)
             throw std::invalid_argument(
                 "Scaler: cost per unit flow (max_distance / trash costs) must be positive.");
+    }
 
-        if (explicit_scale_factor > 0.0) {
-            // Back-compat: explicit scale_factor sets both factors equal.
-            sf_distance_ = explicit_scale_factor;
-            sf_intensity_ = explicit_scale_factor;
-        } else if (tie_factors) {
-            // wnetalign mode: a single overflow-cap factor for both, ignoring
-            // precision.  sf = sqrt(max_int / (max_sum * max_cost)).
-            const double product = max_sum * max_cost;
-            if (std::isinf(product))
-                throw std::overflow_error("Scaler: max_sum * max_cost overflows double.");
-            const double f = std::sqrt(max_int / product);
-            sf_distance_ = f;
-            sf_intensity_ = f;
-        } else if (fine_grid_intensity) {
-            // WassersteinNetwork / WassersteinDistance mode: positions are used
-            // as real ground distances (no position pre-scale → sf_distance == 1),
-            // only intensities are quantized, onto a fine grid.  Port of the
-            // former _auto_intensity_scale().
-            sf_distance_ = 1.0;
-            sf_intensity_ = _fine_grid_intensity_scale(
-                empirical, theoretical, p, max_distance, max_int);
-        } else {
-            // wnetdeconv (solver) mode: an *intensity* scale only.  The cost/
-            // distance scale is the network's job now (via set_cost_scaling), so
-            // the Scaler no longer produces a position pre-scale (sf_distance == 1).
-            // sf_intensity gives int(total_intensity) = 1/precision flow levels,
-            // capped so it leaves the network's cost scale int64 headroom (same
-            // ceiling reasoning as the fine-grid policy).  min_cost is unused here.
-            (void)min_cost;
-            sf_distance_ = 1.0;
-            sf_intensity_ = 1.0 / (precision * max_sum);
-            const double cap = max_int / (max_cost * max_sum);
-            if (sf_intensity_ > cap) sf_intensity_ = cap;
-        }
+    static void validate_max_sum(double max_sum) {
+        if (max_sum <= 0.0)
+            throw std::invalid_argument(
+                "Scaler: max intensity sum must be positive (are all spectra empty?).");
+    }
 
+    void validate_factors() const {
         if (!(sf_distance_ > 0.0 && sf_intensity_ > 0.0))
             throw std::invalid_argument(
                 "Scaler: could not compute positive scale factors; check your "
                 "data, trash costs, or pass an explicit scale_factor.");
-
-        // (The former distance-resolution guard is gone: distance/cost scaling
-        // now lives in the network, which auto-picks a fine cost scale, so the
-        // Scaler never produces an under-resolved position pre-scale.)
-        (void)enforce_distance_resolution;
-
-        // Per-spectrum intensity-loss guard: intensities are quantized to
-        // round-toward-zero(intensity * sf_intensity); peaks below one integer
-        // unit vanish.  Refuse if any spectrum loses more than the limit.
-        // Skipped for the fine-grid policy (warn-not-throw contract).
-        // max_dropped_fraction >= 1.0 disables it.
-        if (max_dropped_fraction < 1.0 && !fine_grid_intensity) {
-            double worst_frac = 0.0;
-            std::string worst_name;
-            auto check = [&](const VecDist& d, const std::string& name) {
-                const double total = d.sum_intensities();
-                if (total <= 0.0) return;
-                double kept = 0.0;
-                for (double v : d.get_intensities())
-                    kept += std::trunc(v * sf_intensity_);
-                kept /= sf_intensity_;
-                const double frac = (total - kept) / total;
-                if (frac > worst_frac) { worst_frac = frac; worst_name = name; }
-            };
-            check(empirical, "empirical_spectrum");
-            for (size_t i = 0; i < theoretical.size(); ++i)
-                check(*theoretical[i], "theoretical_spectra[" + std::to_string(i) + "]");
-            if (worst_frac > max_dropped_fraction)
-                throw std::invalid_argument(
-                    "Integer intensity quantization at sf_intensity=" +
-                    std::to_string(sf_intensity_) + " would drop " +
-                    std::to_string(worst_frac * 100.0) + "% of " + worst_name +
-                    "'s total intensity (limit " +
-                    std::to_string(max_dropped_fraction * 100.0) + "%): peaks below "
-                    "one integer unit floor to zero supply, leaving the transport "
-                    "network nearly empty.  Pass a larger scale_factor, relax "
-                    "precision, or allow the loss.");
-        }
     }
 
-    double sf_distance() const { return sf_distance_; }
-    double sf_intensity() const { return sf_intensity_; }
-    // Geometric mean — matches the legacy `scale_factor` alias in both packages
-    // (quadratic unscaling sf_distance*sf_intensity == scale_factor**2).
-    double scale_factor() const { return std::sqrt(sf_distance_ * sf_intensity_); }
-    double ftol() const { return 1.0 / (sf_distance_ * sf_intensity_); }
-    DistanceMetric metric() const { return metric_; }
+    // ---- Cost / intensity aggregates ----------------------------------------
 
-private:
-    // A fine but modest target for the total scaled flow: large enough to
-    // resolve fractional supplies, small enough to leave int64 headroom.
-    static constexpr double FINE_GRID_TARGET_FLOW =
-        static_cast<double>(int64_t(1) << 30);
+    // {empirical_sum, sum-of-all-theoretical, max(empirical, theoretical_sum)}.
+    static std::tuple<double, double, double> intensity_sums(
+        const VecDist& empirical, const std::vector<const VecDist*>& theoretical)
+    {
+        const double emp = empirical.sum_intensities();
+        double theo = 0.0;
+        for (const auto* t : theoretical) theo += t->sum_intensities();
+        return {emp, theo, std::max(emp, theo)};
+    }
 
-    // Fine-grid intensity scale for the WassersteinNetwork / WassersteinDistance
-    // path: map real intensities onto a fine integer supply grid without
-    // overflowing the int64 cost accumulator.  Returns 1.0 (bit-compatible with
-    // the integer backend) when intensities are already integer-valued.
-    //
-    // The cap leaves room for the network's own cost scale: it bounds the
-    // intensity scale by max_int / (max_real_cost * total), where max_real_cost
-    // = cost_bound^p.  pick_cost_scale() then chooses the cost scale against the
-    // same accumulator with total_flow already including this intensity scale,
-    // so cost scale stays >= 1 and the accumulator never overflows — this is
-    // what lets p != 1 finely scale intensities too (no rounding-to-1 pin).
-    static double _fine_grid_intensity_scale(
+    // {max_cost, min_cost} from max_distance and optional trash costs.
+    static std::pair<double, double> cost_bounds(
+        double max_distance, const std::vector<double>& trash_costs)
+    {
+        double max_c = max_distance, min_c = max_distance;
+        for (double c : trash_costs) {
+            max_c = std::max(max_c, c);
+            min_c = std::min(min_c, c);
+        }
+        return {max_c, min_c};
+    }
+
+    // int64 overflow cap: sf_intensity * max_cost * max_sum must not exceed max_int.
+    static double overflow_cap(double max_cost, double max_sum, double max_int) {
+        return max_int / (max_cost * max_sum);
+    }
+
+    // ---- Per-spectrum intensity statistics ----------------------------------
+
+    // "Quantile peak": sort intensities descending, return the intensity value
+    // at which the running cumulative sum first reaches or exceeds frac*total.
+    // Concretely: the least-intense peak still inside the top-frac mass band.
+    static double quantile_peak(const VecDist& d, double frac) {
+        const double total = d.sum_intensities();
+        if (!(total > 0.0)) return 0.0;
+        std::vector<double> sorted;
+        for (double v : d.get_intensities())
+            if (v > 0.0) sorted.push_back(v);
+        std::sort(sorted.begin(), sorted.end(), std::greater<double>());
+        double cumsum = 0.0;
+        for (double v : sorted) {
+            cumsum += v;
+            if (cumsum >= frac * total) return v;
+        }
+        return sorted.empty() ? 0.0 : sorted.back();
+    }
+
+    // Minimum quantile_peak(frac) across empirical and all theoretical spectra.
+    static double min_quantile_peak(
+        const VecDist& empirical, const std::vector<const VecDist*>& theoretical,
+        double frac)
+    {
+        double p = quantile_peak(empirical, frac);
+        for (const auto* t : theoretical)
+            p = std::min(p, quantile_peak(*t, frac));
+        return p;
+    }
+
+    // ---- Rounding-loss guard ------------------------------------------------
+
+    // Fraction of a spectrum's total intensity lost to round-toward-zero
+    // quantisation: (sum - sum(trunc(v*sf))/sf) / sum.
+    static double rounding_loss_frac(const VecDist& d, double sf) {
+        const double total = d.sum_intensities();
+        if (!(total > 0.0)) return 0.0;
+        double kept = 0.0;
+        for (double v : d.get_intensities())
+            kept += std::trunc(v * sf);
+        kept /= sf;
+        return (total - kept) / total;
+    }
+
+    // Throws if any spectrum's rounding loss exceeds max_dropped_fraction.
+    static void check_rounding_loss(
+        const VecDist& empirical, const std::vector<const VecDist*>& theoretical,
+        double sf, double max_dropped_fraction)
+    {
+        double worst_frac = 0.0;
+        std::string worst_name;
+        auto check_one = [&](const VecDist& d, const std::string& name) {
+            const double frac = rounding_loss_frac(d, sf);
+            if (frac > worst_frac) { worst_frac = frac; worst_name = name; }
+        };
+        check_one(empirical, "empirical_spectrum");
+        for (size_t i = 0; i < theoretical.size(); ++i)
+            check_one(*theoretical[i], "theoretical_spectra[" + std::to_string(i) + "]");
+        if (worst_frac > max_dropped_fraction)
+            throw std::invalid_argument(
+                "Integer intensity quantization at sf_intensity=" +
+                std::to_string(sf) + " would lose " +
+                std::to_string(worst_frac * 100.0) + "% of " + worst_name +
+                "'s total intensity to rounding (limit " +
+                std::to_string(max_dropped_fraction * 100.0) + "%): the "
+                "intensity scale is too coarse for this spectrum.  "
+                "Pass a larger scale_factor or allow the loss.");
+    }
+
+    // ---- Fine-grid intensity helper (WassersteinNetwork/Distance path) ------
+
+    // Maps real intensities onto a fine integer supply grid targeting ~2^30
+    // total flow without overflowing the int64 cost accumulator.
+    // Returns 1.0 when all intensities are already integer-valued.
+    static double fine_grid_intensity_scale(
         const VecDist& empirical,
         const std::vector<const VecDist*>& theoretical,
-        double p, double max_distance, double max_int) {
+        double p, double max_distance, double max_int)
+    {
+        static constexpr double FINE_GRID_TARGET_FLOW =
+            static_cast<double>(int64_t(1) << 30);
+
         auto all_int = [](const VecDist& d) {
             for (double v : d.get_intensities())
                 if (v != std::round(v)) return false;
@@ -197,8 +192,6 @@ private:
         for (const auto* t : theoretical) add_total(*t);
         if (!(total > 0.0)) return 1.0;
 
-        // span = sum over dims of (max - min) position across all distributions:
-        // a conservative bound on the ground distance any unit of flow travels.
         std::array<double, DIM> gmin, gmax;
         gmin.fill(std::numeric_limits<double>::infinity());
         gmax.fill(-std::numeric_limits<double>::infinity());
@@ -215,17 +208,200 @@ private:
         for (size_t k = 0; k < DIM; ++k) span += (gmax[k] - gmin[k]);
 
         const double cost_bound = std::max(std::min(span, max_distance), 1.0);
-        // The real per-unit cost is the ground distance raised to p.  (p == 1
-        // → cost_bound, leaving the legacy p == 1 scale bit-for-bit unchanged.)
         const double max_real_cost = std::pow(cost_bound, p);
-        const double overflow_cap = max_int / (max_real_cost * total);
+        const double cap = max_int / (max_real_cost * total);
         const double target = FINE_GRID_TARGET_FLOW / total;
-        return std::max(1.0, std::min(target, overflow_cap));
+        return std::max(1.0, std::min(target, cap));
     }
-
-    double sf_distance_ = 0.0;
-    double sf_intensity_ = 0.0;
-    DistanceMetric metric_;
 };
+
+
+// =============================================================================
+// WNetAlignScaler<DIM>
+// =============================================================================
+//
+// Tied single-factor mode used by wnetalign: sf = sqrt(max_int / (max_sum *
+// max_cost)), applied equally to both positions and intensities.  No rounding
+// guard — the caller pre-scales positions using this sf.
+template<size_t DIM>
+class WNetAlignScaler : public ScalerBase<DIM> {
+public:
+    using VecDist = typename ScalerBase<DIM>::VecDist;
+
+    WNetAlignScaler(
+        const VecDist& empirical,
+        const std::vector<const VecDist*>& theoretical,
+        DistanceMetric metric,
+        double max_distance,
+        const std::vector<double>& trash_costs,
+        double max_int = static_cast<double>(int64_t(1) << 60))
+    {
+        this->metric_ = metric;
+
+        auto [max_c, min_c] = ScalerBase<DIM>::cost_bounds(max_distance, trash_costs);
+        ScalerBase<DIM>::validate_positive_costs(max_c, min_c);
+
+        auto [emp_sum, theo_sum, max_sum] =
+            ScalerBase<DIM>::intensity_sums(empirical, theoretical);
+        ScalerBase<DIM>::validate_max_sum(max_sum);
+
+        const double product = max_sum * max_c;
+        if (std::isinf(product))
+            throw std::overflow_error(
+                "WNetAlignScaler: max_sum * max_cost overflows double.");
+        const double f = std::sqrt(max_int / product);
+        this->sf_distance_ = f;
+        this->sf_intensity_ = f;
+        this->validate_factors();
+    }
+};
+
+
+// =============================================================================
+// WNetDeconvScaler<DIM>
+// =============================================================================
+//
+// Intensity-only scale (sf_distance == 1) anchored to the p95 peak: the peak
+// at which the cumulative mass (sorted most→least intense) first crosses 95 %
+// of the spectrum's total.  Scale is set so that this peak and all larger ones
+// incur at most 10 % relative rounding error.  The bottom 5 % tail rounds more
+// freely; the rounding-loss guard is loosened accordingly (default 0.20).
+// sf_distance is always 1.0 — the network handles cost quantisation itself.
+template<size_t DIM>
+class WNetDeconvScaler : public ScalerBase<DIM> {
+public:
+    using VecDist = typename ScalerBase<DIM>::VecDist;
+
+    WNetDeconvScaler(
+        const VecDist& empirical,
+        const std::vector<const VecDist*>& theoretical,
+        DistanceMetric metric,
+        double max_distance,
+        const std::vector<double>& trash_costs,
+        double max_int             = static_cast<double>(int64_t(1) << 60),
+        double max_dropped_fraction = 0.20)
+    {
+        this->metric_ = metric;
+
+        auto [max_c, min_c] = ScalerBase<DIM>::cost_bounds(max_distance, trash_costs);
+        ScalerBase<DIM>::validate_positive_costs(max_c, min_c);
+
+        auto [emp_sum, theo_sum, max_sum] =
+            ScalerBase<DIM>::intensity_sums(empirical, theoretical);
+        ScalerBase<DIM>::validate_max_sum(max_sum);
+
+        const double p95 = ScalerBase<DIM>::min_quantile_peak(
+            empirical, theoretical, 0.95);
+        if (!(p95 > 0.0))
+            throw std::invalid_argument(
+                "WNetDeconvScaler: p95 peak is zero; spectra appear empty.");
+
+        this->sf_distance_ = 1.0;
+        this->sf_intensity_ = 1.0 / (0.10 * p95);
+        const double cap = ScalerBase<DIM>::overflow_cap(max_c, max_sum, max_int);
+        if (this->sf_intensity_ > cap) this->sf_intensity_ = cap;
+        this->validate_factors();
+
+        if (max_dropped_fraction < 1.0)
+            ScalerBase<DIM>::check_rounding_loss(
+                empirical, theoretical, this->sf_intensity_, max_dropped_fraction);
+    }
+};
+
+
+// =============================================================================
+// FineGridScaler<DIM>
+// =============================================================================
+//
+// For WassersteinNetwork / WassersteinDistance: sf_distance == 1 (positions
+// remain as real ground distances), intensities mapped onto a fine integer grid
+// targeting ~2^30 total flow.  Follows warn-not-throw for under-resolution.
+template<size_t DIM>
+class FineGridScaler : public ScalerBase<DIM> {
+public:
+    using VecDist = typename ScalerBase<DIM>::VecDist;
+
+    FineGridScaler(
+        const VecDist& empirical,
+        const std::vector<const VecDist*>& theoretical,
+        DistanceMetric metric,
+        double max_distance,
+        const std::vector<double>& trash_costs,
+        double p       = 1.0,
+        double max_int = static_cast<double>(int64_t(1) << 60))
+    {
+        this->metric_ = metric;
+        auto [max_c, min_c] = ScalerBase<DIM>::cost_bounds(max_distance, trash_costs);
+        ScalerBase<DIM>::validate_positive_costs(max_c, min_c);
+        // fine_grid_intensity_scale degrades gracefully to 1.0 for empty spectra.
+        this->sf_distance_ = 1.0;
+        this->sf_intensity_ = ScalerBase<DIM>::fine_grid_intensity_scale(
+            empirical, theoretical, p, max_distance, max_int);
+        this->validate_factors();
+    }
+};
+
+
+// =============================================================================
+// GenericScaler<DIM>
+// =============================================================================
+//
+// New scaler with no backward-compatibility baggage.  Uses the same p-quantile
+// intensity policy as WNetDeconvScaler but exposes p95_frac and rounding_tol
+// as constructor parameters, making it suitable for any context.
+// sf_distance is always 1.0 — cost quantisation belongs to the network.
+template<size_t DIM>
+class GenericScaler : public ScalerBase<DIM> {
+public:
+    using VecDist = typename ScalerBase<DIM>::VecDist;
+
+    // p95_frac         : mass fraction defining the "signal" band, in (0, 1].
+    // rounding_tol     : max relative rounding error on the quantile peak, in (0, 1].
+    // max_dropped_frac : total-rounding-loss guard; >= 1.0 disables it.
+    GenericScaler(
+        const VecDist& empirical,
+        const std::vector<const VecDist*>& theoretical,
+        DistanceMetric metric,
+        double max_distance,
+        const std::vector<double>& trash_costs,
+        double p95_frac          = 0.95,
+        double rounding_tol      = 0.10,
+        double max_dropped_frac  = 0.20,
+        double max_int           = static_cast<double>(int64_t(1) << 60))
+    {
+        this->metric_ = metric;
+
+        if (!(p95_frac > 0.0 && p95_frac <= 1.0))
+            throw std::invalid_argument(
+                "GenericScaler: p95_frac must be in (0, 1].");
+        if (!(rounding_tol > 0.0 && rounding_tol <= 1.0))
+            throw std::invalid_argument(
+                "GenericScaler: rounding_tol must be in (0, 1].");
+
+        auto [max_c, min_c] = ScalerBase<DIM>::cost_bounds(max_distance, trash_costs);
+        ScalerBase<DIM>::validate_positive_costs(max_c, min_c);
+
+        auto [emp_sum, theo_sum, max_sum] =
+            ScalerBase<DIM>::intensity_sums(empirical, theoretical);
+        ScalerBase<DIM>::validate_max_sum(max_sum);
+
+        const double pq = ScalerBase<DIM>::min_quantile_peak(
+            empirical, theoretical, p95_frac);
+        if (!(pq > 0.0))
+            throw std::invalid_argument(
+                "GenericScaler: quantile peak is zero; spectra appear empty.");
+
+        this->sf_distance_ = 1.0;
+        this->sf_intensity_ = 1.0 / (rounding_tol * pq);
+        const double cap = ScalerBase<DIM>::overflow_cap(max_c, max_sum, max_int);
+        if (this->sf_intensity_ > cap) this->sf_intensity_ = cap;
+        this->validate_factors();
+
+        if (max_dropped_frac < 1.0)
+            ScalerBase<DIM>::check_rounding_loss(
+                empirical, theoretical, this->sf_intensity_, max_dropped_frac);
+    }
+};
+
 
 #endif // WNET_SCALING_HPP
