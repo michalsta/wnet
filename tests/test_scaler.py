@@ -38,19 +38,14 @@ def dN(positions, intens):
 
 def expected_auto(emp_sum, theo_sums, max_distance, trash_costs,
                   precision=1e-3, max_int=MAX_INT):
-    """Reference re-implementation of the auto (wnetdeconv) factor computation."""
+    """Reference for the auto (wnetdeconv) precision policy, which is now
+    intensity-only: sf_distance == 1 (cost/distance scaling is the network's
+    job), sf_intensity == 1/(precision*max_sum) capped to leave int64 headroom."""
     max_sum = max(emp_sum, sum(theo_sums))
-    costs = [max_distance] + list(trash_costs)
-    min_c, max_c = min(costs), max(costs)
-    sfd = 1.0 / (precision * min_c)
+    max_c = max([max_distance] + list(trash_costs))
     sfi = 1.0 / (precision * max_sum)
     cap = max_int / (max_c * max_sum)
-    prod = sfd * sfi
-    if prod > cap:
-        shrink = np.sqrt(cap / prod)
-        sfd *= shrink
-        sfi *= shrink
-    return sfd, sfi
+    return 1.0, min(sfi, cap)
 
 
 def expected_tie(emp_sum, theo_sums, max_distance, trash_costs, max_int=MAX_INT):
@@ -118,11 +113,13 @@ def test_auto_cost_selection(max_distance, costs):
     assert s.sf_intensity() == pytest.approx(sfi, rel=RTOL)
 
 
-def test_sf_distance_uses_min_cost():
-    # min cost-per-unit-flow drives sf_distance; here the trash cost (0.1) < max_distance (1.0)
+def test_precision_sf_distance_is_one():
+    # The precision policy is intensity-only now: it never produces a position
+    # pre-scale, so sf_distance is always 1 (distance/cost scaling is the
+    # network's job via set_cost_scaling).
     emp, theo = big_pair()
     s = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.1], max_dropped_fraction=1.0)
-    assert s.sf_distance() == pytest.approx(1.0 / (1e-3 * 0.1), rel=RTOL)
+    assert s.sf_distance() == 1.0
 
 
 def test_sf_intensity_uses_max_sum_theoretical_dominant():
@@ -140,13 +137,13 @@ def test_sf_intensity_uses_max_sum_empirical_dominant():
     assert s.sf_intensity() == pytest.approx(1.0 / (1e-3 * 1800.0), rel=RTOL)
 
 
-def test_precision_scales_factors_inversely():
+def test_precision_scales_intensity_inversely():
     emp, theo = big_pair()
     a = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.5], precision=1e-3, max_dropped_fraction=1.0)
     b = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.5], precision=1e-4, max_dropped_fraction=1.0)
-    # 10x finer precision → 10x larger factors
-    assert b.sf_distance() == pytest.approx(10.0 * a.sf_distance(), rel=RTOL)
+    # 10x finer precision → 10x larger intensity scale; sf_distance stays 1.
     assert b.sf_intensity() == pytest.approx(10.0 * a.sf_intensity(), rel=RTOL)
+    assert a.sf_distance() == 1.0 and b.sf_distance() == 1.0
 
 
 def test_multiple_theoretical_sum():
@@ -215,25 +212,18 @@ def test_tie_factors_ignores_precision(precision):
 
 
 # ---------------------------------------------------------------------------
-# int64 overflow cap
+# int64 overflow cap (precision policy: caps the *intensity* scale alone, since
+# sf_distance is always 1 and the cost scale is the network's)
 # ---------------------------------------------------------------------------
 
-def test_cap_binds_at_fine_precision():
+def test_intensity_cap_binds_at_fine_precision():
     emp, theo = big_pair()
-    # absurdly fine precision → uncapped product would blow past max_int → cap binds
+    # absurdly fine precision → 1/(precision*max_sum) exceeds the cap → clamps.
     s = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.5],
-               precision=1e-12, max_dropped_fraction=1.0)
-    cap_product = MAX_INT / (max(1.0, 0.5) * 600.0)   # max_c * max_sum
-    assert s.sf_distance() * s.sf_intensity() == pytest.approx(cap_product, rel=1e-6)
-
-
-def test_cap_preserves_factor_ratio():
-    emp, theo = big_pair()
-    # uniform shrink keeps sf_distance/sf_intensity == max_sum/min_cost
-    s = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.5],
-               precision=1e-12, max_dropped_fraction=1.0)
-    expected_ratio = 600.0 / 0.5    # max_sum / min_cost
-    assert s.sf_distance() / s.sf_intensity() == pytest.approx(expected_ratio, rel=1e-6)
+               precision=1e-20, max_dropped_fraction=1.0)
+    cap = MAX_INT / (max(1.0, 0.5) * 600.0)   # max_c * max_sum
+    assert s.sf_distance() == 1.0
+    assert s.sf_intensity() == pytest.approx(cap, rel=1e-6)
 
 
 def test_no_cap_at_coarse_precision():
@@ -245,14 +235,14 @@ def test_no_cap_at_coarse_precision():
     assert s.sf_intensity() == pytest.approx(sfi, rel=RTOL)
 
 
-def test_smaller_max_int_shrinks_more():
+def test_smaller_max_int_caps_intensity_lower():
     emp, theo = big_pair()
+    # fine precision so the cap binds; a smaller int64 ceiling clamps lower.
     big = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.5],
-                 precision=1e-9, max_dropped_fraction=1.0, max_int=float(1 << 60))
+                 precision=1e-20, max_dropped_fraction=1.0, max_int=float(1 << 60))
     small = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.5],
-                   precision=1e-9, max_dropped_fraction=1.0,
-                   max_int=float(1 << 40), enforce_distance_resolution=False)
-    assert small.sf_distance() < big.sf_distance()
+                   precision=1e-20, max_dropped_fraction=1.0, max_int=float(1 << 40))
+    assert small.sf_intensity() < big.sf_intensity()
 
 
 # ---------------------------------------------------------------------------
@@ -319,41 +309,10 @@ def test_intensity_guard_default_threshold_is_five_percent():
         Scaler(emp, theo, DistanceMetric.LINF, 1.0, [1.0], explicit_scale_factor=1.0)
 
 
-# ---------------------------------------------------------------------------
-# Distance-resolution guard
-# ---------------------------------------------------------------------------
-
-def test_distance_guard_fires_under_aggressive_cap():
-    # tiny max_int forces a huge shrink → int(min_cost * sf_distance) < 1
-    emp, theo = big_pair()
-    with pytest.raises(ValueError, match="positive integer|no edges"):
-        Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.5],
-               precision=1e-3, max_int=1.0, max_dropped_fraction=1.0)
-
-
-def test_distance_guard_can_be_disabled():
-    emp, theo = big_pair()
-    # same aggressive cap, guard off → builds
-    s = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.5],
-               precision=1e-3, max_int=1.0, max_dropped_fraction=1.0,
-               enforce_distance_resolution=False)
-    assert s.sf_distance() > 0.0
-
-
-def test_distance_guard_not_applied_in_explicit_mode():
-    # explicit tiny factor → int(min_cost*sf) < 1, but explicit mode skips the guard
-    emp, theo = big_pair()
-    s = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.5],
-               explicit_scale_factor=1e-6, max_dropped_fraction=1.0)
-    assert s.sf_distance() == pytest.approx(1e-6, rel=RTOL)
-
-
-def test_distance_guard_not_applied_in_tie_mode():
-    emp, theo = big_pair()
-    # tie mode with tiny max_int → small factor, but tie skips distance guard
-    s = Scaler(emp, theo, DistanceMetric.LINF, 1.0, [0.5],
-               tie_factors=True, max_int=1.0, max_dropped_fraction=1.0)
-    assert s.sf_distance() > 0.0
+# (The distance-resolution guard is gone: distance/cost scaling now lives in the
+# network — the precision policy no longer produces a position pre-scale, so
+# there is no under-resolved sf_distance to guard.  enforce_distance_resolution
+# is accepted but a no-op.)
 
 
 # ---------------------------------------------------------------------------
@@ -401,8 +360,9 @@ def test_empty_trash_costs_allowed():
     # from max_distance alone.
     emp, theo = big_pair()
     s = Scaler(emp, theo, DistanceMetric.LINF, 2.0, [], max_dropped_fraction=1.0)
-    # min_cost == max_cost == max_distance == 2.0
-    assert s.sf_distance() == pytest.approx(1.0 / (1e-3 * 2.0), rel=RTOL)
+    # sf_distance is always 1 (intensity-only precision policy); sf_intensity
+    # depends on max_sum only.
+    assert s.sf_distance() == 1.0
     assert s.sf_intensity() == pytest.approx(1.0 / (1e-3 * 600.0), rel=RTOL)
 
 
@@ -464,35 +424,32 @@ def test_auto_vs_explicit_geometric_mean_consistency():
 # nearly) the same real transport cost.  Quantization error shrinks as the
 # scale grows, so coarse scales sit slightly off and fine scales converge.
 #
-# Wiring mirrors the consumers exactly: positions pre-scaled by sf_distance,
-# intensities quantized via intensity_scale=sf_intensity, trash costs scaled by
-# sf_distance, and the real cost recovered as total_cost() / sf_distance (for
-# p == 1 the network's own cost scale_factor() is 1).
+# Wiring mirrors the consumers exactly as they work now: real positions, the
+# Scaler's intensity scale via intensity_scale=sf_intensity, real trash costs,
+# and the network's own cost scaling (set_cost_scaling) handling distances —
+# total_cost() returns the real cost directly (no position pre-scale).
 # ---------------------------------------------------------------------------
-
-def _scaled(spec, sfd):
-    return Distribution(np.asarray(spec.positions) * sfd, np.asarray(spec.intensities))
-
 
 def _solve_real_cost(emp, theo, max_distance, exp_cost, theo_cost,
                      *, precision=1e-3, explicit=0.0, point=None):
-    """Recover the real transport cost solving at the scale the Scaler picks."""
-    sc = Scaler(emp, [theo] if isinstance(theo, Distribution) else theo,
-                DistanceMetric.LINF, max_distance,
+    """Recover the real transport cost the way wnetdeconv does now: real
+    positions + network cost scaling (no position pre-scaling)."""
+    targets = [theo] if isinstance(theo, Distribution) else theo
+    sc = Scaler(emp, targets, DistanceMetric.LINF, max_distance,
                 [exp_cost, theo_cost], precision=precision,
                 explicit_scale_factor=explicit, max_dropped_fraction=1.0)
-    sfd, sfi = sc.sf_distance(), sc.sf_intensity()
-    targets = [theo] if isinstance(theo, Distribution) else theo
+    sfi = sc.sf_intensity()
+    cost_scale = int(explicit) if explicit else 0    # 0 => auto
     net = WassersteinNetwork(
-        _scaled(emp, sfd), [_scaled(t, sfd) for t in targets],
-        DistanceMetric.LINF, max_distance=int(round(max_distance * sfd)),
-        intensity_scale=sfi,
+        emp, targets, DistanceMetric.LINF, max_distance=max_distance,
+        intensity_scale=sfi, round_max_distance=False,
     )
-    net.add_experimental_trash(int(exp_cost * sfd))
-    net.add_theoretical_trash(int(theo_cost * sfd))
+    net.set_cost_scaling(cost_scale)
+    net.add_experimental_trash(exp_cost)
+    net.add_theoretical_trash(theo_cost)
     net.build()
     net.solve(point if point is not None else [1.0] * len(targets))
-    return net.total_cost() / sfd
+    return net.total_cost()
 
 
 def _emp_theo_1d():
@@ -723,3 +680,60 @@ def test_wd_large_mass_p2_no_overflow():
     v = WassersteinDistance(G1, G2, DistanceMetric.L2, p=2)
     # total cost = 1^2*1234.5 + 1^2*8765.5 = 10000; W2 = sqrt(10000) = 100
     assert np.isfinite(v) and v == pytest.approx(100.0, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Network-side cost scaling (the keystone): p == 1 carries real fractional
+# distances when opted in; default still truncates; integer backend can't.
+# ---------------------------------------------------------------------------
+
+def _float_net(emp_pos, emp_int, theo_pos, theo_int, max_dist=100.0):
+    import wnet.wnet_cpp as cpp
+    E = cpp.CVectorDistributionFloat1(np.array([emp_pos]), np.array(emp_int, float))
+    T = cpp.CVectorDistributionFloat1(np.array([theo_pos]), np.array(theo_int, float))
+    return cpp, cpp.CWassersteinNetworkFactory.create(E, [T], DistanceMetric.L1, max_dist, 1.0)
+
+
+def test_cost_scaling_opt_in_scales_p1_fractional():
+    # 1 unit moves 0->0.3 and 1 unit moves 5->5.2 ; real W1 = 0.5
+    cpp, net = _float_net([0.0, 5.0], [1.0, 1.0], [0.3, 5.2], [1.0, 1.0])
+    net.set_cost_scaling()           # opt-in (auto)
+    net.set_intensity_scale(1.0)
+    net.build(); net.solve([1.0])
+    real = net.total_cost() / (net.scale_factor() * net.intensity_scale_factor())
+    assert real == pytest.approx(0.5, rel=1e-6)
+
+
+def test_p1_default_truncates_fractional():
+    # same data, no opt-in → fractional distances truncate to 0
+    cpp, net = _float_net([0.0, 5.0], [1.0, 1.0], [0.3, 5.2], [1.0, 1.0])
+    net.set_intensity_scale(1.0)
+    net.build(); net.solve([1.0])
+    assert net.total_cost() == 0.0
+
+
+def test_integer_backend_has_no_cost_scaling():
+    import wnet.wnet_cpp as cpp
+    D = cpp.CVectorDistribution1(np.array([[0.0, 5.0]]), np.array([1, 1], dtype=np.int64))
+    T = cpp.CVectorDistribution1(np.array([[1.0, 6.0]]), np.array([1, 1], dtype=np.int64))
+    net = cpp.CWassersteinNetworkFactory.create(D, [T], DistanceMetric.L1, 100.0, 1.0)
+    # cost scaling is float-backend only — the integer network has no such knob
+    assert not hasattr(net, "set_cost_scaling")
+
+
+def test_max_dist_double_threshold_prunes_in_real_units():
+    # peak-to-peak distance is 0.4; a real threshold of 0.5 keeps the match,
+    # 0.3 excludes it (forcing both peaks to trash).  With an old int threshold
+    # 0.5 would have truncated to 0 and dropped everything.
+    cpp = __import__("wnet.wnet_cpp", fromlist=["x"])
+
+    def solve(md):
+        E = cpp.CVectorDistributionFloat1(np.array([[0.0]]), np.array([1.0]))
+        T = cpp.CVectorDistributionFloat1(np.array([[0.4]]), np.array([1.0]))
+        net = cpp.CWassersteinNetworkFactory.create(E, [T], DistanceMetric.L1, md, 1.0)
+        net.set_cost_scaling(); net.set_intensity_scale(1.0)
+        net.build(); net.solve([1.0])
+        return net.count_matching_edges()
+
+    assert solve(0.5) == 1     # within real threshold → matched
+    assert solve(0.3) == 0     # beyond real threshold → pruned

@@ -72,9 +72,6 @@ public:
             throw std::invalid_argument(
                 "Scaler: cost per unit flow (max_distance / trash costs) must be positive.");
 
-        const bool auto_mode = (explicit_scale_factor <= 0.0) && !tie_factors
-                               && !fine_grid_intensity;
-
         if (explicit_scale_factor > 0.0) {
             // Back-compat: explicit scale_factor sets both factors equal.
             sf_distance_ = explicit_scale_factor;
@@ -97,22 +94,17 @@ public:
             sf_intensity_ = _fine_grid_intensity_scale(
                 empirical, theoretical, p, max_distance, max_int);
         } else {
-            // wnetdeconv (solver) mode: independent precision-driven factors,
-            // capped.  Used with p == 1 (positions are pre-scaled by sf_distance).
-            //   sf_distance  keeps the relative cost error per arc <= precision
-            //                within the smallest cost class.
-            //   sf_intensity gives int(total_intensity) = 1/precision flow levels.
-            sf_distance_ = 1.0 / (precision * min_cost);
+            // wnetdeconv (solver) mode: an *intensity* scale only.  The cost/
+            // distance scale is the network's job now (via set_cost_scaling), so
+            // the Scaler no longer produces a position pre-scale (sf_distance == 1).
+            // sf_intensity gives int(total_intensity) = 1/precision flow levels,
+            // capped so it leaves the network's cost scale int64 headroom (same
+            // ceiling reasoning as the fine-grid policy).  min_cost is unused here.
+            (void)min_cost;
+            sf_distance_ = 1.0;
             sf_intensity_ = 1.0 / (precision * max_sum);
-            // int64 cap: per-arc int cost <= (sf_distance*sf_intensity) *
-            // (max_cost*max_sum); shrink both (keeping their ratio) to fit max_int.
-            const double cap_product = max_int / (max_cost * max_sum);
-            const double product = sf_distance_ * sf_intensity_;
-            if (product > cap_product) {
-                const double shrink = std::sqrt(cap_product / product);
-                sf_distance_ *= shrink;
-                sf_intensity_ *= shrink;
-            }
+            const double cap = max_int / (max_cost * max_sum);
+            if (sf_intensity_ > cap) sf_intensity_ = cap;
         }
 
         if (!(sf_distance_ > 0.0 && sf_intensity_ > 0.0))
@@ -120,16 +112,10 @@ public:
                 "Scaler: could not compute positive scale factors; check your "
                 "data, trash costs, or pass an explicit scale_factor.");
 
-        // Distance-resolution guard (precision auto mode, p == 1 only): the
-        // smallest cost-per-unit-flow must survive integer quantization.
-        if (enforce_distance_resolution && auto_mode && p == 1.0
-            && static_cast<int64_t>(min_cost * sf_distance_) < 1) {
-            throw std::invalid_argument(
-                "Scaler: auto-computed sf_distance=" + std::to_string(sf_distance_) +
-                " cannot represent min cost-per-unit-flow=" + std::to_string(min_cost) +
-                " as a positive integer (the graph would have no edges).  "
-                "Pass a larger scale_factor or relax precision.");
-        }
+        // (The former distance-resolution guard is gone: distance/cost scaling
+        // now lives in the network, which auto-picks a fine cost scale, so the
+        // Scaler never produces an under-resolved position pre-scale.)
+        (void)enforce_distance_resolution;
 
         // Per-spectrum intensity-loss guard: intensities are quantized to
         // round-toward-zero(intensity * sf_intensity); peaks below one integer

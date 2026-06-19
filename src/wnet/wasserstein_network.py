@@ -57,6 +57,7 @@ class WassersteinNetwork:
         solver=None,
         method: str = None,
         intensity_scale: Optional[float] = None,
+        round_max_distance: bool = True,
     ) -> None:
         if solver is None and method is None:
             solver = NetworkSimplex()
@@ -68,12 +69,12 @@ class WassersteinNetwork:
             solver = self._SOLVER_METHODS[method]()
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
-        else:
-            # The C++ factory takes an integer distance threshold (matching arcs
-            # are kept when the ground distance <= max_dist; 1D chain components
-            # split on gaps exceeding it). Accept a float for convenience but
-            # coerce to int with an inclusive (round-up) rule so nothing within
-            # the stated cap is dropped, and warn when a fractional part is lost.
+        elif round_max_distance:
+            # Default: with p == 1 cost truncation the matching threshold is
+            # effectively integer, so round a fractional cap up (inclusive) and
+            # warn — preserving the legacy behaviour.  Callers that opt into
+            # cost scaling (real distances) pass round_max_distance=False and
+            # keep the real threshold.
             md_int = int(math.ceil(max_distance))
             if md_int != max_distance:
                 warnings.warn(
@@ -139,6 +140,9 @@ class WassersteinNetwork:
         self.add_simple_trash = self.wnet.add_simple_trash
         self.add_experimental_trash = self.wnet.add_experimental_trash
         self.add_theoretical_trash = self.wnet.add_theoretical_trash
+        # Opt-in p=1 cost scaling (lets a caller pass real distances instead of
+        # pre-scaling positions). Must be called before build().
+        self.set_cost_scaling = self.wnet.set_cost_scaling
 
         # Avoid capturing self in the lambda to prevent reference cycles that could lead to memory leaks.  The underlying C++ object should be freed when this wrapper is freed, but if we capture self in the lambda, the lambda's reference to self would keep it alive indefinitely.
         # Without this trick, the lambda would hold a reference to self, which holds a reference to the C++ object, which holds a reference back to the lambda, creating a cycle that prevents garbage collection.

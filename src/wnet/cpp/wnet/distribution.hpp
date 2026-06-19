@@ -226,16 +226,19 @@ public:
     class CloserThanIter {
         const VectorDistribution<DIM, position_type, intensity_type>& distribution;
         const VectorDistribution<DIM, position_type, intensity_type>& other_distribution;
-        intensity_type max_dist;
+        // The matching threshold and the distances it compares are real ground
+        // distances (the metric returns double), independent of the intensity
+        // type — so both are double, not intensity_type.
+        double max_dist;
         size_t current_index;
         size_t other_current_index;
         size_t last_window_start_index;
-        intensity_type current_distance;
+        double current_distance;
     public:
         CloserThanIter(
             const VectorDistribution<DIM, position_type, intensity_type>& distribution_,
             const VectorDistribution<DIM, position_type, intensity_type>& other_distribution_,
-            intensity_type max_dist_
+            double max_dist_
         ) : distribution(distribution_),
             other_distribution(other_distribution_),
             max_dist(max_dist_),
@@ -280,7 +283,7 @@ public:
         std::pair<size_t, size_t> get_indices() const {
             return {distribution.sorted_indices[current_index], other_distribution.sorted_indices[other_current_index]};
         }
-        intensity_type get_distance() const {
+        double get_distance() const {
             return current_distance;
         }
     };
@@ -288,7 +291,7 @@ public:
     template<typename DistMetric>
     CloserThanIter<DistMetric> closer_than_iter(
         const VectorDistribution<DIM, position_type, intensity_type>& other_distribution,
-        intensity_type max_dist
+        double max_dist
     ) const {
         return CloserThanIter<DistMetric>(*this, other_distribution, max_dist);
     };
