@@ -1,11 +1,11 @@
-// Per-dimension registration body. Included by each dim_register_<N>.cpp after
-// it does `#define WNET_DIM <N>`. Compiling one of these per dimension is what
-// lets ninja parallelize the (dominant) per-dim template instantiation cost.
-//
-// Not a standalone TU: WNET_DIM must be defined before inclusion.
+// Per-dimension registration body. Included by each
+// build_stubs/dim_register_<N>.cpp after it does `#define WNET_DIM <N>`.
+// Compiling one of these per dimension is what lets ninja parallelize the
+// (dominant) per-dim template instantiation cost. Not a standalone TU:
+// WNET_DIM must be defined before inclusion.
 
 #ifndef WNET_DIM
-#error "register_dim.inc requires WNET_DIM to be defined (use a dim_register_<N>.cpp stub)"
+#error "register_dim.inc requires WNET_DIM to be defined (use a build_stubs/dim_register_<N>.cpp stub)"
 #endif
 
 #include "register_dim.hpp"

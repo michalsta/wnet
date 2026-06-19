@@ -266,9 +266,16 @@ using WNetFactory = WassersteinNetworkFactory<int64_t>;
 #define REGISTER_DIM_NAME_(N) register_dim_##N
 #define REGISTER_DIM_NAME(N) REGISTER_DIM_NAME_(N)
 
+// Network base bindings (the two heaviest classes in the module) live in their
+// own TUs, split by intensity type, so neither sits on the build's critical
+// path. Each builds the non-templated base methods and returns the network
+// class for register_dim_<N>() to extend with per-dimension update_* overloads.
+nb::class_<WNetII> bind_network_ii(nb::module_& m);
+nb::class_<WNetIF> bind_network_if(nb::module_& m);
+
 // Forward declarations for the whole 1..20 range. Declaring a function that is
 // never defined/called is harmless; the calls (in wnet.cpp) and the compilation
-// of the matching dim_register_<N>.cpp are both gated on WNET_MAX_DIM.
+// of the matching build_stubs/dim_register_<N>.cpp are both gated on WNET_MAX_DIM.
 void register_dim_1(REGISTER_DIM_PARAMS);
 void register_dim_2(REGISTER_DIM_PARAMS);
 void register_dim_3(REGISTER_DIM_PARAMS);
