@@ -1036,7 +1036,14 @@ public:
                 if (pos == std::numeric_limits<size_t>::max()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
-                exp_trash_cost[pos] = e->get_cost();
+                // Use the SCALED cost (costs_map), not the raw get_cost(): the
+                // chain gap costs (topo.gap_cost) come from costs_map, so the
+                // trash costs must share those units.  With cost scaling on they
+                // differ by the cost scale; reading get_cost() here made the
+                // trash term negligible against the scaled matching costs and
+                // dropped the trash-reclaim from the residual marginal.
+                (void)e;
+                exp_trash_cost[pos] = costs_map[arc];
                 if (flow < cap) exp_trash_fwd[pos] = true;
                 if (flow > 0)   exp_trash_rev[pos] = true;
             } else if (const auto* t = std::get_if<TheoreticalTrashEdge>(&et)) {
@@ -1044,7 +1051,9 @@ public:
                 if (pos == std::numeric_limits<size_t>::max()) continue;
                 auto arc = lemon_graph.arcFromId(ii);
                 VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
-                theo_trash_cost[pos] = t->get_cost();
+                // Scaled cost (see EmpiricalTrashEdge branch above).
+                (void)t;
+                theo_trash_cost[pos] = costs_map[arc];
                 if (flow < cap) theo_trash_fwd[pos] = true;
                 if (flow > 0)   theo_trash_rev[pos] = true;
             }
@@ -1579,6 +1588,16 @@ class WassersteinNetwork {
     bool _cost_scaling_requested = false;
     int64_t _explicit_cost_scale = 0;
 
+    // Single source of truth for the quantize_cost "p_is_one" (truncate) flag.
+    // Costs are scaled+rounded whenever p != 1 OR the caller opted into cost
+    // scaling; only legacy p == 1 without cost scaling truncates.  Every
+    // quantize_cost() call site must use this, not a bare `_p_order == 1.0`,
+    // so the solver's cost map and any re-quantised (isolated-trash, position
+    // update) costs stay in the same units.
+    bool _costs_truncated() const {
+        return _p_order == 1.0 && !_cost_scaling_requested;
+    }
+
     // Intensity scaling: real (double) node intensities map to integer LEMON
     // supplies as round-toward-zero(real * _intensity_scale).  Set via
     // set_intensity_scale() before build(); propagated to every subgraph in
@@ -1863,8 +1882,7 @@ public:
         // via set_cost_scaling() (which lets p == 1 carry real fractional costs
         // instead of truncating).  Otherwise p == 1 keeps the legacy S == 1
         // truncation.  `_truncate` drives both the scale choice and quantize_cost.
-        const bool costs_scaled = (_p_order != 1.0) || _cost_scaling_requested;
-        const bool _truncate = !costs_scaled;
+        const bool _truncate = _costs_truncated();
         if (_cost_scaling_requested && _explicit_cost_scale > 0)
             _scale = _explicit_cost_scale;
         else
@@ -1878,10 +1896,10 @@ public:
 
     // Quantised (scaled) isolated trash costs, matching the subgraph cost map.
     VALUE_TYPE _isolated_exp_trash_cost_scaled() const {
-        return quantize_cost<VALUE_TYPE>(_isolated_exp_trash_cost, _scale, _p_order == 1.0);
+        return quantize_cost<VALUE_TYPE>(_isolated_exp_trash_cost, _scale, _costs_truncated());
     }
     VALUE_TYPE _isolated_theo_trash_cost_scaled() const {
-        return quantize_cost<VALUE_TYPE>(_isolated_theo_trash_cost, _scale, _p_order == 1.0);
+        return quantize_cost<VALUE_TYPE>(_isolated_theo_trash_cost, _scale, _costs_truncated());
     }
 
     void solve()
@@ -2151,7 +2169,7 @@ public:
                     const double real_cost = (_p_order == 1.0) ? d : std::pow(d, _p_order);
                     // Reuse the fixed build-time scale so the warm-restarted basis
                     // stays in the same cost units.
-                    new_costs[ii] = quantize_cost<VALUE_TYPE>(real_cost, _scale, _p_order == 1.0);
+                    new_costs[ii] = quantize_cost<VALUE_TYPE>(real_cost, _scale, _costs_truncated());
                 } else if (std::holds_alternative<ChainEdge>(edge.get_type())) {
                     auto get_pos_1d = [&](const FlowNode<intensity_type>& n) -> double {
                         const auto& nt = n.get_type();
@@ -2162,8 +2180,9 @@ public:
                         throw std::runtime_error("update_positions_and_solve(): chain edge connects non-peak node.");
                     };
                     const double gap = std::abs(get_pos_1d(edge.get_start_node()) - get_pos_1d(edge.get_end_node()));
-                    // Chain implies p == 1 (scale == 1): truncate, matching build.
-                    new_costs[ii] = quantize_cost<VALUE_TYPE>(gap, _scale, _p_order == 1.0);
+                    // Match the build-time quantisation (truncate only for legacy
+                    // p == 1 without cost scaling; scaled+rounded otherwise).
+                    new_costs[ii] = quantize_cost<VALUE_TYPE>(gap, _scale, _costs_truncated());
                 }
                 // All other edge types (SrcToEmpirical, TheoreticalToSink, trash, …)
                 // have position-independent costs; apply_new_costs ignores them (new_costs[ii] = 0).
