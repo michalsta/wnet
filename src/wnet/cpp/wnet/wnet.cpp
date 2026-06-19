@@ -1,185 +1,10 @@
-#include <iostream>
-#include <memory>
-#include <vector>
-#include <array>
-#include <unordered_map>
-#include <variant>
+// Main module TU. The per-dimension VectorDistribution / *Scaler / factory
+// create / update-solve instantiations live in the dim_register_<N>.cpp stubs
+// (see register_dim.hpp / register_dim.inc) so ninja can compile them in
+// parallel. This TU keeps NB_MODULE and the non-templated base bindings, builds
+// the three classes that the stubs extend, and dispatches to register_dim_<N>().
 
-#include <nanobind/nanobind.h>
-
-NB_MAKE_OPAQUE(std::vector<int32_t>);
-NB_MAKE_OPAQUE(std::vector<int64_t>);
-NB_MAKE_OPAQUE(std::vector<uint32_t>);
-NB_MAKE_OPAQUE(std::vector<uint64_t>);
-NB_MAKE_OPAQUE(std::vector<double>);
-NB_MAKE_OPAQUE(std::unordered_map<int32_t, int64_t>);
-
-
-#include <nanobind/ndarray.h>
-
-#include <nanobind/stl/string.h>
-//#include <nanobind/stl/vector.h>
-#include <nanobind/stl/bind_vector.h>
-#include <nanobind/stl/tuple.h>
-#include <nanobind/stl/optional.h>
-#include <nanobind/stl/bind_map.h>
-#include <nanobind/stl/variant.h>
-
-// Declare the type as opaque to avoid conflicts
-NB_MAKE_OPAQUE(std::pair<const nanobind::ndarray<nanobind::detail::shape<-1, -1>> *, size_t>);
-
-#include "decompositable_graph.hpp"
-#include "graph_elements.hpp"
-#include "distribution.hpp"
-#include "scaling.hpp"
-#include "misc.hpp"
-#include <new>
-
-
-#ifndef WNET_MAX_DIM
-#define WNET_MAX_DIM 20
-#endif
-
-#define EXPOSE_VECTOR_DISTRIBUTION(DIM) \
-    using VectorDistribution_##DIM = VectorDistribution<DIM, double, LEMON_INT>; \
-    nb::class_<VectorDistribution_##DIM>(m, "CVectorDistribution" #DIM) \
-        /*.def(nb::init<const std::vector<std::array<double, DIM>>&, const std::vector<LEMON_INT>&>()) \
-        .def(nb::init<std::vector<std::array<double, DIM>>&&,  std::vector<LEMON_INT>&&>()) */ \
-        .def(nb::init<const nb::ndarray<double, nb::shape<DIM, -1>>&, const nb::ndarray<LEMON_INT, nb::shape<-1>>&>()) \
-        .def("size", &VectorDistribution_##DIM::size) \
-        .def("py_get_positions", &VectorDistribution_##DIM::py_get_positions) \
-        .def("py_get_intensities", &VectorDistribution_##DIM::py_get_intensities) \
-        .def("positions_view", [](nb::object self_obj) { \
-            auto& d = nb::cast<VectorDistribution_##DIM&>(self_obj); \
-            const auto& pos = d.get_positions(); \
-            return nb::ndarray<nb::numpy, double>( \
-                (void*)pos.data(), {pos.size(), (size_t)DIM}, self_obj); \
-        }) \
-        .def("intensities_view", [](nb::object self_obj) { \
-            auto& d = nb::cast<VectorDistribution_##DIM&>(self_obj); \
-            const auto& ints = d.get_intensities(); \
-            return nb::ndarray<nb::numpy, LEMON_INT>( \
-                (void*)ints.data(), {ints.size()}, self_obj); \
-        }) \
-        .def("get_point", &VectorDistribution_##DIM::get_point) \
-        .def("n_highest", &VectorDistribution_##DIM::n_highest) \
-        .def("p_trim", &VectorDistribution_##DIM::p_trim) \
-        .def("scaled", &VectorDistribution_##DIM::scaled) \
-        .def("add", &VectorDistribution_##DIM::add) \
-        .def("binned", &VectorDistribution_##DIM::binned) \
-        .def("sorted_by_positions", &VectorDistribution_##DIM::sorted_by_positions) \
-        .def_static("linear_combination", [](const std::vector<VectorDistribution_##DIM>& dists, const nb::ndarray<double, nb::shape<-1>>& weights) { \
-            std::vector<double> w(weights.data(), weights.data() + weights.shape(0)); \
-            return VectorDistribution_##DIM::linear_combination(dists, w); \
-        }) \
-        .def("__len__", &VectorDistribution_##DIM::size); \
-    using VectorDistributionFloat_##DIM = VectorDistribution<DIM, double, double>; \
-    nb::class_<VectorDistributionFloat_##DIM>(m, "CVectorDistributionFloat" #DIM) \
-        /*.def(nb::init<const std::vector<std::array<double, DIM>>&, const std::vector<double>&>()) \
-        .def(nb::init<std::vector<std::array<double, DIM>>&&,  std::vector<double>&&>()) */ \
-        .def(nb::init<const nb::ndarray<double, nb::shape<DIM, -1>>&, const nb::ndarray<double, nb::shape<-1>>&>()) \
-        .def("size", &VectorDistributionFloat_##DIM::size) \
-        .def("py_get_positions", &VectorDistributionFloat_##DIM::py_get_positions) \
-        .def("py_get_intensities", &VectorDistributionFloat_##DIM::py_get_intensities) \
-        .def("positions_view", [](nb::object self_obj) { \
-            auto& d = nb::cast<VectorDistributionFloat_##DIM&>(self_obj); \
-            const auto& pos = d.get_positions(); \
-            return nb::ndarray<nb::numpy, double>( \
-                (void*)pos.data(), {pos.size(), (size_t)DIM}, self_obj); \
-        }) \
-        .def("intensities_view", [](nb::object self_obj) { \
-            auto& d = nb::cast<VectorDistributionFloat_##DIM&>(self_obj); \
-            const auto& ints = d.get_intensities(); \
-            return nb::ndarray<nb::numpy, double>( \
-                (void*)ints.data(), {ints.size()}, self_obj); \
-        }) \
-        .def("get_point", &VectorDistributionFloat_##DIM::get_point) \
-        .def("n_highest", &VectorDistributionFloat_##DIM::n_highest) \
-        .def("p_trim", &VectorDistributionFloat_##DIM::p_trim) \
-        .def("scaled", &VectorDistributionFloat_##DIM::scaled) \
-        .def("add", &VectorDistributionFloat_##DIM::add) \
-        .def("binned", &VectorDistributionFloat_##DIM::binned) \
-        .def("sorted_by_positions", &VectorDistributionFloat_##DIM::sorted_by_positions) \
-        .def_static("linear_combination", [](const std::vector<VectorDistributionFloat_##DIM>& dists, const nb::ndarray<double, nb::shape<-1>>& weights) { \
-            std::vector<double> w(weights.data(), weights.data() + weights.shape(0)); \
-            return VectorDistributionFloat_##DIM::linear_combination(dists, w); \
-        }) \
-        .def("__len__", &VectorDistributionFloat_##DIM::size); \
-    using WNetAlignScaler_##DIM = WNetAlignScaler<DIM>; \
-    nb::class_<WNetAlignScaler_##DIM>(m, "CWNetAlignScalerFloat" #DIM) \
-        .def("__init__", [](WNetAlignScaler_##DIM* self, \
-                const VectorDistributionFloat_##DIM& empirical, \
-                const std::vector<VectorDistributionFloat_##DIM>& theoretical, \
-                DistanceMetric metric, double max_distance, \
-                const nb::ndarray<double, nb::shape<-1>>& trash_costs, \
-                double max_int) { \
-            std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
-            ptrs.reserve(theoretical.size()); \
-            for (const auto& t : theoretical) ptrs.push_back(&t); \
-            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
-            new (self) WNetAlignScaler_##DIM(empirical, ptrs, metric, max_distance, tc, max_int); \
-        }) \
-        .def("sf_distance", &WNetAlignScaler_##DIM::sf_distance) \
-        .def("sf_intensity", &WNetAlignScaler_##DIM::sf_intensity) \
-        .def("scale_factor", &WNetAlignScaler_##DIM::scale_factor) \
-        .def("ftol",         &WNetAlignScaler_##DIM::ftol); \
-    using WNetDeconvScaler_##DIM = WNetDeconvScaler<DIM>; \
-    nb::class_<WNetDeconvScaler_##DIM>(m, "CWNetDeconvScalerFloat" #DIM) \
-        .def("__init__", [](WNetDeconvScaler_##DIM* self, \
-                const VectorDistributionFloat_##DIM& empirical, \
-                const std::vector<VectorDistributionFloat_##DIM>& theoretical, \
-                DistanceMetric metric, double max_distance, \
-                const nb::ndarray<double, nb::shape<-1>>& trash_costs, \
-                double max_int, double max_dropped_fraction) { \
-            std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
-            ptrs.reserve(theoretical.size()); \
-            for (const auto& t : theoretical) ptrs.push_back(&t); \
-            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
-            new (self) WNetDeconvScaler_##DIM(empirical, ptrs, metric, max_distance, tc, \
-                max_int, max_dropped_fraction); \
-        }) \
-        .def("sf_distance", &WNetDeconvScaler_##DIM::sf_distance) \
-        .def("sf_intensity", &WNetDeconvScaler_##DIM::sf_intensity) \
-        .def("scale_factor", &WNetDeconvScaler_##DIM::scale_factor) \
-        .def("ftol",         &WNetDeconvScaler_##DIM::ftol); \
-    using FineGridScaler_##DIM = FineGridScaler<DIM>; \
-    nb::class_<FineGridScaler_##DIM>(m, "CFineGridScalerFloat" #DIM) \
-        .def("__init__", [](FineGridScaler_##DIM* self, \
-                const VectorDistributionFloat_##DIM& empirical, \
-                const std::vector<VectorDistributionFloat_##DIM>& theoretical, \
-                DistanceMetric metric, double max_distance, \
-                const nb::ndarray<double, nb::shape<-1>>& trash_costs, \
-                double p, double max_int) { \
-            std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
-            ptrs.reserve(theoretical.size()); \
-            for (const auto& t : theoretical) ptrs.push_back(&t); \
-            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
-            new (self) FineGridScaler_##DIM(empirical, ptrs, metric, max_distance, tc, p, max_int); \
-        }) \
-        .def("sf_distance", &FineGridScaler_##DIM::sf_distance) \
-        .def("sf_intensity", &FineGridScaler_##DIM::sf_intensity) \
-        .def("scale_factor", &FineGridScaler_##DIM::scale_factor) \
-        .def("ftol",         &FineGridScaler_##DIM::ftol); \
-    using GenericScaler_##DIM = GenericScaler<DIM>; \
-    nb::class_<GenericScaler_##DIM>(m, "CGenericScalerFloat" #DIM) \
-        .def("__init__", [](GenericScaler_##DIM* self, \
-                const VectorDistributionFloat_##DIM& empirical, \
-                const std::vector<VectorDistributionFloat_##DIM>& theoretical, \
-                DistanceMetric metric, double max_distance, \
-                const nb::ndarray<double, nb::shape<-1>>& trash_costs, \
-                double p95_frac, double rounding_tol, \
-                double max_dropped_frac, double max_int) { \
-            std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
-            ptrs.reserve(theoretical.size()); \
-            for (const auto& t : theoretical) ptrs.push_back(&t); \
-            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
-            new (self) GenericScaler_##DIM(empirical, ptrs, metric, max_distance, tc, \
-                p95_frac, rounding_tol, max_dropped_frac, max_int); \
-        }) \
-        .def("sf_distance", &GenericScaler_##DIM::sf_distance) \
-        .def("sf_intensity", &GenericScaler_##DIM::sf_intensity) \
-        .def("scale_factor", &GenericScaler_##DIM::scale_factor) \
-        .def("ftol",         &GenericScaler_##DIM::ftol);
+#include "register_dim.hpp"
 
 NB_MODULE(wnet_cpp, m) {
     m.doc() = "WNet C++ imlementation module";
@@ -355,59 +180,10 @@ NB_MODULE(wnet_cpp, m) {
         .def("matching_density", &WassersteinNetworkSubgraph<int64_t, double>::matching_density)
         .def("theoretical_spectra_involved", &WassersteinNetworkSubgraph<int64_t, double>::theoretical_spectra_involved);
 
-    // Type aliases avoid commas inside macro arguments (which the preprocessor
-    // would miscount as argument separators).
-    using WNetII = WassersteinNetwork<int64_t, int64_t>;
-    using WNetIF = WassersteinNetwork<int64_t, double>;
-
-// Bind update_positions_and_solve for one (network alias, intensity type, dimension) triple.
-#define BIND_UPDATE_AND_SOLVE(NET_ALIAS, INTENSITY_TYPE, DIM) \
-    .def("update_positions_and_solve", \
-         [](NET_ALIAS& self, \
-            const VectorDistribution<DIM, double, INTENSITY_TYPE>* new_emp, \
-            const std::vector<VectorDistribution<DIM, double, INTENSITY_TYPE>*>& new_theo, \
-            DistanceMetric metric) \
-         { self.update_positions_and_solve(new_emp, new_theo, metric); }, \
-         nb::arg("new_empirical"), nb::arg("new_theoretical"), nb::arg("metric"))
-
-// Bind update_positions_and_get_gradient for one triple.
-// Returns (emp_grad [N_emp, DIM], list of theo_grad [N_k, DIM]) as numpy arrays.
-#define BIND_UPDATE_AND_GET_GRADIENT(NET_ALIAS, INTENSITY_TYPE, DIM) \
-    .def("update_positions_and_get_gradient", \
-         [](NET_ALIAS& self, \
-            const VectorDistribution<DIM, double, INTENSITY_TYPE>* new_emp, \
-            const std::vector<VectorDistribution<DIM, double, INTENSITY_TYPE>*>& new_theo, \
-            DistanceMetric metric) { \
-             const size_t n_emp = new_emp->size(); \
-             std::unique_ptr<double[]> emp_buf(new double[n_emp * DIM]()); \
-             std::span<double> emp_span(emp_buf.get(), n_emp * DIM); \
-             std::vector<std::unique_ptr<double[]>> theo_bufs; \
-             std::vector<std::span<double>> theo_spans; \
-             std::vector<size_t> theo_sizes; \
-             for (auto* t : new_theo) { \
-                 const size_t n_k = t->size(); \
-                 theo_bufs.push_back(std::unique_ptr<double[]>(new double[n_k * DIM]())); \
-                 theo_spans.emplace_back(theo_bufs.back().get(), n_k * DIM); \
-                 theo_sizes.push_back(n_k); \
-             } \
-             self.update_positions_and_get_gradient<VectorDistribution<DIM, double, INTENSITY_TYPE>>( \
-                 new_emp, new_theo, emp_span, theo_spans, metric); \
-             double* emp_raw = emp_buf.release(); \
-             nb::capsule emp_cap(emp_raw, [](void* p) noexcept { delete[] static_cast<double*>(p); }); \
-             size_t emp_shape[2] = {n_emp, (size_t)DIM}; \
-             auto emp_arr = nb::ndarray<nb::numpy, double, nb::ndim<2>>(emp_raw, 2, emp_shape, emp_cap); \
-             nb::list theo_list; \
-             for (size_t s = 0; s < theo_bufs.size(); ++s) { \
-                 double* raw = theo_bufs[s].release(); \
-                 nb::capsule cap(raw, [](void* p) noexcept { delete[] static_cast<double*>(p); }); \
-                 size_t theo_shape[2] = {theo_sizes[s], (size_t)DIM}; \
-                 theo_list.append(nb::ndarray<nb::numpy, double, nb::ndim<2>>(raw, 2, theo_shape, cap)); \
-             } \
-             return nb::make_tuple(std::move(emp_arr), std::move(theo_list)); \
-         }, \
-         nb::arg("new_empirical"), nb::arg("new_theoretical"), nb::arg("metric"))
-
-    nb::class_<WNetII>(m, "CWassersteinNetwork")
+    // Networks whose per-dimension update_* overloads are appended by the
+    // register_dim_<N>() functions. Build the non-templated base methods here,
+    // then hand the class objects to the per-dim stubs.
+    auto net_ii = nb::class_<WNetII>(m, "CWassersteinNetwork")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
         .def("add_simple_trash", &WassersteinNetwork<int64_t, int64_t>::add_simple_trash)
         .def("add_experimental_trash", &WassersteinNetwork<int64_t, int64_t>::add_experimental_trash)
@@ -453,49 +229,9 @@ NB_MODULE(wnet_cpp, m) {
         .def("warm_start_count", &WassersteinNetwork<int64_t, int64_t>::warm_start_count)
         .def("cold_start_count", &WassersteinNetwork<int64_t, int64_t>::cold_start_count)
         .def("dual_repair_count", &WassersteinNetwork<int64_t, int64_t>::dual_repair_count)
-        .def("primal_repair_count", &WassersteinNetwork<int64_t, int64_t>::primal_repair_count)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t,  1)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t,  2)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 3)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 4)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 5)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 6)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 7)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 8)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 9)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 10)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 11)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 12)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 13)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 14)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 15)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 16)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 17)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 18)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 19)
-        BIND_UPDATE_AND_SOLVE(WNetII, int64_t, 20)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  1)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  2)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  3)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  4)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  5)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  6)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  7)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  8)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t,  9)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 10)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 11)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 12)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 13)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 14)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 15)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 16)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 17)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 18)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 19)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetII, int64_t, 20);
+        .def("primal_repair_count", &WassersteinNetwork<int64_t, int64_t>::primal_repair_count);
 
-    nb::class_<WassersteinNetwork<int64_t, double>>(m, "CWassersteinNetworkFloat")
+    auto net_if = nb::class_<WassersteinNetwork<int64_t, double>>(m, "CWassersteinNetworkFloat")
         //.def(nb::init<const Distribution<LEMON_INT>*, const std::vector<Distribution<LEMON_INT>*>&, const nb::callable, LEMON_INT>())
         .def("add_simple_trash", &WassersteinNetwork<int64_t, double>::add_simple_trash)
         .def("add_experimental_trash", &WassersteinNetwork<int64_t, double>::add_experimental_trash)
@@ -542,47 +278,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("warm_start_count", &WassersteinNetwork<int64_t, double>::warm_start_count)
         .def("cold_start_count", &WassersteinNetwork<int64_t, double>::cold_start_count)
         .def("dual_repair_count", &WassersteinNetwork<int64_t, double>::dual_repair_count)
-        .def("primal_repair_count", &WassersteinNetwork<int64_t, double>::primal_repair_count)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double,  1)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double,  2)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double,  3)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double,  4)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double,  5)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double,  6)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double,  7)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double,  8)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double,  9)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 10)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 11)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 12)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 13)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 14)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 15)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 16)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 17)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 18)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 19)
-        BIND_UPDATE_AND_SOLVE(WNetIF, double, 20)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  1)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  2)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  3)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  4)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  5)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  6)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  7)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  8)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double,  9)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 10)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 11)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 12)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 13)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 14)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 15)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 16)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 17)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 18)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 19)
-        BIND_UPDATE_AND_GET_GRADIENT(WNetIF, double, 20);
+        .def("primal_repair_count", &WassersteinNetwork<int64_t, double>::primal_repair_count);
 
     nb::class_<Distribution<LEMON_INT>>(m, "CDistribution")
         .def(nb::init<nb::ndarray<nb::shape<-1, -1>>, nb::ndarray<LEMON_INT, nb::shape<-1>>>(), nb::arg().noconvert(), nb::arg().noconvert())
@@ -597,184 +293,79 @@ NB_MODULE(wnet_cpp, m) {
         .def_ro("positions", &Distribution<LEMON_INT>::Point_t::first)
         .def_ro("index", &Distribution<LEMON_INT>::Point_t::second);
 
-    nb::class_<WassersteinNetworkFactory<int64_t>>(m, "CWassersteinNetworkFactory")
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<1, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#if WNET_MAX_DIM >= 2
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<2, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 3
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<3, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 4
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<4, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 5
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<5, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 6
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<6, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 7
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<7, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 8
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<8, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 9
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<9, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 10
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<10, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 11
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<11, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 12
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<12, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 13
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<13, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 14
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<14, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 15
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<15, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 16
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<16, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 17
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<17, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 18
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<18, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 19
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<19, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 20
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<20, double, LEMON_INT>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<1, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#if WNET_MAX_DIM >= 2
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<2, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 3
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<3, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 4
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<4, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 5
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<5, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 6
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<6, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 7
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<7, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 8
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<8, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 9
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<9, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 10
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<10, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 11
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<11, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 12
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<12, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 13
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<13, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 14
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<14, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 15
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<15, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 16
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<16, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 17
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<17, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 18
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<18, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 19
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<19, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-#if WNET_MAX_DIM >= 20
-        .def_static("create", &WassersteinNetworkFactory<int64_t>::create<VectorDistribution<20, double, double>>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-#endif
-        .def_static("create_1d", &WassersteinNetworkFactory<int64_t>::create_1d<LEMON_INT>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
-        .def_static("create_1d", &WassersteinNetworkFactory<int64_t>::create_1d<double>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0);
+    // Factory whose per-dimension create() overloads are appended by the
+    // register_dim_<N>() functions; create_1d is added afterwards (distinct
+    // method name, order-independent).
+    auto factory = nb::class_<WNetFactory>(m, "CWassersteinNetworkFactory");
 
-    EXPOSE_VECTOR_DISTRIBUTION(1)
+    // Per-dimension instantiations live in dim_register_<N>.cpp (compiled in
+    // parallel). The call set is gated on WNET_MAX_DIM to match the source files
+    // CMake actually compiled.
+#if WNET_MAX_DIM >= 1
+    register_dim_1(m, net_ii, net_if, factory);
+#endif
 #if WNET_MAX_DIM >= 2
-    EXPOSE_VECTOR_DISTRIBUTION(2)
+    register_dim_2(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 3
-    EXPOSE_VECTOR_DISTRIBUTION(3)
+    register_dim_3(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 4
-    EXPOSE_VECTOR_DISTRIBUTION(4)
+    register_dim_4(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 5
-    EXPOSE_VECTOR_DISTRIBUTION(5)
+    register_dim_5(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 6
-    EXPOSE_VECTOR_DISTRIBUTION(6)
+    register_dim_6(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 7
-    EXPOSE_VECTOR_DISTRIBUTION(7)
+    register_dim_7(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 8
-    EXPOSE_VECTOR_DISTRIBUTION(8)
+    register_dim_8(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 9
-    EXPOSE_VECTOR_DISTRIBUTION(9)
+    register_dim_9(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 10
-    EXPOSE_VECTOR_DISTRIBUTION(10)
+    register_dim_10(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 11
-    EXPOSE_VECTOR_DISTRIBUTION(11)
+    register_dim_11(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 12
-    EXPOSE_VECTOR_DISTRIBUTION(12)
+    register_dim_12(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 13
-    EXPOSE_VECTOR_DISTRIBUTION(13)
+    register_dim_13(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 14
-    EXPOSE_VECTOR_DISTRIBUTION(14)
+    register_dim_14(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 15
-    EXPOSE_VECTOR_DISTRIBUTION(15)
+    register_dim_15(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 16
-    EXPOSE_VECTOR_DISTRIBUTION(16)
+    register_dim_16(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 17
-    EXPOSE_VECTOR_DISTRIBUTION(17)
+    register_dim_17(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 18
-    EXPOSE_VECTOR_DISTRIBUTION(18)
+    register_dim_18(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 19
-    EXPOSE_VECTOR_DISTRIBUTION(19)
+    register_dim_19(m, net_ii, net_if, factory);
 #endif
 #if WNET_MAX_DIM >= 20
-    EXPOSE_VECTOR_DISTRIBUTION(20)
+    register_dim_20(m, net_ii, net_if, factory);
 #endif
+
+    factory
+        .def_static("create_1d", &WNetFactory::create_1d<LEMON_INT>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0)
+        .def_static("create_1d", &WNetFactory::create_1d<double>, nb::arg("empirical_spectrum"), nb::arg("theoretical_spectra"), nb::arg("distance_metric"), nb::arg("max_dist"), nb::arg("p") = 1.0);
+
 /*
     m.def("WnetViaVectorDistribution", [](
         const Distribution<LEMON_INT>* empirical_dist,

@@ -15,18 +15,31 @@ find_package(nanobind REQUIRED CONFIG)
 
 set(CMAKE_CXX_STANDARD 20)
 
+# Max VectorDistribution dimension to instantiate. Defaults to 20 (and stays 20
+# for CI/wheel builds); reinstall.sh lowers it for faster local builds.
+if(NOT DEFINED WNET_MAX_DIM)
+    set(WNET_MAX_DIM 20)
+endif()
+
+# Each dimension's heavy template instantiation lives in its own TU
+# (src/wnet/cpp/wnet/dim_register_<N>.cpp) so the build parallelizes across
+# cores. Only the 1..WNET_MAX_DIM stubs are compiled, matching the WNET_MAX_DIM
+# dispatch in wnet.cpp.
+set(WNET_SOURCES src/wnet/cpp/wnet/wnet.cpp)
+foreach(d RANGE 1 ${WNET_MAX_DIM})
+    list(APPEND WNET_SOURCES src/wnet/cpp/wnet/dim_register_${d}.cpp)
+endforeach()
+
 nanobind_add_module(wnet_cpp
     NB_STATIC NOMINSIZE
-    src/wnet/cpp/wnet/wnet.cpp)
+    ${WNET_SOURCES})
 
 target_include_directories(wnet_cpp PRIVATE ${PYLMCF_INCLUDE_DIRS})
 target_compile_definitions(wnet_cpp PRIVATE INCLUDE_NANOBIND_STUFF)
 
-# Max VectorDistribution dimension to instantiate. Defaults to 20 (and stays 20
-# for CI/wheel builds); reinstall.sh lowers it for faster local builds.
-if(DEFINED WNET_MAX_DIM)
-    target_compile_definitions(wnet_cpp PRIVATE WNET_MAX_DIM=${WNET_MAX_DIM})
-endif()
+# Pass WNET_MAX_DIM unconditionally so wnet.cpp's #if dispatch matches the set of
+# dim_register_<N>.cpp files CMake actually compiled.
+target_compile_definitions(wnet_cpp PRIVATE WNET_MAX_DIM=${WNET_MAX_DIM})
 
 # Add -Wall -Wextra for Unix-style compilers (GCC/Clang)
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
