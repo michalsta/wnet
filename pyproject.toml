@@ -28,6 +28,7 @@ requires-python = ">=3.9"
 
 [project.optional-dependencies]
 extras = ["networkx", "matplotlib"]
+viz = ["networkx", "pyvis>=0.3", "ipython"]
 pytest = ["pytest"]
 
 [tool.scikit-build.sdist]

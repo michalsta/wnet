@@ -1,9 +1,33 @@
 import math
+import re
 import warnings
 from typing import Optional
 from collections.abc import Sequence
 
 import numpy as np
+
+
+_NODE_META_KEYS = {
+    "peak_idx": ("peak_idx", int),
+    "spectrum_id": ("spectrum_id", int),
+    "intensity": ("intensity", float),
+}
+
+
+def _parse_node_meta(node_str: str) -> dict:
+    """Pull peak_idx / spectrum_id / intensity out of a FlowNode's ``str``.
+
+    These fields live only in the C++ ``to_string`` (e.g.
+    ``EmpiricalNode(2, peak_idx: 0, intensity: 10.000000)``); parsing them here
+    lets the visualization layer size nodes and fill tooltips without new
+    bindings.  Source/sink nodes carry none of these keys and yield ``{}``.
+    """
+    meta = {}
+    for token, (key, cast) in _NODE_META_KEYS.items():
+        m = re.search(rf"{token}:\s*([-\d.]+)", node_str)
+        if m:
+            meta[key] = cast(m.group(1))
+    return meta
 
 from wnet.wnet_cpp import (
     CWassersteinNetwork,
@@ -352,7 +376,9 @@ class SubgraphWrapper:
 
         G = nx.DiGraph()
         for node in self.get_nodes():
-            G.add_node(node.get_id(), layer=node.layer(), type=node.type_str())
+            attrs = {"layer": node.layer(), "type": node.type_str()}
+            attrs.update(_parse_node_meta(str(node)))
+            G.add_node(node.get_id(), **attrs)
         if self.is_solved():
             flows = self.get_flow_map()
         for edge in self.get_edges():
@@ -377,6 +403,31 @@ class SubgraphWrapper:
         Edge labels display cost and capacity.
         """
         show_graph(self.as_networkx())
+
+    def draw(self, **kwargs):
+        """Interactive, draggable structure view (capacities + costs, no flow).
+
+        See :func:`wnet.flow_viz.draw_network`.  Returns an object that renders
+        inline in Jupyter; pass ``filename=...`` to save a standalone HTML file.
+        """
+        from wnet.flow_viz import draw_network
+
+        return draw_network(self.as_networkx(), **kwargs)
+
+    def draw_flow(self, **kwargs):
+        """Interactive view of the solved flow (edge width/colour ∝ flow,
+        saturated edges flagged).  See :func:`wnet.flow_viz.draw_flow`."""
+        from wnet.flow_viz import draw_flow
+
+        return draw_flow(self.as_networkx(), **kwargs)
+
+    def draw_residual(self, **kwargs):
+        """Interactive view of the residual network of the solved flow
+        (forward vs. reverse/cancelling arcs).  See
+        :func:`wnet.flow_viz.draw_residual`."""
+        from wnet.flow_viz import draw_residual
+
+        return draw_residual(self.as_networkx(), **kwargs)
 
     def residual_graph(self) -> "networkx.DiGraph":
         """Build the residual graph of the solved min-cost flow network.
