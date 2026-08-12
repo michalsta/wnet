@@ -53,6 +53,18 @@ enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio, DualGreedy, LinkC
 struct NetworkSimplexConfig {
     NSPivotRule pivot = NSPivotRule::BLOCK_SEARCH;
     NSWarmMode warm = NSWarmMode::DualRatio;
+    // Warm/cold repair policy, forwarded to
+    // NetworkSimplex::setWarmViolationLimit() before each warmRun():
+    //   -2 (default) — auto/unset: same as -1 unless a caller that knows the
+    //       problem structure resolves it (wnetdeconv sets 0 for shared-grid
+    //       profile data);
+    //   -1 — always attempt repair;
+    //    0 — never repair (any violation after the cheap tree patch goes
+    //       straight to a cold start; measured 2-5x faster on shared-grid
+    //       profile chains);
+    //   >0 — max violated basic arcs before skipping repair (see the
+    //       trajectory-instability note in network_simplex.h).
+    long warm_violation_limit = -2;
 };
 struct CostScalingConfig {
     CSMethod method = CSMethod::PARTIAL_AUGMENT;
@@ -350,6 +362,7 @@ class WassersteinNetworkSubgraph {
                     ns_solver->upperMap(capacities_map);
                     ns_solver->supplyMap(node_supply_map);
                     if (costs_changed) ns_solver->costMap(costs_map);
+                    ns_solver->setWarmViolationLimit(cfg.warm_violation_limit);
                     ns_solver->warmRun(pivot, strategy);
                 } else {
                     ++_cold_starts_via_run;
