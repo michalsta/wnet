@@ -37,6 +37,7 @@ from wnet.wnet_cpp import (
     CostScaling,
     CycleCanceling,
     CapacityScaling,
+    SlopeDP,
     NSPivotRule,
     CSMethod,
     CCMethod,
@@ -68,6 +69,7 @@ class WassersteinNetwork:
         "cycle_canceling": CycleCanceling,
         "cost_scaling": CostScaling,
         "capacity_scaling": CapacityScaling,
+        "slope_dp": SlopeDP,
     }
 
     def __init__(
@@ -131,6 +133,12 @@ class WassersteinNetwork:
             and p == 1.0
             and not chain_incompatible
         )
+        # SlopeDP is chain-native only: it needs the 1D chain factory graph.
+        if isinstance(solver, SlopeDP) and not use_chain:
+            raise ValueError(
+                "SlopeDP solver requires the 1D chain factory "
+                "(1D data, p == 1, force_dense_1d=False)."
+            )
         if use_chain:
             self.wnet = CWassersteinNetworkFactory.create_1d(
                 vec_base, vec_targets, distance, max_distance, p

@@ -73,6 +73,9 @@ NB_MODULE(wnet_cpp, m) {
         .def(nb::init<>())
         .def_rw("factor", &CapacityScalingConfig::factor);
 
+    nb::class_<SlopeDPConfig>(m, "SlopeDP")
+        .def(nb::init<>());
+
     nb::class_<FlowNode<int64_t>>(m, "FlowNode")
         .def(nb::init<LEMON_INDEX, SourceNode>())
         .def(nb::init<LEMON_INDEX, SinkNode>())

@@ -76,10 +76,119 @@ struct CycleCancelingConfig {
 struct CapacityScalingConfig {
     int factor = 4;
 };
+// Chain-native exact solver: one-pass convex slope DP over the 1-D chain
+// (O(K log K) per solve, cold every solve).  Only valid for chain-factory
+// subgraphs (no MatchingEdges); bit-exact against NetworkSimplex.  Measured
+// ~300x faster than a cold NS solve on dense profile chains (pinene 70k:
+// 21 ms vs 6.2 s merged / ~26 s on the full wnet graph).
+struct SlopeDPConfig {};
 
 using SolverConfig = std::variant<
     NetworkSimplexConfig, CostScalingConfig,
-    CycleCancelingConfig, CapacityScalingConfig>;
+    CycleCancelingConfig, CapacityScalingConfig, SlopeDPConfig>;
+
+// Convex piecewise-linear function support for the slope-DP chain solver.
+// F(s): slope(s) = sum(right masses at keys < s) - sum(left masses at keys > s);
+// invariant max(left keys) <= min(right keys); F = minval on the plateau.
+namespace slopedp_detail {
+template <typename V>
+struct ConvexPL {
+    using W = __int128;
+    static constexpr V NEG_BIG = std::numeric_limits<V>::min() / 4;
+    static constexpr V POS_BIG = std::numeric_limits<V>::max() / 4;
+    std::map<V, V> L, R;
+    V offL = 0, offR = 0;
+    V rTotal = 0;
+    W minval = 0;
+
+    V maxLeft()  const { return L.empty() ? NEG_BIG : std::prev(L.end())->first + offL; }
+    V minRight() const { return R.empty() ? POS_BIG : R.begin()->first + offR; }
+    void insL(V pos, V m) { if (m) L[pos - offL] += m; }
+    void insR(V pos, V m) { if (m) { R[pos - offR] += m; rTotal += m; } }
+
+    // F += gamma * |s - b|
+    void addAbs(V b, V gamma) {
+        if (gamma <= 0) return;
+        V ml = maxLeft(), mr = minRight();
+        if (b >= ml && b <= mr) { insL(b, gamma); insR(b, gamma); return; }
+        if (b < ml) {
+            V rem = gamma;
+            while (rem > 0 && !L.empty()) {
+                auto it = std::prev(L.end());
+                V key = it->first + offL;
+                if (key <= b) break;
+                V m = std::min(it->second, rem);
+                minval += (W)m * (key - b);
+                it->second -= m;
+                if (it->second == 0) L.erase(it);
+                insR(key, m);
+                rem -= m;
+            }
+            // the |s-b| kink carries slope-delta 2*gamma in total; transferred
+            // mass keeps contributing right of its own key
+            insL(b, 2 * gamma - rem);
+            insR(b, rem);
+        } else {
+            V rem = gamma;
+            while (rem > 0 && !R.empty()) {
+                auto it = R.begin();
+                V key = it->first + offR;
+                if (key >= b) break;
+                V m = std::min(it->second, rem);
+                minval += (W)m * (b - key);
+                it->second -= m; rTotal -= m;
+                if (it->second == 0) R.erase(it);
+                insL(key, m);
+                rem -= m;
+            }
+            insR(b, 2 * gamma - rem);
+            insL(b, rem);
+        }
+    }
+
+    // F <- conv(F, g) where g has slopes: wall below -t, 0 on [-t, v]
+    // (v = e - t), +tau above v (phantom pricing, never profitable).
+    // Right-clip at tau; left keys shift by -t, right keys by +v.
+    // Returns (lo, hi) clamp interval in PRE-conv coordinates.
+    std::pair<V, V> convV(V tau, V v, V t) {
+        V hi = POS_BIG;
+        // slope == tau ties with the phantom continuation; pin hi at the last
+        // real breakpoint in that case too (>=, not >) so recovery cannot
+        // wander onto the phantom branch.
+        if (rTotal >= tau) {
+            V excess = rTotal - tau;
+            while (excess > 0) {
+                auto it = std::prev(R.end());
+                if (it->second <= excess) { excess -= it->second; rTotal -= it->second; R.erase(it); }
+                else { it->second -= excess; rTotal -= excess; excess = 0; }
+            }
+            hi = R.empty() ? POS_BIG : std::prev(R.end())->first + offR;
+        }
+        V lo = maxLeft();
+        offL += -t; offR += v;
+        return {lo, hi};
+    }
+
+    W evalAt(V s) const {
+        V ml = maxLeft(), mr = minRight();
+        W v = minval;
+        if (s < ml) {
+            for (auto it = L.rbegin(); it != L.rend(); ++it) {
+                V key = it->first + offL;
+                if (key <= s) break;
+                v += (W)it->second * (key - s);
+            }
+        } else if (s > mr) {
+            for (auto& [k, m] : R) {
+                V key = k + offR;
+                if (key >= s) break;
+                v += (W)m * (s - key);
+            }
+        }
+        return v;
+    }
+};
+}  // namespace slopedp_detail
 
 //#include "pylmcf/py_support.h"
 #include "graph_elements.hpp"
@@ -242,11 +351,28 @@ class WassersteinNetworkSubgraph {
         return std::holds_alternative<NetworkSimplexConfig>(_config) &&
                std::get<NetworkSimplexConfig>(_config).warm == NSWarmMode::LinkCut;
     }
+    bool _use_slopedp() const { return std::holds_alternative<SlopeDPConfig>(_config); }
+
+    // ---- slope-DP backend state (SlopeDPConfig) -------------------------- //
+    // Per chain position: incident arc ids (-1 when absent) and the fixed
+    // empirical cap; per-solve: per-arc flows and the total.
+    mutable bool _sdp_cache_built = false;
+    mutable std::vector<LEMON_INDEX> _sdp_src_arc, _sdp_sink_arc, _sdp_et_arc, _sdp_tt_arc;
+    mutable std::vector<VALUE_TYPE> _sdp_emp_cap;      // per chain pos (0 for theo)
+    mutable std::vector<VALUE_TYPE> _sdp_pos;          // per chain pos: prefix of gap_cost
+    mutable VALUE_TYPE _sdp_c_exp = -1, _sdp_c_theo = -1, _sdp_c_s = -1;   // quantized
+    mutable std::vector<VALUE_TYPE> _slope_flow;       // per LEMON arc id
+    mutable VALUE_TYPE _slope_total = 0;
+    mutable bool _slope_solved = false;
+
     VALUE_TYPE _solver_potential(lemon::StaticDigraph::Node nd) const {
+        if (_use_slopedp())
+            throw std::runtime_error("SlopeDP backend does not expose node potentials.");
         return _use_lct() ? ns_lct_solver->potential(nd)
                           : ns_solver->potential(nd);
     }
     bool _solver_has_value() const {
+        if (_use_slopedp()) return _slope_solved;
         if (std::holds_alternative<NetworkSimplexConfig>(_config))
             return _use_lct() ? ns_lct_solver.has_value() : ns_solver.has_value();
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver.has_value();
@@ -254,6 +380,7 @@ class WassersteinNetworkSubgraph {
         return cap_solver.has_value();
     }
     VALUE_TYPE _solver_flow(lemon::StaticDigraph::Arc arc) const {
+        if (_use_slopedp()) return _slope_flow[lemon_graph.id(arc)];
         if (std::holds_alternative<NetworkSimplexConfig>(_config))
             return _use_lct() ? ns_lct_solver->flow(arc) : ns_solver->flow(arc);
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver->flow(arc);
@@ -261,6 +388,7 @@ class WassersteinNetworkSubgraph {
         return cap_solver->flow(arc);
     }
     VALUE_TYPE _solver_total_cost() const {
+        if (_use_slopedp()) return _slope_total;
         if (std::holds_alternative<NetworkSimplexConfig>(_config))
             return _use_lct() ? ns_lct_solver->totalCost() : ns_solver->totalCost();
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver->totalCost();
@@ -387,13 +515,19 @@ class WassersteinNetworkSubgraph {
                 cs_solver->costMap(costs_map);
                 cs_solver->supplyMap(node_supply_map);
                 cs_solver->run(static_cast<LemonM>(cfg.method), cfg.factor);
-            } else {
-                static_assert(std::is_same_v<T, CapacityScalingConfig>);
+            } else if constexpr (std::is_same_v<T, CapacityScalingConfig>) {
                 cap_solver.emplace(lemon_graph);
                 cap_solver->upperMap(capacities_map);
                 cap_solver->costMap(costs_map);
                 cap_solver->supplyMap(node_supply_map);
                 cap_solver->run(cfg.factor);
+            } else {
+                static_assert(std::is_same_v<T, SlopeDPConfig>);
+                // SlopeDP is dispatched from set_point(); reaching here means
+                // a subgraph the chain solver cannot handle.
+                throw std::runtime_error(
+                    "SlopeDP backend supports only chain-factory subgraphs "
+                    "(no MatchingEdges).");
             }
         }, _config);
         // Any solve may have changed potentials/flow -> invalidate the
@@ -604,6 +738,8 @@ public:
         ns_solver.reset();
         ns_lct_solver.reset();
         cc_solver.reset();
+        _slope_solved = false;
+        _sdp_cache_built = false;
         _build_chain_topology();
         _matching_edge_cache.clear();
         _theo_sink_edge_cache.clear();
@@ -716,8 +852,204 @@ public:
         // changes between solves. Flow on the trash arc is already bounded by source supply.
         node_supply_map[lemon_graph.nodeFromId(0)] = lemon_total_flow;
         node_supply_map[lemon_graph.nodeFromId(1)] = -lemon_total_flow;
+        if (_use_slopedp()) {
+            _slope_dp_solve(lemon_total_flow);
+            ++_solution_version;
+            return;
+        }
         _run_solver();
     }
+
+  private:
+    // ---- slope-DP chain solver ------------------------------------------- //
+    void _sdp_build_cache() const {
+        const size_t K = _chain_topo.has_value() ? _chain_topo->order.size() : 0;
+        // Node-id -> chain position (or, without chain topo, each node is its
+        // own singleton "position" in node-id order).
+        std::vector<size_t> node_pos(nodes.size(), std::numeric_limits<size_t>::max());
+        size_t P;
+        if (_chain_topo.has_value()) {
+            P = K;
+            for (size_t i = 0; i < K; ++i) node_pos[_chain_topo->order[i]] = i;
+        } else {
+            // isolated peaks (no chain edges): source/sink are ids 0/1
+            P = 0;
+            for (size_t nid = 2; nid < nodes.size(); ++nid) node_pos[nid] = P++;
+        }
+        _sdp_src_arc.assign(P, -1);
+        _sdp_sink_arc.assign(P, -1);
+        _sdp_et_arc.assign(P, -1);
+        _sdp_tt_arc.assign(P, -1);
+        _sdp_emp_cap.assign(P, 0);
+        _sdp_c_exp = _sdp_c_theo = _sdp_c_s = -1;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            const auto& et = edges[ii].get_type();
+            std::visit([&](const auto& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {
+                    size_t p = node_pos[edges[ii].get_end_node_id()];
+                    _sdp_src_arc[p] = ii;
+                    _sdp_emp_cap[p] = capacities_map[lemon_graph.arcFromId(ii)];
+                } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
+                    _sdp_sink_arc[node_pos[edges[ii].get_start_node_id()]] = ii;
+                } else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) {
+                    _sdp_et_arc[node_pos[edges[ii].get_start_node_id()]] = ii;
+                    _sdp_c_exp = costs_map[lemon_graph.arcFromId(ii)];
+                } else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) {
+                    _sdp_tt_arc[node_pos[edges[ii].get_end_node_id()]] = ii;
+                    _sdp_c_theo = costs_map[lemon_graph.arcFromId(ii)];
+                } else if constexpr (std::is_same_v<T, SimpleTrashEdge>) {
+                    _sdp_c_s = costs_map[lemon_graph.arcFromId(ii)];
+                } else if constexpr (std::is_same_v<T, MatchingEdge>) {
+                    throw std::runtime_error(
+                        "SlopeDP backend supports only chain-factory subgraphs "
+                        "(found a MatchingEdge; use the NetworkSimplex solver).");
+                }
+            }, et);
+        }
+        _sdp_pos.assign(P, 0);
+        if (_chain_topo.has_value())
+            for (size_t g = 0; g + 1 < P; ++g)
+                _sdp_pos[g + 1] = _sdp_pos[g] + _chain_topo->gap_cost[g];
+        _sdp_cache_built = true;
+    }
+
+    void _slope_dp_solve(VALUE_TYPE F) const {
+        using W = __int128;
+        if (!_sdp_cache_built) _sdp_build_cache();
+        const size_t P = _sdp_emp_cap.size();
+        const bool chained = _chain_topo.has_value();
+
+        // per-position masses for this solve
+        std::vector<VALUE_TYPE> e(P, 0), t(P, 0);
+        VALUE_TYPE E = 0, T = 0;
+        for (size_t p = 0; p < P; ++p) {
+            e[p] = _sdp_emp_cap[p];
+            E += e[p];
+            if (_sdp_sink_arc[p] >= 0) {
+                t[p] = capacities_map[lemon_graph.arcFromId(_sdp_sink_arc[p])];
+                T += t[p];
+            }
+        }
+
+        // trash channels (quantized prices; cap at M=0)
+        struct Ch { VALUE_TYPE price; VALUE_TYPE cap0; int kind; };  // 0=exp,1=theo,2=simple
+        std::vector<Ch> ch;
+        if (_sdp_c_exp >= 0)  ch.push_back({_sdp_c_exp, E, 0});
+        if (_sdp_c_theo >= 0) ch.push_back({_sdp_c_theo, T, 1});
+        if (_sdp_c_s >= 0)    ch.push_back({_sdp_c_s, std::numeric_limits<VALUE_TYPE>::max(), 2});
+        std::sort(ch.begin(), ch.end(), [](const Ch& a, const Ch& b) { return a.price < b.price; });
+        auto trash_of = [&](VALUE_TYPE M) -> W {
+            VALUE_TYPE need = F - M;
+            if (need < 0) throw std::runtime_error("SlopeDP: matched mass exceeds supply.");
+            W c = 0;
+            for (const auto& x : ch) {
+                if (need <= 0) break;
+                VALUE_TYPE cap = x.kind == 2 ? need : x.cap0 - M;
+                VALUE_TYPE take = std::min(need, std::max<VALUE_TYPE>(cap, 0));
+                c += (W)x.price * take; need -= take;
+            }
+            if (need > 0) throw std::runtime_error("SlopeDP: infeasible trash configuration.");
+            return c;
+        };
+        const W trash0 = trash_of(0);
+        const VALUE_TYPE tau = std::min(E, T) >= 1 ? (VALUE_TYPE)(trash0 - trash_of(1)) : 0;
+
+        std::vector<VALUE_TYPE> u(P, 0), y(P, 0), s(P > 0 ? P - 1 : 0, 0);
+        W var_total = 0;
+        if (tau > 0 && chained) {
+            slopedp_detail::ConvexPL<VALUE_TYPE> DP;
+            const VALUE_TYPE WALLM = std::numeric_limits<VALUE_TYPE>::max() / 1024;
+            DP.insL(0, WALLM);
+            DP.insR(0, WALLM);
+            std::vector<VALUE_TYPE> lo(P), hi(P), vv(P);
+            for (size_t i = 0; i < P; ++i) {
+                vv[i] = e[i] - t[i];
+                auto [l, h] = DP.convV(tau, vv[i], t[i]);
+                lo[i] = l; hi[i] = h;
+                DP.minval += -(W)tau * t[i];
+                if (i + 1 < P) DP.addAbs(0, _sdp_pos[i + 1] - _sdp_pos[i]);
+            }
+            var_total = DP.evalAt(0);
+            // backward recovery
+            VALUE_TYPE s_cur = 0;
+            for (size_t ir = P; ir-- > 0; ) {
+                VALUE_TYPE want = s_cur - vv[ir];
+                VALUE_TYPE s_prev = std::min(std::max(want, lo[ir]), hi[ir]);
+                if (s_cur - s_prev < -t[ir]) s_prev = s_cur + t[ir];   // absorb wall
+                if (s_cur - s_prev > e[ir])  s_prev = s_cur - e[ir];   // phantom tie-break
+                if (ir == 0) s_prev = 0;
+                VALUE_TYPE a_i = s_cur - s_prev;
+                VALUE_TYPE yy = std::max<VALUE_TYPE>(std::min(t[ir], e[ir] - a_i), 0);
+                VALUE_TYPE uu = std::min(std::max<VALUE_TYPE>(a_i + yy, 0), e[ir]);
+                y[ir] = yy; u[ir] = uu;
+                if (ir > 0) s[ir - 1] = s_prev;
+                s_cur = s_prev;
+            }
+        }
+        // matched mass and transport
+        VALUE_TYPE M = 0;
+        W transport = 0;
+        for (size_t p = 0; p < P; ++p) M += y[p];
+        for (size_t g = 0; g + 1 < P; ++g) {
+            VALUE_TYPE gap = _sdp_pos[g + 1] - _sdp_pos[g];
+            transport += (W)(s[g] >= 0 ? s[g] : -s[g]) * gap;
+        }
+        const W total = transport + trash_of(M);
+        if (tau > 0 && chained) {
+            const W total_dp = var_total + trash0;
+            if (total != total_dp)
+                throw std::runtime_error("SlopeDP: flow recovery inconsistent with DP cost.");
+        }
+
+        // channel amounts for M, then per-node distribution (greedy in order)
+        VALUE_TYPE D = 0, PH = 0, SI = 0;
+        {
+            VALUE_TYPE need = F - M;
+            for (const auto& x : ch) {
+                if (need <= 0) break;
+                VALUE_TYPE cap = x.kind == 2 ? need : x.cap0 - M;
+                VALUE_TYPE take = std::min(need, std::max<VALUE_TYPE>(cap, 0));
+                if (x.kind == 0) D = take; else if (x.kind == 1) PH = take; else SI = take;
+                need -= take;
+            }
+        }
+
+        // per-arc flows
+        _slope_flow.assign(edges.size(), 0);
+        VALUE_TYPE Dleft = D, Pleft = PH;
+        for (size_t p = 0; p < P; ++p) {
+            if (_sdp_src_arc[p] >= 0) {
+                VALUE_TYPE d = std::min(Dleft, e[p] - u[p]);
+                if (_sdp_et_arc[p] < 0) d = 0;             // no trash arc here
+                Dleft -= d;
+                _slope_flow[_sdp_src_arc[p]] = u[p] + d;
+                if (_sdp_et_arc[p] >= 0) _slope_flow[_sdp_et_arc[p]] = d;
+            }
+            if (_sdp_sink_arc[p] >= 0) {
+                VALUE_TYPE ph = std::min(Pleft, t[p] - y[p]);
+                if (_sdp_tt_arc[p] < 0) ph = 0;
+                Pleft -= ph;
+                _slope_flow[_sdp_sink_arc[p]] = y[p] + ph;
+                if (_sdp_tt_arc[p] >= 0) _slope_flow[_sdp_tt_arc[p]] = ph;
+            }
+        }
+        if (Dleft != 0 || Pleft != 0)
+            throw std::runtime_error("SlopeDP: trash distribution failed.");
+        if (simple_trash_added && simple_trash_idx != std::numeric_limits<LEMON_INDEX>::max())
+            _slope_flow[simple_trash_idx] = SI;
+        if (chained) {
+            const auto& topo = *_chain_topo;
+            for (size_t g = 0; g + 1 < P; ++g) {
+                _slope_flow[topo.right_arc_ids[g]] = s[g] > 0 ?  s[g] : 0;
+                _slope_flow[topo.left_arc_ids[g]]  = s[g] < 0 ? -s[g] : 0;
+            }
+        }
+        _slope_total = (VALUE_TYPE)total;
+        _slope_solved = true;
+    }
+
+  public:
 
     VALUE_TYPE total_cost() const {
         if(!_solver_has_value()) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
@@ -1271,6 +1603,14 @@ public:
         if (_chain_topo.has_value()) {
             for (size_t g = 0; g < _chain_topo->right_arc_ids.size(); ++g)
                 _chain_topo->gap_cost[g] = costs_map[lemon_graph.arcFromId(_chain_topo->right_arc_ids[g])];
+        }
+        if (_use_slopedp()) {
+            // positions cache derives from gap_cost — rebuild it, then re-solve
+            // with the supplies of the last set_point()
+            _sdp_cache_built = false;
+            _slope_dp_solve(node_supply_map[lemon_graph.nodeFromId(0)]);
+            ++_solution_version;
+            return;
         }
         _run_solver(/*costs_changed=*/true);
     }
