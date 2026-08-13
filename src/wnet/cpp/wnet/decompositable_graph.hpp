@@ -1780,8 +1780,20 @@ public:
                 return new_theoretical[theo->get_spectrum_id()]->get_point(theo->get_peak_index())[0];
             return 0.0;
         };
-        const double dir_sign =
-            (get_node_pos(topo.order[1]) > get_node_pos(topo.order[0])) ? 1.0 : -1.0;
+        // Orientation from the first strictly different position pair: on
+        // shared-grid data the head pair is routinely co-located, so a bare
+        // pos[1] > pos[0] test ties to descending and negates every gradient
+        // in an ascending chain.  A fully co-located chain keeps +1 (all gaps
+        // are 0, so either sign is a valid subgradient of |.| there).
+        double dir_sign = 1.0;
+        for (size_t k = 1; k < K; ++k) {
+            const double diff =
+                get_node_pos(topo.order[k]) - get_node_pos(topo.order[k - 1]);
+            if (diff != 0.0) {
+                dir_sign = (diff > 0.0) ? 1.0 : -1.0;
+                break;
+            }
+        }
 
         for (size_t k = 0; k < K; ++k) {
             const VALUE_TYPE left_total  = (k > 0)     ? R[k-1] + L[k-1] : 0;
@@ -2253,7 +2265,10 @@ public:
         built(other.built),
         _p_order(other._p_order),
         _scale(other._scale),
-        _max_real_cost(other._max_real_cost)
+        _max_real_cost(other._max_real_cost),
+        _cost_scaling_requested(other._cost_scaling_requested),
+        _explicit_cost_scale(other._explicit_cost_scale),
+        _intensity_scale(other._intensity_scale)
     {
         other.built = false;
     }
@@ -2489,6 +2504,12 @@ public:
     // isolated-trash contributions).  The Python wrapper divides by scale_factor()
     // to recover the real W_p**p value.
     VALUE_TYPE total_cost() const {
+        // Normally a subgraph throws first when queried before solve(), but a
+        // network whose peaks are all dead-ends has no subgraph to object and
+        // would read _last_point out of bounds below.
+        if (_last_point.size() != _no_theoretical_spectra)
+            throw std::runtime_error(
+                "You must call solve() before calling total_cost().");
         VALUE_TYPE cost = 0;
         for (const auto& flow_subgraph : flow_subgraphs)
             cost += flow_subgraph->total_cost();

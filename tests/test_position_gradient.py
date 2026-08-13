@@ -318,6 +318,51 @@ class TestGradient1DChain:
         assert emp_grad.shape == (2, 1)
         assert theo_grads[0].shape == (2, 1)
 
+    def test_tied_head_gradient_sign(self):
+        """Chain whose first two nodes are co-located (shared-grid head).
+
+        Regression: dir_sign was derived from pos[1] > pos[0] alone, which
+        ties on a co-located head, defaults to descending, and negates every
+        gradient in an ascending chain.  Shared-grid profile data ties the
+        head as a matter of course."""
+        base_pos = np.array([[0.0, 10_000.0]], dtype=np.float64)
+        tgt_pos = np.array([[0.0, 12_000.0]], dtype=np.float64)
+        base_int = np.array([100, 100], dtype=np.int64)
+        tgt_int = np.array([100, 100], dtype=np.int64)
+        base = make_dist(base_pos, base_int)
+        target = make_dist(tgt_pos, tgt_int)
+        W = _build_chain(base, [target])
+        emp_grad, theo_grads = W.update_positions_and_get_gradient(base, [target])
+
+        # Only the tail peaks (index 1) are FD-checkable: the tied head sits
+        # on the kink of |.|, where central differences give 0 while the
+        # analytic value is a legitimate one-sided subgradient.
+        for grads, moving in ((theo_grads[0], "theo"), (emp_grad, "emp")):
+            fixed_pos = tgt_pos if moving == "theo" else base_pos
+            pos_p = fixed_pos.copy()
+            pos_p[0, 1] += EPS
+            pos_m = fixed_pos.copy()
+            pos_m[0, 1] -= EPS
+            if moving == "theo":
+                args_p = (base_pos, [pos_p])
+                args_m = (base_pos, [pos_m])
+            else:
+                args_p = (pos_p, [tgt_pos])
+                args_m = (pos_m, [tgt_pos])
+            cp = cost_at(
+                *args_p, base_int, [tgt_int],
+                DistanceMetric.L2, force_dense_1d=False,
+            )
+            cm = cost_at(
+                *args_m, base_int, [tgt_int],
+                DistanceMetric.L2, force_dense_1d=False,
+            )
+            fd = (cp - cm) / (2.0 * EPS)
+            assert abs(grads[1, 0] - fd) < ATOL, (
+                f"tied-head chain {moving} tail peak: "
+                f"grad={grads[1, 0]:.4f}, fd={fd:.4f}"
+            )
+
     def test_chain_matches_dense(self):
         """Chain and dense networks must produce identical gradients."""
         base = make_dist(self.base_pos, self.base_int)

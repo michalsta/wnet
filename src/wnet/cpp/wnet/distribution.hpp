@@ -10,6 +10,7 @@
 #include <vector>
 #include <stdexcept>
 #include <random>
+#include <type_traits>
 
 
 #ifdef INCLUDE_NANOBIND_STUFF
@@ -471,7 +472,13 @@ public:
                                            intensity_type intensity_range,
                                            std::mt19937& rng) {
         std::uniform_real_distribution<position_type> pos_dist(0, position_range);
-        std::uniform_int_distribution<intensity_type> int_dist(1, intensity_range);
+        // uniform_int_distribution is UB for floating-point types, so pick the
+        // distribution matching the intensity type (double for the float backend).
+        using intensity_dist_t = std::conditional_t<
+            std::is_integral_v<intensity_type_>,
+            std::uniform_int_distribution<intensity_type_>,
+            std::uniform_real_distribution<intensity_type_>>;
+        intensity_dist_t int_dist(1, intensity_range);
 
         std::vector<std::array<position_type, DIM>> positions;
         std::vector<intensity_type> intensities;

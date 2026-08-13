@@ -120,8 +120,8 @@ class WassersteinNetwork:
         vec_base = base_distribution.vecdist
         vec_targets = [t.vecdist for t in target_distributions]
         # CostScaling / CapacityScaling cannot solve the 1D chain factory: the
-        # bidirectional chain arcs carry max/2 capacity, on which these two
-        # LEMON algorithms return INFEASIBLE (garbage total cost) or loop. Only
+        # bidirectional chain arcs carry unbounded (INF) capacity, on which these
+        # two LEMON algorithms return INFEASIBLE (garbage total cost) or loop. Only
         # NetworkSimplex / CycleCanceling handle the chain. Force the dense
         # factory for them so 1D results stay correct.
         chain_incompatible = isinstance(solver, (CostScaling, CapacityScaling))
