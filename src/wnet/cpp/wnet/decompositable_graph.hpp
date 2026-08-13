@@ -96,15 +96,38 @@ struct ConvexPL {
     using W = __int128;
     static constexpr V NEG_BIG = std::numeric_limits<V>::min() / 4;
     static constexpr V POS_BIG = std::numeric_limits<V>::max() / 4;
-    std::map<V, V> L, R;
+    // Flat storage (measured ~2.4x faster than std::map here): L inserts land
+    // at the back (post-pop-loop or in-plateau), R inserts are found by
+    // binary search (the plateau drifts with the lazy offsets, so R's insert
+    // point wanders a few dozen entries deep); both structures stay small
+    // (~1e3-1e4 entries on 2e5-node chains).
+    struct BP { V key, mass; };
+    std::vector<BP> L;      // ascending keys; back = max
+    std::deque<BP> R;       // ascending keys
     V offL = 0, offR = 0;
     V rTotal = 0;
     W minval = 0;
 
-    V maxLeft()  const { return L.empty() ? NEG_BIG : std::prev(L.end())->first + offL; }
-    V minRight() const { return R.empty() ? POS_BIG : R.begin()->first + offR; }
-    void insL(V pos, V m) { if (m) L[pos - offL] += m; }
-    void insR(V pos, V m) { if (m) { R[pos - offR] += m; rTotal += m; } }
+    V maxLeft()  const { return L.empty() ? NEG_BIG : L.back().key + offL; }
+    V minRight() const { return R.empty() ? POS_BIG : R.front().key + offR; }
+
+    void insL(V pos, V m) {
+        if (!m) return;
+        V k = pos - offL;
+        size_t i = L.size();
+        while (i > 0 && L[i - 1].key > k) --i;
+        if (i > 0 && L[i - 1].key == k) L[i - 1].mass += m;
+        else L.insert(L.begin() + i, {k, m});
+    }
+    void insR(V pos, V m) {
+        if (!m) return;
+        V k = pos - offR;
+        size_t i = std::lower_bound(R.begin(), R.end(), k,
+                       [](const BP& e, V kk) { return e.key < kk; }) - R.begin();
+        if (i < R.size() && R[i].key == k) R[i].mass += m;
+        else R.insert(R.begin() + i, {k, m});
+        rTotal += m;
+    }
 
     // F += gamma * |s - b|
     void addAbs(V b, V gamma) {
@@ -114,13 +137,13 @@ struct ConvexPL {
         if (b < ml) {
             V rem = gamma;
             while (rem > 0 && !L.empty()) {
-                auto it = std::prev(L.end());
-                V key = it->first + offL;
+                BP& e = L.back();
+                V key = e.key + offL;
                 if (key <= b) break;
-                V m = std::min(it->second, rem);
+                V m = std::min(e.mass, rem);
                 minval += (W)m * (key - b);
-                it->second -= m;
-                if (it->second == 0) L.erase(it);
+                e.mass -= m;
+                if (e.mass == 0) L.pop_back();
                 insR(key, m);
                 rem -= m;
             }
@@ -131,13 +154,13 @@ struct ConvexPL {
         } else {
             V rem = gamma;
             while (rem > 0 && !R.empty()) {
-                auto it = R.begin();
-                V key = it->first + offR;
+                BP& e = R.front();
+                V key = e.key + offR;
                 if (key >= b) break;
-                V m = std::min(it->second, rem);
+                V m = std::min(e.mass, rem);
                 minval += (W)m * (b - key);
-                it->second -= m; rTotal -= m;
-                if (it->second == 0) R.erase(it);
+                e.mass -= m; rTotal -= m;
+                if (e.mass == 0) R.pop_front();
                 insL(key, m);
                 rem -= m;
             }
@@ -158,11 +181,11 @@ struct ConvexPL {
         if (rTotal >= tau) {
             V excess = rTotal - tau;
             while (excess > 0) {
-                auto it = std::prev(R.end());
-                if (it->second <= excess) { excess -= it->second; rTotal -= it->second; R.erase(it); }
-                else { it->second -= excess; rTotal -= excess; excess = 0; }
+                BP& e = R.back();
+                if (e.mass <= excess) { excess -= e.mass; rTotal -= e.mass; R.pop_back(); }
+                else { e.mass -= excess; rTotal -= excess; excess = 0; }
             }
-            hi = R.empty() ? POS_BIG : std::prev(R.end())->first + offR;
+            hi = R.empty() ? POS_BIG : R.back().key + offR;
         }
         V lo = maxLeft();
         offL += -t; offR += v;
@@ -174,15 +197,15 @@ struct ConvexPL {
         W v = minval;
         if (s < ml) {
             for (auto it = L.rbegin(); it != L.rend(); ++it) {
-                V key = it->first + offL;
+                V key = it->key + offL;
                 if (key <= s) break;
-                v += (W)it->second * (key - s);
+                v += (W)it->mass * (key - s);
             }
         } else if (s > mr) {
-            for (auto& [k, m] : R) {
-                V key = k + offR;
+            for (const auto& e : R) {
+                V key = e.key + offR;
                 if (key >= s) break;
-                v += (W)m * (s - key);
+                v += (W)e.mass * (s - key);
             }
         }
         return v;
@@ -360,6 +383,7 @@ class WassersteinNetworkSubgraph {
     mutable std::vector<LEMON_INDEX> _sdp_src_arc, _sdp_sink_arc, _sdp_et_arc, _sdp_tt_arc;
     mutable std::vector<VALUE_TYPE> _sdp_emp_cap;      // per chain pos (0 for theo)
     mutable std::vector<VALUE_TYPE> _sdp_pos;          // per chain pos: prefix of gap_cost
+    mutable std::vector<size_t> _sdp_cluster_start;    // C+1 offsets into positions
     mutable VALUE_TYPE _sdp_c_exp = -1, _sdp_c_theo = -1, _sdp_c_s = -1;   // quantized
     mutable std::vector<VALUE_TYPE> _slope_flow;       // per LEMON arc id
     mutable VALUE_TYPE _slope_total = 0;
@@ -740,6 +764,7 @@ public:
         cc_solver.reset();
         _slope_solved = false;
         _sdp_cache_built = false;
+        _chain_arc_cache_built = false;
         _build_chain_topology();
         _matching_edge_cache.clear();
         _theo_sink_edge_cache.clear();
@@ -911,6 +936,14 @@ public:
         if (_chain_topo.has_value())
             for (size_t g = 0; g + 1 < P; ++g)
                 _sdp_pos[g + 1] = _sdp_pos[g] + _chain_topo->gap_cost[g];
+        // Cluster segmentation: co-located positions (zero-cost gaps) merge
+        // into one DP node — ~3x fewer conv steps on profile grids, and all
+        // intra-cluster gaps (the zero-cost tie surface) leave the DP.
+        _sdp_cluster_start.clear();
+        _sdp_cluster_start.push_back(0);
+        for (size_t p = 1; p < P; ++p)
+            if (_sdp_pos[p] != _sdp_pos[p - 1]) _sdp_cluster_start.push_back(p);
+        _sdp_cluster_start.push_back(P);
         _sdp_cache_built = true;
     }
 
@@ -958,33 +991,58 @@ public:
         std::vector<VALUE_TYPE> u(P, 0), y(P, 0), s(P > 0 ? P - 1 : 0, 0);
         W var_total = 0;
         if (tau > 0 && chained) {
+            // DP over co-located CLUSTERS (zero-cost gaps merged): ~3x fewer
+            // conv steps on shared-grid profile data, and no zero-gap ties.
+            const auto& cs = _sdp_cluster_start;
+            const size_t C = cs.size() - 1;
+            std::vector<VALUE_TYPE> ce(C, 0), ct(C, 0);
+            for (size_t c = 0; c < C; ++c)
+                for (size_t p = cs[c]; p < cs[c + 1]; ++p) { ce[c] += e[p]; ct[c] += t[p]; }
+
             slopedp_detail::ConvexPL<VALUE_TYPE> DP;
             const VALUE_TYPE WALLM = std::numeric_limits<VALUE_TYPE>::max() / 1024;
             DP.insL(0, WALLM);
             DP.insR(0, WALLM);
-            std::vector<VALUE_TYPE> lo(P), hi(P), vv(P);
-            for (size_t i = 0; i < P; ++i) {
-                vv[i] = e[i] - t[i];
-                auto [l, h] = DP.convV(tau, vv[i], t[i]);
-                lo[i] = l; hi[i] = h;
-                DP.minval += -(W)tau * t[i];
-                if (i + 1 < P) DP.addAbs(0, _sdp_pos[i + 1] - _sdp_pos[i]);
+            std::vector<VALUE_TYPE> lo(C), hi(C), vv(C);
+            for (size_t c = 0; c < C; ++c) {
+                vv[c] = ce[c] - ct[c];
+                auto [l, h] = DP.convV(tau, vv[c], ct[c]);
+                lo[c] = l; hi[c] = h;
+                DP.minval += -(W)tau * ct[c];
+                if (c + 1 < C) DP.addAbs(0, _sdp_pos[cs[c + 1]] - _sdp_pos[cs[c]]);
             }
             var_total = DP.evalAt(0);
-            // backward recovery
+            // backward recovery of inter-cluster flows and cluster totals
+            std::vector<VALUE_TYPE> uc(C), yc(C), sc(C > 0 ? C - 1 : 0, 0);
             VALUE_TYPE s_cur = 0;
-            for (size_t ir = P; ir-- > 0; ) {
-                VALUE_TYPE want = s_cur - vv[ir];
-                VALUE_TYPE s_prev = std::min(std::max(want, lo[ir]), hi[ir]);
-                if (s_cur - s_prev < -t[ir]) s_prev = s_cur + t[ir];   // absorb wall
-                if (s_cur - s_prev > e[ir])  s_prev = s_cur - e[ir];   // phantom tie-break
-                if (ir == 0) s_prev = 0;
-                VALUE_TYPE a_i = s_cur - s_prev;
-                VALUE_TYPE yy = std::max<VALUE_TYPE>(std::min(t[ir], e[ir] - a_i), 0);
-                VALUE_TYPE uu = std::min(std::max<VALUE_TYPE>(a_i + yy, 0), e[ir]);
-                y[ir] = yy; u[ir] = uu;
-                if (ir > 0) s[ir - 1] = s_prev;
+            for (size_t cr = C; cr-- > 0; ) {
+                VALUE_TYPE want = s_cur - vv[cr];
+                VALUE_TYPE s_prev = std::min(std::max(want, lo[cr]), hi[cr]);
+                if (s_cur - s_prev < -ct[cr]) s_prev = s_cur + ct[cr];  // absorb wall
+                if (s_cur - s_prev > ce[cr])  s_prev = s_cur - ce[cr];  // phantom tie-break
+                if (cr == 0) s_prev = 0;
+                VALUE_TYPE a_c = s_cur - s_prev;
+                VALUE_TYPE yy = std::max<VALUE_TYPE>(std::min(ct[cr], ce[cr] - a_c), 0);
+                VALUE_TYPE uu = std::min(std::max<VALUE_TYPE>(a_c + yy, 0), ce[cr]);
+                yc[cr] = yy; uc[cr] = uu;
+                if (cr > 0) sc[cr - 1] = s_prev;
                 s_cur = s_prev;
+            }
+            // expand: distribute cluster totals to members (greedy in chain
+            // order; any split is optimal — intra-cluster arcs cost 0) and
+            // derive intra-cluster gap flows by prefix balance.
+            for (size_t c = 0; c < C; ++c) {
+                VALUE_TYPE uleft = uc[c], yleft = yc[c];
+                VALUE_TYPE run = c > 0 ? sc[c - 1] : 0;   // flow entering from the left
+                for (size_t p = cs[c]; p < cs[c + 1]; ++p) {
+                    u[p] = std::min(e[p], uleft); uleft -= u[p];
+                    y[p] = std::min(t[p], yleft); yleft -= y[p];
+                    if (p + 1 < cs[c + 1]) {              // intra-cluster gap
+                        run += u[p] - y[p];
+                        s[p] = run;
+                    }
+                }
+                if (c + 1 < C) s[cs[c + 1] - 1] = sc[c];  // inter-cluster gap
             }
         }
         // matched mass and transport
@@ -1331,77 +1389,118 @@ public:
     // Requires: at least one ChainEdge present (the caller is responsible).
     // Fills _chain_R_buf, _chain_L_buf, and all flag/cost scratch arrays from
     // the current solved flow. Must be called before _chain_run_search().
-    void _chain_build_search_state() const {
+    // Static per-position arc cache for the chain search state: which arcs
+    // touch each chain position, their fixed caps and (scaled) trash costs.
+    // Everything here is invariant across set_point() solves — only flows and
+    // the theo->sink caps change — so it is built once per build().
+    // apply_new_costs() only touches Matching/Chain edge costs, so the cached
+    // trash costs stay valid.
+    mutable bool _chain_arc_cache_built = false;
+    mutable std::vector<LEMON_INDEX> _chain_src_arc, _chain_sink_arc,
+                                     _chain_et_arc, _chain_tt_arc;   // -1 = absent
+    mutable std::vector<VALUE_TYPE> _chain_src_cap;                  // fixed emp caps
+
+    void _chain_build_arc_cache() const {
         const auto& topo = *_chain_topo;
         const size_t K = topo.order.size();
         const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
-
-        auto& c_right = _chain_R_buf;
-        auto& c_left  = _chain_L_buf;
-        for (size_t g = 0; g + 1 < K; ++g) {
-            const VALUE_TYPE R = _solver_flow(lemon_graph.arcFromId(topo.right_arc_ids[g]));
-            const VALUE_TYPE L = _solver_flow(lemon_graph.arcFromId(topo.left_arc_ids[g]));
-            c_right[g] = (L > 0) ? -topo.gap_cost[g] : topo.gap_cost[g];
-            c_left[g]  = (R > 0) ? -topo.gap_cost[g] : topo.gap_cost[g];
-        }
-
-        auto& has_src_fwd    = _chain_has_src_fwd;   auto& has_src_rev    = _chain_has_src_rev;
-        auto& has_sink_fwd   = _chain_has_sink_fwd;  auto& has_sink_rev   = _chain_has_sink_rev;
-        auto& exp_trash_cost = _chain_exp_trash_cost; auto& theo_trash_cost = _chain_theo_trash_cost;
-        auto& exp_trash_fwd  = _chain_exp_trash_fwd;  auto& exp_trash_rev  = _chain_exp_trash_rev;
-        auto& theo_trash_fwd = _chain_theo_trash_fwd; auto& theo_trash_rev = _chain_theo_trash_rev;
-        std::fill(has_src_fwd.begin(),     has_src_fwd.end(),     uint8_t(0));
-        std::fill(has_src_rev.begin(),     has_src_rev.end(),     uint8_t(0));
-        std::fill(has_sink_fwd.begin(),    has_sink_fwd.end(),    uint8_t(0));
-        std::fill(has_sink_rev.begin(),    has_sink_rev.end(),    uint8_t(0));
-        std::fill(exp_trash_cost.begin(),  exp_trash_cost.end(),  INF);
-        std::fill(theo_trash_cost.begin(), theo_trash_cost.end(), INF);
-        std::fill(exp_trash_fwd.begin(),   exp_trash_fwd.end(),   uint8_t(0));
-        std::fill(exp_trash_rev.begin(),   exp_trash_rev.end(),   uint8_t(0));
-        std::fill(theo_trash_fwd.begin(),  theo_trash_fwd.end(),  uint8_t(0));
-        std::fill(theo_trash_rev.begin(),  theo_trash_rev.end(),  uint8_t(0));
+        _chain_src_arc.assign(K, -1);
+        _chain_sink_arc.assign(K, -1);
+        _chain_et_arc.assign(K, -1);
+        _chain_tt_arc.assign(K, -1);
+        _chain_src_cap.assign(K, 0);
+        // Static parts of the search state: trash costs (scaled — see below)
+        // and the trash forward flags (trash arc caps are INF, so residual
+        // forward capacity is a fixed property of arc existence).
+        std::fill(_chain_exp_trash_cost.begin(),  _chain_exp_trash_cost.end(),  INF);
+        std::fill(_chain_theo_trash_cost.begin(), _chain_theo_trash_cost.end(), INF);
+        std::fill(_chain_exp_trash_fwd.begin(),   _chain_exp_trash_fwd.end(),   uint8_t(0));
+        std::fill(_chain_theo_trash_fwd.begin(),  _chain_theo_trash_fwd.end(),  uint8_t(0));
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             const auto& et = edges[ii].get_type();
             if (std::holds_alternative<SrcToEmpiricalEdge>(et)) {
                 const size_t pos = topo.node_to_pos[edges[ii].get_end_node_id()];
                 if (pos == std::numeric_limits<size_t>::max()) continue;
-                auto arc = lemon_graph.arcFromId(ii);
-                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
-                if (flow < cap) has_src_fwd[pos] = true;
-                if (flow > 0) has_src_rev[pos] = true;
+                _chain_src_arc[pos] = ii;
+                _chain_src_cap[pos] = capacities_map[lemon_graph.arcFromId(ii)];
             } else if (std::holds_alternative<TheoreticalToSinkEdge>(et)) {
                 const size_t pos = topo.node_to_pos[edges[ii].get_start_node_id()];
                 if (pos == std::numeric_limits<size_t>::max()) continue;
-                auto arc = lemon_graph.arcFromId(ii);
-                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
-                if (flow < cap) has_sink_fwd[pos] = true;
-                if (flow > 0) has_sink_rev[pos] = true;
-            } else if (const auto* e = std::get_if<EmpiricalTrashEdge>(&et)) {
+                _chain_sink_arc[pos] = ii;
+            } else if (std::holds_alternative<EmpiricalTrashEdge>(et)) {
                 const size_t pos = topo.node_to_pos[edges[ii].get_start_node_id()];
                 if (pos == std::numeric_limits<size_t>::max()) continue;
-                auto arc = lemon_graph.arcFromId(ii);
-                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
+                _chain_et_arc[pos] = ii;
                 // Use the SCALED cost (costs_map), not the raw get_cost(): the
                 // chain gap costs (topo.gap_cost) come from costs_map, so the
                 // trash costs must share those units.  With cost scaling on they
                 // differ by the cost scale; reading get_cost() here made the
                 // trash term negligible against the scaled matching costs and
                 // dropped the trash-reclaim from the residual marginal.
-                (void)e;
-                exp_trash_cost[pos] = costs_map[arc];
-                if (flow < cap) exp_trash_fwd[pos] = true;
-                if (flow > 0)   exp_trash_rev[pos] = true;
-            } else if (const auto* t = std::get_if<TheoreticalTrashEdge>(&et)) {
+                _chain_exp_trash_cost[pos] = costs_map[lemon_graph.arcFromId(ii)];
+                _chain_exp_trash_fwd[pos] = true;   // cap INF: always residual fwd
+            } else if (std::holds_alternative<TheoreticalTrashEdge>(et)) {
                 const size_t pos = topo.node_to_pos[edges[ii].get_end_node_id()];
                 if (pos == std::numeric_limits<size_t>::max()) continue;
-                auto arc = lemon_graph.arcFromId(ii);
-                VALUE_TYPE flow = _solver_flow(arc), cap = capacities_map[arc];
+                _chain_tt_arc[pos] = ii;
                 // Scaled cost (see EmpiricalTrashEdge branch above).
-                (void)t;
-                theo_trash_cost[pos] = costs_map[arc];
-                if (flow < cap) theo_trash_fwd[pos] = true;
-                if (flow > 0)   theo_trash_rev[pos] = true;
+                _chain_theo_trash_cost[pos] = costs_map[lemon_graph.arcFromId(ii)];
+                _chain_theo_trash_fwd[pos] = true;
             }
+        }
+        _chain_arc_cache_built = true;
+    }
+
+    void _chain_build_search_state() const {
+        const auto& topo = *_chain_topo;
+        const size_t K = topo.order.size();
+        if (!_chain_arc_cache_built) _chain_build_arc_cache();
+
+        // Hoist the backend dispatch out of the per-arc loops: _solver_flow()
+        // re-checks the config variant on every call, which dominates when
+        // called ~4K times per gradient evaluation.
+        const std::vector<VALUE_TYPE>* sdp_flow =
+            _use_slopedp() ? &_slope_flow : nullptr;
+        auto flow_of = [&](LEMON_INDEX ii) -> VALUE_TYPE {
+            return sdp_flow ? (*sdp_flow)[ii]
+                            : _solver_flow(lemon_graph.arcFromId(ii));
+        };
+
+        auto& c_right = _chain_R_buf;
+        auto& c_left  = _chain_L_buf;
+        for (size_t g = 0; g + 1 < K; ++g) {
+            const VALUE_TYPE R = flow_of(topo.right_arc_ids[g]);
+            const VALUE_TYPE L = flow_of(topo.left_arc_ids[g]);
+            c_right[g] = (L > 0) ? -topo.gap_cost[g] : topo.gap_cost[g];
+            c_left[g]  = (R > 0) ? -topo.gap_cost[g] : topo.gap_cost[g];
+        }
+
+        // Dynamic flags only (flows and theo->sink caps change per solve);
+        // trash costs and trash fwd flags are static, filled by the cache.
+        for (size_t pos = 0; pos < K; ++pos) {
+            LEMON_INDEX ii;
+            if ((ii = _chain_src_arc[pos]) >= 0) {
+                const VALUE_TYPE flow = flow_of(ii);
+                _chain_has_src_fwd[pos] = flow < _chain_src_cap[pos];
+                _chain_has_src_rev[pos] = flow > 0;
+            } else {
+                _chain_has_src_fwd[pos] = _chain_has_src_rev[pos] = false;
+            }
+            if ((ii = _chain_sink_arc[pos]) >= 0) {
+                const VALUE_TYPE flow = flow_of(ii);
+                _chain_has_sink_fwd[pos] = flow < capacities_map[lemon_graph.arcFromId(ii)];
+                _chain_has_sink_rev[pos] = flow > 0;
+            } else {
+                _chain_has_sink_fwd[pos] = _chain_has_sink_rev[pos] = false;
+            }
+            if ((ii = _chain_et_arc[pos]) >= 0)
+                _chain_exp_trash_rev[pos] = flow_of(ii) > 0;
+            else
+                _chain_exp_trash_rev[pos] = false;
+            if ((ii = _chain_tt_arc[pos]) >= 0)
+                _chain_theo_trash_rev[pos] = flow_of(ii) > 0;
+            else
+                _chain_theo_trash_rev[pos] = false;
         }
     }
 
