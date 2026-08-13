@@ -4,8 +4,13 @@
 #include <vector>
 #include <span>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
 #include <limits>
+#include <memory>
+#include <string>
 #include <unordered_map>
 #include <optional>
 #include <deque>
@@ -300,6 +305,15 @@ class WassersteinNetworkSubgraph {
     bool built = false;
     int _cold_starts_via_run = 0;
 
+    // Warm-sequence capture (WNET_DUMP_WARMSEQ): when the env var holds a
+    // path prefix, every NetworkSimplex solve of this subgraph appends its
+    // inputs (costs on change, supplies, caps) to <prefix>.<seq>.wseq so the
+    // exact solver load can be replayed offline (see p2_work replay tooling).
+    // Format v2: int32 magic=-2, n, m, np=-1 (read until EOF), src[m], tgt[m]
+    // (int32), then per point: uint8 costs_changed, [cost[m]], supply[n],
+    // cap[m] (all int64).  First point always carries costs.
+    std::unique_ptr<std::ofstream> _dump_stream;
+
     // Cost scaling (set by the owning network at build): integer cost map holds
     // quantize_cost(real, _scale, _p_is_one).  _p_is_one => legacy S=1 truncation.
     int64_t _scale = 1;
@@ -467,6 +481,37 @@ class WassersteinNetworkSubgraph {
         _chain_topo = std::move(topo);
     }
 
+    // Append this solve's inputs to the capture stream (see _dump_stream).
+    void _dump_point(bool costs_changed) {
+        static const char* prefix = std::getenv("WNET_DUMP_WARMSEQ");
+        if (!prefix || !*prefix) return;
+        const int32_t n = lemon_graph.nodeNum(), m = lemon_graph.arcNum();
+        auto put32 = [&](int32_t v) {
+            _dump_stream->write(reinterpret_cast<const char*>(&v), sizeof v);
+        };
+        auto put64 = [&](int64_t v) {
+            _dump_stream->write(reinterpret_cast<const char*>(&v), sizeof v);
+        };
+        bool first = false;
+        if (!_dump_stream) {
+            static std::atomic<int> seq_counter{0};
+            const std::string path = std::string(prefix) + "." +
+                std::to_string(seq_counter++) + ".wseq";
+            _dump_stream = std::make_unique<std::ofstream>(path, std::ios::binary);
+            first = true;
+            put32(-2); put32(n); put32(m); put32(-1);
+            for (int i = 0; i < m; ++i) put32(lemon_graph.id(lemon_graph.source(lemon_graph.arcFromId(i))));
+            for (int i = 0; i < m; ++i) put32(lemon_graph.id(lemon_graph.target(lemon_graph.arcFromId(i))));
+        }
+        const uint8_t cc = (first || costs_changed) ? 1 : 0;
+        _dump_stream->write(reinterpret_cast<const char*>(&cc), 1);
+        if (cc)
+            for (int i = 0; i < m; ++i) put64(int64_t(costs_map[lemon_graph.arcFromId(i)]));
+        for (int i = 0; i < n; ++i) put64(int64_t(node_supply_map[lemon_graph.nodeFromId(i)]));
+        for (int i = 0; i < m; ++i) put64(int64_t(capacities_map[lemon_graph.arcFromId(i)]));
+        _dump_stream->flush();
+    }
+
     // Run (or warm-restart) the configured solver using the current
     // capacities_map, costs_map and node_supply_map.
     // costs_changed=true: costs were updated since the last solve (e.g.
@@ -476,6 +521,7 @@ class WassersteinNetworkSubgraph {
         std::visit([&](const auto& cfg) {
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, NetworkSimplexConfig>) {
+              _dump_point(costs_changed);
               if (cfg.warm == NSWarmMode::LinkCut) {
                 // Experimental link-cut-tree backend (Simple warm strategy:
                 // repair-or-cold).  pivot/strategy are not applicable.
@@ -515,7 +561,10 @@ class WassersteinNetworkSubgraph {
                     ns_solver->supplyMap(node_supply_map);
                     if (costs_changed) ns_solver->costMap(costs_map);
                     ns_solver->setWarmViolationLimit(cfg.warm_violation_limit);
-                    ns_solver->warmRun(pivot, strategy);
+                    // costs_changed disables the "repair == optimal" fast
+                    // path inside warmRun (stale potentials); the basis is
+                    // still reused and start() reoptimizes.
+                    ns_solver->warmRun(pivot, strategy, costs_changed);
                 } else {
                     ++_cold_starts_via_run;
                     ns_solver.emplace(lemon_graph);

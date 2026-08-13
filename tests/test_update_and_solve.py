@@ -111,6 +111,45 @@ class TestUpdateAndSolve1DChain:
 
 
 class TestUpdateAndSolveDense:
+    def test_2d_warm_matches_cold_sequence(self):
+        """Randomized dense 2-D: a warm-restarting solver must track an
+        always-cold solver bit-exactly through a sequence of position updates.
+
+        Regression test for the costs_changed warm fast path: warmRun used to
+        return the OLD flows priced at the new costs (no reoptimization) when
+        only costs changed, which is invisible on the tiny fixtures above.
+        """
+        from wnet.wnet_cpp import NetworkSimplex, WarmMode
+
+        rng = np.random.default_rng(7)
+        N = 80
+        pos_base = rng.uniform(0, 60, size=(2, N))
+        pos_theo = pos_base + rng.uniform(-3, 3, size=(2, N))
+        inten_b = rng.integers(1, 1000, N)
+        inten_t = rng.integers(1, 1000, N)
+        base = make_nd(pos_base, inten_b)
+
+        def build(warm):
+            ns = NetworkSimplex()
+            ns.warm = warm
+            W = WassersteinNetwork(
+                base, [make_nd(pos_theo, inten_t)], DistanceMetric.L2,
+                max_distance=8, solver=ns,
+            )
+            W.add_simple_trash(8)
+            W.build()
+            W.solve()
+            return W
+
+        W_warm = build(WarmMode.DualRatio)
+        W_cold = build(WarmMode.NONE)
+        assert W_warm.total_cost() == W_cold.total_cost()
+
+        for _ in range(6):
+            theo2 = make_nd(pos_theo + rng.uniform(-2, 2, size=(2, N)), inten_t)
+            W_warm.update_positions_and_solve(base, [theo2])
+            W_cold.update_positions_and_solve(base, [theo2])
+            assert W_warm.total_cost() == W_cold.total_cost()
     def test_1d_dense_parity(self):
         """Dense 1D: updated cost matches a fresh solve."""
         base = make_1d([0.0, 5.0], [100, 100])
