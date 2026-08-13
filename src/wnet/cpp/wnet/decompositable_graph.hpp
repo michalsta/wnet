@@ -96,9 +96,76 @@ using SolverConfig = std::variant<
 // F(s): slope(s) = sum(right masses at keys < s) - sum(left masses at keys > s);
 // invariant max(left keys) <= min(right keys); F = minval on the plateau.
 namespace slopedp_detail {
+
+// 128-bit signed accumulator for slope-DP cost sums.  Intermediate products
+// (mass x distance, with wall masses near 2^53) overflow int64 even though
+// every FINAL total fits VALUE_TYPE, so the accumulator must be 128-bit.
+// GCC/Clang provide __int128; MSVC does not, so a minimal two's-complement
+// fallback covers exactly the operations the DP uses: construction from
+// int64, (wide)a * b products of two int64s, +=, +, -, unary -, ==/!=, and
+// an explicit narrowing cast.  No ordering, division or shifts.
+// WNET_FORCE_SOFT_INT128 forces the fallback for testing it on GCC/Clang.
+#if defined(__SIZEOF_INT128__) && !defined(WNET_FORCE_SOFT_INT128)
+using wide_t = __int128;
+#else
+struct wide_t {
+    uint64_t lo = 0;
+    int64_t  hi = 0;
+
+    constexpr wide_t() = default;
+    constexpr wide_t(long long v)                    // implicit: `W x = 0`
+        : lo(static_cast<uint64_t>(v)), hi(v < 0 ? -1 : 0) {}
+
+    constexpr wide_t& operator+=(const wide_t& b) {
+        lo += b.lo;
+        hi += b.hi + (lo < b.lo ? 1 : 0);
+        return *this;
+    }
+    friend constexpr wide_t operator+(wide_t a, const wide_t& b) { return a += b; }
+    friend constexpr wide_t operator-(const wide_t& a) {
+        wide_t r;
+        r.lo = ~a.lo;
+        r.hi = ~a.hi;
+        r.lo += 1;
+        if (r.lo == 0) r.hi += 1;
+        return r;
+    }
+    friend constexpr wide_t operator-(const wide_t& a, const wide_t& b) {
+        return a + (-b);
+    }
+    friend constexpr bool operator==(const wide_t& a, const wide_t& b) {
+        return a.lo == b.lo && a.hi == b.hi;
+    }
+    friend constexpr bool operator!=(const wide_t& a, const wide_t& b) {
+        return !(a == b);
+    }
+    // (wide)a * b with |*this| known to fit in int64 — always true at the
+    // DP's call sites, where the left factor is a freshly promoted int64.
+    constexpr wide_t operator*(long long b) const {
+        const auto a = static_cast<long long>(lo);   // value fits: hi is sign fill
+        const bool neg = (a < 0) != (b < 0);
+        const uint64_t ua = a < 0 ? 0 - static_cast<uint64_t>(a) : static_cast<uint64_t>(a);
+        const uint64_t ub = b < 0 ? 0 - static_cast<uint64_t>(b) : static_cast<uint64_t>(b);
+        // schoolbook 64x64 -> 128 on 32-bit limbs
+        const uint64_t a0 = ua & 0xffffffffu, a1 = ua >> 32;
+        const uint64_t b0 = ub & 0xffffffffu, b1 = ub >> 32;
+        const uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+        const uint64_t mid = (p00 >> 32) + (p01 & 0xffffffffu) + (p10 & 0xffffffffu);
+        wide_t r;
+        r.lo = (p00 & 0xffffffffu) | (mid << 32);
+        r.hi = static_cast<int64_t>(p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32));
+        return neg ? -r : r;
+    }
+    template <typename T>
+    explicit constexpr operator T() const {          // narrowing, like (V)__int128
+        return static_cast<T>(static_cast<long long>(lo));
+    }
+};
+#endif
+
 template <typename V>
 struct ConvexPL {
-    using W = __int128;
+    using W = wide_t;
     static constexpr V NEG_BIG = std::numeric_limits<V>::min() / 4;
     static constexpr V POS_BIG = std::numeric_limits<V>::max() / 4;
     // Flat storage (measured ~2.4x faster than std::map here): L inserts land
@@ -997,7 +1064,7 @@ public:
     }
 
     void _slope_dp_solve(VALUE_TYPE F) const {
-        using W = __int128;
+        using W = slopedp_detail::wide_t;
         if (!_sdp_cache_built) _sdp_build_cache();
         const size_t P = _sdp_emp_cap.size();
         const bool chained = _chain_topo.has_value();
