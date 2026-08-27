@@ -303,8 +303,13 @@ class WassersteinNetwork:
         emp_grad_raw, theo_grads_raw = self.wnet.update_positions_and_get_gradient(
             new_vec_base, new_vec_targets, self._distance
         )
-        emp_grad = np.asarray(emp_grad_raw)
-        theo_grads = [np.asarray(g) for g in theo_grads_raw]
+        # The C++ accumulates real-distance derivatives weighted by the INTEGER
+        # solver flows, which carry the intensity scale; divide it back out so
+        # the gradients match total_cost()'s real W_p**p units (the cost scale
+        # never enters — distances are differentiated un-scaled).
+        s = self.wnet.intensity_scale_factor()
+        emp_grad = np.asarray(emp_grad_raw) / s
+        theo_grads = [np.asarray(g) / s for g in theo_grads_raw]
         return emp_grad, theo_grads
 
     def update_positions_and_solve(

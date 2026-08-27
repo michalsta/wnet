@@ -455,3 +455,56 @@ class TestGradient1DChain:
                 )
                 fd = (cp - cm) / (2.0 * EPS)
                 assert abs(theo_grads[s][i, 0] - fd) < ATOL
+
+
+# ---------------------------------------------------------------------------
+# Fractional intensities: gradients must be in real total_cost() units
+# ---------------------------------------------------------------------------
+
+
+class TestGradientFractionalIntensities:
+    """Regression: with fractional intensities the solver flows carry the
+    intensity scale (FineGridScaler lifts them onto a ~2**30 integer grid),
+    and the raw C++ gradients came back multiplied by it — a ~1e6x unit
+    mismatch versus total_cost().  The wrapper must divide it back out."""
+
+    def _build(self, base_pos, tgt_pos, p):
+        base = Distribution(base_pos, np.array([1.25, 3.5, 0.75]))
+        target = Distribution(tgt_pos, np.array([2.0, 1.5, 2.0]))
+        W = WassersteinNetwork(
+            base,
+            [target],
+            DistanceMetric.L2,
+            max_distance=10.0,
+            force_dense_1d=True,
+            p=p,
+            round_max_distance=False,
+        )
+        W.set_cost_scaling(0)
+        W.add_simple_trash(100.0)
+        W.build()
+        W.solve()
+        return W, base, target
+
+    @pytest.mark.parametrize("p", [1.0, 2.0])
+    def test_theo_grad_fd_real_units(self, p):
+        base_pos = np.array([[0.3, 4.1, 8.7]], dtype=np.float64)
+        tgt_pos = np.array([[1.2, 5.3, 9.1]], dtype=np.float64)
+        W, base, target = self._build(base_pos, tgt_pos, p)
+        assert W.intensity_scale_factor() > 1.0  # fractional data got scaled
+        _, theo_grads = W.update_positions_and_get_gradient(base, [target])
+
+        eps = 1e-4
+        for i in range(3):
+            pos_p = tgt_pos.copy()
+            pos_p[0, i] += eps
+            pos_m = tgt_pos.copy()
+            pos_m[0, i] -= eps
+            costs = []
+            for pos in (pos_p, pos_m):
+                W2, b2, t2 = self._build(base_pos, pos, p)
+                costs.append(W2.total_cost())
+            fd = (costs[0] - costs[1]) / (2 * eps)
+            assert abs(theo_grads[0][i, 0] - fd) < 1e-3 * (1.0 + abs(fd)), (
+                f"p={p} peak {i}: grad={theo_grads[0][i, 0]:.6f}, fd={fd:.6f}"
+            )
