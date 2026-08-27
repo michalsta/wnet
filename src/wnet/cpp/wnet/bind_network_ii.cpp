@@ -19,6 +19,7 @@ nb::class_<WNetII> bind_network_ii(nb::module_& m) {
         .def("scale_factor", &WassersteinNetwork<int64_t, int64_t>::scale_factor)
         .def("intensity_scale_factor", &WassersteinNetwork<int64_t, int64_t>::intensity_scale_factor)
         .def("set_intensity_scale", &WassersteinNetwork<int64_t, int64_t>::set_intensity_scale, nb::arg("scale"))
+        .def("set_flow_budget", &WassersteinNetwork<int64_t, int64_t>::set_flow_budget, nb::arg("flow"))
         .def("get_subgraph", &WassersteinNetwork<int64_t, int64_t>::get_subgraph, nb::rv_policy::reference)
         .def("__str__", &WassersteinNetwork<int64_t, int64_t>::to_string)
         .def("lemon_to_string", &WassersteinNetwork<int64_t, int64_t>::lemon_to_string)

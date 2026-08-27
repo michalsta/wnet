@@ -175,6 +175,11 @@ class WassersteinNetwork:
         # Opt-in p=1 cost scaling (lets a caller pass real distances instead of
         # pre-scaling positions). Must be called before build().
         self.set_cost_scaling = self.wnet.set_cost_scaling
+        # Declared upper bound on point-scaled total flow (real intensity
+        # units): build() sizes the cost scale so any point within the budget
+        # stays inside the int64 cost accumulator, and solve() rejects points
+        # past the ceiling. Must be called before build().
+        self.set_flow_budget = self.wnet.set_flow_budget
 
         # Avoid capturing self in the lambda to prevent reference cycles that could lead to memory leaks.  The underlying C++ object should be freed when this wrapper is freed, but if we capture self in the lambda, the lambda's reference to self would keep it alive indefinitely.
         # Without this trick, the lambda would hold a reference to self, which holds a reference to the C++ object, which holds a reference back to the lambda, creating a cycle that prevents garbage collection.

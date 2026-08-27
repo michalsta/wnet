@@ -20,6 +20,7 @@ nb::class_<WNetIF> bind_network_if(nb::module_& m) {
         .def("intensity_scale_factor", &WassersteinNetwork<int64_t, double>::intensity_scale_factor)
         .def("set_intensity_scale", &WassersteinNetwork<int64_t, double>::set_intensity_scale, nb::arg("scale"))
         .def("set_cost_scaling", &WassersteinNetwork<int64_t, double>::set_cost_scaling, nb::arg("scale") = 0)
+        .def("set_flow_budget", &WassersteinNetwork<int64_t, double>::set_flow_budget, nb::arg("flow"))
         .def("get_subgraph", &WassersteinNetwork<int64_t, double>::get_subgraph, nb::rv_policy::reference)
         .def("__str__", &WassersteinNetwork<int64_t, double>::to_string)
         .def("lemon_to_string", &WassersteinNetwork<int64_t, double>::lemon_to_string)

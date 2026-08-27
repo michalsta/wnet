@@ -2187,6 +2187,17 @@ class WassersteinNetwork {
     // scale_factor() * intensity_scale_factor().
     double _intensity_scale = 1.0;
 
+    // Cost-accumulator overflow bookkeeping (see set_flow_budget / solve):
+    // _flow_budget is the caller-declared bound on point-scaled total flow in
+    // real (pre-intensity-scale) units (0 = none declared; build() then sizes
+    // the cost scale only for the build-time supplies at point == 1).
+    // _emp_flow_total / _theo_flow_totals are per-spectrum real intensity
+    // totals precomputed in build() so solve() can bound the accumulated cost
+    // of an arbitrary point in O(#spectra).
+    double _flow_budget = 0.0;
+    double _emp_flow_total = 0.0;
+    std::vector<double> _theo_flow_totals;
+
 public:
     WassersteinNetwork(std::vector<FlowNode<intensity_type>>&& nodes_,
                        std::vector<FlowEdge<intensity_type>>&& edges_,
@@ -2248,6 +2259,24 @@ public:
         }
     }
 
+    // Declare an upper bound on the point-scaled total flow this network will
+    // be solved with: empirical total plus sum_i(point[i] * theoretical_i
+    // total), in real (pre-intensity-scale) units.  build() sizes the auto
+    // cost scale against max(build-time flow, budget), so every point within
+    // the budget stays inside the int64 cost-accumulator ceiling; solve()
+    // rejects points whose worst-case accumulated cost exceeds the ceiling
+    // regardless of how the scale was chosen.  Must be called before build().
+    // Default 0 keeps the legacy sizing (build-time supplies at point == 1).
+    void set_flow_budget(double flow) {
+        if (built)
+            throw std::runtime_error(
+                "set_flow_budget() must be called before build().");
+        if (!(flow >= 0.0) || !std::isfinite(flow))
+            throw std::invalid_argument(
+                "set_flow_budget: flow must be finite and >= 0.");
+        _flow_budget = flow;
+    }
+
     WassersteinNetwork(const WassersteinNetwork&) = delete;
     WassersteinNetwork& operator=(const WassersteinNetwork&) = delete;
     WassersteinNetwork(WassersteinNetwork&& other) :
@@ -2268,7 +2297,10 @@ public:
         _max_real_cost(other._max_real_cost),
         _cost_scaling_requested(other._cost_scaling_requested),
         _explicit_cost_scale(other._explicit_cost_scale),
-        _intensity_scale(other._intensity_scale)
+        _intensity_scale(other._intensity_scale),
+        _flow_budget(other._flow_budget),
+        _emp_flow_total(other._emp_flow_total),
+        _theo_flow_totals(std::move(other._theo_flow_totals))
     {
         other.built = false;
     }
@@ -2446,16 +2478,26 @@ public:
         // Total flow upper bound for the cost-scale accumulator ceiling: the
         // per-subgraph flow is max(emp, theo) intensity, so summing all node
         // intensities over-estimates the network-wide flow (safe — it only
-        // shrinks the scale).  Assumes solve()'s point ~ O(1); a point that
-        // scales theoretical intensity far above 1 can still overflow.
-        double total_flow = 0.0;
+        // shrinks the scale).  Per-spectrum totals are kept so solve() can
+        // bound the accumulated cost of an arbitrary point; a caller expecting
+        // points far above 1 declares that via set_flow_budget(), which widens
+        // the sizing here, and solve() rejects points past the ceiling either
+        // way.
+        _emp_flow_total = 0.0;
+        _theo_flow_totals.assign(_no_theoretical_spectra, 0.0);
         for (const auto& node : nodes)
             std::visit([&](const auto& n) {
                 using T = std::decay_t<decltype(n)>;
-                if constexpr (std::is_same_v<T, EmpiricalNode<intensity_type>> ||
-                              std::is_same_v<T, TheoreticalNode<intensity_type>>)
-                    total_flow += static_cast<double>(n.get_intensity());
+                if constexpr (std::is_same_v<T, EmpiricalNode<intensity_type>>)
+                    _emp_flow_total += static_cast<double>(n.get_intensity());
+                else if constexpr (std::is_same_v<T, TheoreticalNode<intensity_type>>)
+                    _theo_flow_totals[n.get_spectrum_id()] += static_cast<double>(n.get_intensity());
             }, node.get_type());
+        double total_flow = _emp_flow_total;
+        for (const double t : _theo_flow_totals)
+            total_flow += t;
+        if (_flow_budget > total_flow)
+            total_flow = _flow_budget;
         // Choose one global cost scale from the largest real cost across the whole
         // network (matching + trash), so every subgraph's integer costs — and the
         // summed total_cost — share the same units.  p == 1 keeps _scale == 1.
@@ -2491,9 +2533,37 @@ public:
         solve(point);
     };
 
+    // int64 cost-accumulator overflow guard.  A unit of flow traverses at most
+    // two cost-bearing edges (an annihilation path crosses both asymmetric
+    // trash edges), so the accumulated scaled cost is bounded by
+    // 2 * c_max * scale * flow * intensity_scale.  pick_cost_scale targets
+    // 2^62, which leaves exactly that factor of 2 below the int64 edge; the
+    // guard therefore checks the single-traversal bound against 2^62.  Past
+    // it, the accumulator can wrap and return plausible-looking garbage, so
+    // reject the point loudly instead.
+    void check_accumulator_budget(const std::vector<double>& point) const {
+        if (!(_max_real_cost > 0.0)) return;
+        double flow = _emp_flow_total;
+        const size_t n = std::min(point.size(), _theo_flow_totals.size());
+        for (size_t i = 0; i < n; ++i)
+            flow += point[i] * _theo_flow_totals[i];
+        constexpr double ACCUMULATOR_TARGET = 4611686018427387904.0; // 2^62
+        const double worst_cost = _max_real_cost * static_cast<double>(_scale)
+                                  * flow * _intensity_scale;
+        if (!(worst_cost <= ACCUMULATOR_TARGET))
+            throw std::overflow_error(
+                "solve(): this point scales the total flow to " + std::to_string(flow) +
+                " real intensity units, bounding the accumulated integer cost by " +
+                std::to_string(worst_cost) + ", which exceeds the int64 budget of 2^62 "
+                "and could overflow silently. Declare the expected point range via "
+                "set_flow_budget() before build(), pass a smaller explicit cost scale "
+                "(set_cost_scaling), or rescale the theoretical intensities.");
+    }
+
     void solve(const std::vector<double>& point) {
         if(!built)
             throw std::runtime_error("You must call build() before calling solve().");
+        check_accumulator_budget(point);
 
         _last_point = point;
         for (auto& flow_subgraph : flow_subgraphs)
@@ -2517,6 +2587,15 @@ public:
         const VALUE_TYPE theo_trash_scaled = _isolated_theo_trash_cost_scaled();
         for (size_t s = 0; s < _no_theoretical_spectra; ++s)
             cost += static_cast<VALUE_TYPE>(theo_trash_scaled * _isolated_theoretical_intensity[s] * _last_point[s] * _intensity_scale);
+        // Nonnegative edge costs cannot sum to a negative total: a negative
+        // value here means the integer accumulator overflowed somewhere the
+        // solve()-time guard did not anticipate.
+        if (cost < 0)
+            throw std::overflow_error(
+                "total_cost(): accumulated scaled cost is negative, which means the "
+                "int64 cost accumulator overflowed. Rebuild with a smaller cost scale "
+                "(set_cost_scaling) or declare the expected point range via "
+                "set_flow_budget() before build().");
         return cost;
     };
 
