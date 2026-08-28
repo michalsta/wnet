@@ -8,6 +8,10 @@
 
 NB_MODULE(wnet_cpp, m) {
     m.doc() = "WNet C++ imlementation module";
+    // Surface C++ InfeasibleException as wnet_cpp.InfeasibleError, derived
+    // from RuntimeError so existing `except RuntimeError` handlers still catch it.
+    static nb::exception<InfeasibleException> infeasible_error(
+        m, "InfeasibleError", PyExc_RuntimeError);
     m.def("wnet_cpp_hello", []() {
         std::cout << "Hello from WNet (C++)!" << std::endl;
     }, "A simple hello world function for the WNet (C++) extension");

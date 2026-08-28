@@ -600,7 +600,7 @@ class WassersteinNetworkSubgraph {
         auto require_optimal = [](auto status, const char* solver_name) {
             using PT = decltype(status);
             if (status == PT::INFEASIBLE)
-                throw std::runtime_error(std::string(solver_name) +
+                throw InfeasibleException(std::string(solver_name) +
                     ": flow problem is INFEASIBLE (no flow satisfies the "
                     "current supplies/capacities); the solver state is not a "
                     "valid solution.");
@@ -1012,12 +1012,22 @@ public:
             // immediately so the ART_COST = 2^62 potential-accumulation UB
             // cannot occur.  Verified empirically under ASan+UBSan: 298 tests,
             // zero reports.  Unbalanced or sparse cases must use add_simple_trash().
-            if (lemon_empirical_intensity != lemon_theoretical_intensity)
-                throw std::runtime_error(
+            if (lemon_empirical_intensity != lemon_theoretical_intensity) {
+                std::string msg =
                     "wnet: solve() without trash edges requires equal empirical and "
-                    "theoretical intensities (balanced supply/demand). "
-                    "Call add_simple_trash() before build() to fix this."
-                );
+                    "theoretical intensities (balanced supply/demand); got empirical = " +
+                    std::to_string(lemon_empirical_intensity) + " vs theoretical = " +
+                    std::to_string(lemon_theoretical_intensity) +
+                    " in scaled integer units.";
+                if (_intensity_scale != 1.0)
+                    msg += " Intensities are quantised as trunc(real * " +
+                        std::to_string(_intensity_scale) +
+                        ") per peak, so equal real-valued totals can still land on "
+                        "unequal integers.";
+                msg += " Call add_simple_trash() before build(), or pass integer "
+                       "intensities that balance exactly.";
+                throw InfeasibleException(msg);
+            }
             lemon_total_flow = lemon_empirical_intensity;
         }
         // Trash cap/cost are fixed at build time (cap = INF, cost = SimpleTrashEdge.cost);

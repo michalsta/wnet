@@ -10,6 +10,15 @@
 
 #include <pylmcf/basics.hpp>
 
+// Thrown when the min-cost-flow LP has no feasible solution: a trash-less
+// solve whose integer-quantised supplies do not balance, or a LEMON solver
+// reporting INFEASIBLE.  Registered in the bindings as wnet.InfeasibleError
+// (a subclass of RuntimeError, so pre-existing handlers keep working).
+class InfeasibleException : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 class SourceNode {};
 class SinkNode {};
 

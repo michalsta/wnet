@@ -56,6 +56,12 @@ def WassersteinDistance(
 
     Raises:
         RuntimeError: If the distributions do not have the same total intensity.
+        InfeasibleError: If the total intensities are equal as reals but land on
+            unequal integers after per-peak quantisation (possible with
+            fractional intensities). The distributions are never silently
+            re-quantised to force balance; pass integer intensities that
+            balance exactly, or use TruncatedWassersteinDistance (whose trash
+            edges absorb the imbalance).
     """
     if not np.isclose(distribution1.sum_intensities, distribution2.sum_intensities):
         raise RuntimeError("Distributions must have the same total intensity")
