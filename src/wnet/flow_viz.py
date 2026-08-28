@@ -542,18 +542,23 @@ def draw_flow(
 # --------------------------------------------------------------------------- #
 
 def residual_from_flow(graph):
-    """Build the residual network of a *solved* flow as a ``networkx.DiGraph``.
+    """Build the residual network of a *solved* flow as a ``networkx.MultiDiGraph``.
 
     Richer than a plain residual: every arc is tagged with ``kind``
     (``forward`` = remaining capacity, ``reverse`` = flow that can be
     cancelled), the residual capacity (``rescap``), and the residual ``cost``
     (negated on reverse arcs).  Optimal min-cost flows leave no negative cycle
     here — that's the property this view lets you eyeball.
+
+    A MultiDiGraph is required: with antiparallel original arcs (e.g. the 1D
+    chain factory's bidirectional chain edges) a forward residual and the
+    reverse residual of the opposite arc share the same (u, v) pair, and a
+    plain DiGraph would silently drop one of them.
     """
     import networkx as nx
 
     g = _to_graph(graph)
-    r = nx.DiGraph()
+    r = nx.MultiDiGraph()
     for n, d in g.nodes(data=True):
         r.add_node(n, **d)
     for u, v, d in g.edges(data=True):

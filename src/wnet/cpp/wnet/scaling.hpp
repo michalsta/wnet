@@ -112,15 +112,24 @@ protected:
         return sorted.empty() ? 0.0 : sorted.back();
     }
 
-    // Minimum quantile_peak(frac) across empirical and all theoretical spectra.
+    // Minimum quantile_peak(frac) across empirical and all theoretical
+    // spectra.  Spectra with no positive intensity (quantile_peak == 0, e.g.
+    // an empty component after trimming/filtering) contribute nothing to
+    // rounding loss and are skipped — they must not zero out the minimum.
+    // Returns 0.0 only when ALL spectra are empty/zero.
     static double min_quantile_peak(
         const VecDist& empirical, const std::vector<const VecDist*>& theoretical,
         double frac)
     {
-        double p = quantile_peak(empirical, frac);
+        double p = std::numeric_limits<double>::infinity();
+        auto consider = [&](const VecDist& d) {
+            const double q = quantile_peak(d, frac);
+            if (q > 0.0) p = std::min(p, q);
+        };
+        consider(empirical);
         for (const auto* t : theoretical)
-            p = std::min(p, quantile_peak(*t, frac));
-        return p;
+            consider(*t);
+        return std::isinf(p) ? 0.0 : p;
     }
 
     // ---- Rounding-loss guard ------------------------------------------------
@@ -294,7 +303,7 @@ public:
             empirical, theoretical, 0.95);
         if (!(p95 > 0.0))
             throw std::invalid_argument(
-                "WNetDeconvScaler: p95 peak is zero; spectra appear empty.");
+                "WNetDeconvScaler: p95 peak is zero; all spectra appear empty.");
 
         this->sf_distance_ = 1.0;
         this->sf_intensity_ = 1.0 / (0.10 * p95);
@@ -389,7 +398,7 @@ public:
             empirical, theoretical, p95_frac);
         if (!(pq > 0.0))
             throw std::invalid_argument(
-                "GenericScaler: quantile peak is zero; spectra appear empty.");
+                "GenericScaler: quantile peak is zero; all spectra appear empty.");
 
         this->sf_distance_ = 1.0;
         this->sf_intensity_ = 1.0 / (rounding_tol * pq);

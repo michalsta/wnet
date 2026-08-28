@@ -96,8 +96,7 @@ using WNetFactory = WassersteinNetworkFactory<int64_t>;
         .def("binned", &VectorDistribution_##DIM::binned) \
         .def("sorted_by_positions", &VectorDistribution_##DIM::sorted_by_positions) \
         .def_static("linear_combination", [](const std::vector<VectorDistribution_##DIM>& dists, const nb::ndarray<double, nb::shape<-1>>& weights) { \
-            std::vector<double> w(weights.data(), weights.data() + weights.shape(0)); \
-            return VectorDistribution_##DIM::linear_combination(dists, w); \
+            return VectorDistribution_##DIM::linear_combination(dists, numpy_to_vector<double>(weights)); \
         }) \
         .def("__len__", &VectorDistribution_##DIM::size); \
     using VectorDistributionFloat_##DIM = VectorDistribution<DIM, double, double>; \
@@ -128,8 +127,7 @@ using WNetFactory = WassersteinNetworkFactory<int64_t>;
         .def("binned", &VectorDistributionFloat_##DIM::binned) \
         .def("sorted_by_positions", &VectorDistributionFloat_##DIM::sorted_by_positions) \
         .def_static("linear_combination", [](const std::vector<VectorDistributionFloat_##DIM>& dists, const nb::ndarray<double, nb::shape<-1>>& weights) { \
-            std::vector<double> w(weights.data(), weights.data() + weights.shape(0)); \
-            return VectorDistributionFloat_##DIM::linear_combination(dists, w); \
+            return VectorDistributionFloat_##DIM::linear_combination(dists, numpy_to_vector<double>(weights)); \
         }) \
         .def("__len__", &VectorDistributionFloat_##DIM::size); \
     using WNetAlignScaler_##DIM = WNetAlignScaler<DIM>; \
@@ -143,7 +141,7 @@ using WNetFactory = WassersteinNetworkFactory<int64_t>;
             std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
             ptrs.reserve(theoretical.size()); \
             for (const auto& t : theoretical) ptrs.push_back(&t); \
-            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
+            std::vector<double> tc = numpy_to_vector<double>(trash_costs); \
             new (self) WNetAlignScaler_##DIM(empirical, ptrs, metric, max_distance, tc, max_int); \
         }) \
         .def("sf_distance", &WNetAlignScaler_##DIM::sf_distance) \
@@ -161,7 +159,7 @@ using WNetFactory = WassersteinNetworkFactory<int64_t>;
             std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
             ptrs.reserve(theoretical.size()); \
             for (const auto& t : theoretical) ptrs.push_back(&t); \
-            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
+            std::vector<double> tc = numpy_to_vector<double>(trash_costs); \
             new (self) WNetDeconvScaler_##DIM(empirical, ptrs, metric, max_distance, tc, \
                 max_int, max_dropped_fraction); \
         }) \
@@ -180,7 +178,7 @@ using WNetFactory = WassersteinNetworkFactory<int64_t>;
             std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
             ptrs.reserve(theoretical.size()); \
             for (const auto& t : theoretical) ptrs.push_back(&t); \
-            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
+            std::vector<double> tc = numpy_to_vector<double>(trash_costs); \
             new (self) FineGridScaler_##DIM(empirical, ptrs, metric, max_distance, tc, p, max_int); \
         }) \
         .def("sf_distance", &FineGridScaler_##DIM::sf_distance) \
@@ -199,7 +197,7 @@ using WNetFactory = WassersteinNetworkFactory<int64_t>;
             std::vector<const VectorDistributionFloat_##DIM*> ptrs; \
             ptrs.reserve(theoretical.size()); \
             for (const auto& t : theoretical) ptrs.push_back(&t); \
-            std::vector<double> tc(trash_costs.data(), trash_costs.data() + trash_costs.shape(0)); \
+            std::vector<double> tc = numpy_to_vector<double>(trash_costs); \
             new (self) GenericScaler_##DIM(empirical, ptrs, metric, max_distance, tc, \
                 p95_frac, rounding_tol, max_dropped_frac, max_int); \
         }) \

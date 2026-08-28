@@ -7,16 +7,30 @@ This is important because the order of operations in WassersteinNetwork matters:
 - If add_simple_trash is called after build, it will raise a RuntimeError.
 """
 
+import math
+
 import numpy as np
 
 from wnet import Distribution, WassersteinNetwork
 from wnet.distances import DistanceMetric
-from wnet.wasserstein import TruncatedWassersteinDistance
+from wnet.wasserstein import TruncatedWassersteinDistance, _has_fractional_positions
 
 
 def _correct_truncated_wasserstein(dist1, dist2, distance, max_distance):
-    """Reference implementation with the correct order: add_simple_trash before build."""
-    W = WassersteinNetwork(dist1, [dist2], distance, max_distance)
+    """Reference implementation with the correct order: add_simple_trash before build.
+
+    Mirrors TruncatedWassersteinDistance's construction recipe (cost scaling +
+    real threshold for fractional inputs, legacy integer mode otherwise) so the
+    comparison isolates the operation-order question this file is about.
+    """
+    fractional = _has_fractional_positions(dist1, dist2) or float(
+        max_distance
+    ) != math.floor(max_distance)
+    W = WassersteinNetwork(
+        dist1, [dist2], distance, max_distance, round_max_distance=not fractional
+    )
+    if fractional:
+        W.set_cost_scaling()
     W.add_simple_trash(max_distance)
     W.build()
     W.solve()

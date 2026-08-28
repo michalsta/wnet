@@ -2,17 +2,22 @@ def show_graph(G):
     import matplotlib.pyplot as plt
     import networkx as nx
 
+    # Node "type" attributes carry the C++ type_str() values ("SourceNode",
+    # "SinkNode", ...); classify them with the same substring matching the
+    # interactive views use.
+    from wnet.flow_viz import _role
+
+    _ROLE_COLORS = {
+        "source": "lightgreen",
+        "sink": "lightcoral",
+        "trash": "lightgray",
+    }
+
     pos = nx.multipartite_layout(G, subset_key="layer")
-    node_colors = []
-    for _, data in G.nodes(data=True):
-        if data["type"] == "source":
-            node_colors.append("lightgreen")
-        elif data["type"] == "sink":
-            node_colors.append("lightcoral")
-        elif data["type"] == "trash":
-            node_colors.append("lightgray")
-        else:
-            node_colors.append("lightblue")
+    node_colors = [
+        _ROLE_COLORS.get(_role(data.get("type")), "lightblue")
+        for _, data in G.nodes(data=True)
+    ]
     edge_labels = {
         (u, v): f"cost: {d['weight']}\n capacity: {d['capacity']}"
         + (f"\n flow: {d['flow']}" if "flow" in d else "")

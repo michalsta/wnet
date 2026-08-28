@@ -178,15 +178,21 @@ public:
     class CloserThanIteratorPoint {
         const VectorDistribution<DIM, position_type, intensity_type>& distribution;
         const Point_t& point;
-        intensity_type max_dist;
+        // The threshold and the distances it compares are real ground
+        // distances (the metric returns double), independent of the intensity
+        // type — so both are double, not intensity_type (which, for the int64
+        // backend, would truncate the distance before the comparison and
+        // admit points up to one unit beyond max_dist).  Mirrors
+        // CloserThanIter below.
+        double max_dist;
         size_t current_index;
-        intensity_type current_distance;
+        double current_distance;
 
     public:
         CloserThanIteratorPoint(
             const VectorDistribution<DIM, position_type, intensity_type>& distribution_,
             const Point_t& point_,
-            intensity_type max_dist_
+            double max_dist_
         ) : distribution(distribution_),
             point(point_),
             max_dist(max_dist_),
@@ -206,7 +212,7 @@ public:
         inline size_t get_index() const {
             return current_index;
         }
-        inline intensity_type get_distance() const {
+        inline double get_distance() const {
             return current_distance;
         }
     };
@@ -214,7 +220,7 @@ public:
     template<typename DistMetric>
     CloserThanIteratorPoint<DistMetric> closer_than_iter_point(
         const Point_t& point,
-        intensity_type max_dist
+        double max_dist
     ) const {
         return CloserThanIteratorPoint<DistMetric>(
             *this,
@@ -501,6 +507,13 @@ public:
 #ifdef INCLUDE_NANOBIND_STUFF
 template<typename T>
 std::span<const T> numpy_to_span(const nb::ndarray<T, nb::shape<-1>>& array) {
+    // A span cannot represent a strided view; a raw data() pointer over a
+    // non-contiguous array (e.g. arr[::2], reversed views) would silently
+    // misread it, so reject anything but unit stride outright.
+    if (array.shape(0) > 1 && array.stride(0) != 1)
+        throw std::invalid_argument(
+            "numpy_to_span: array must be C-contiguous (unit stride); "
+            "pass np.ascontiguousarray(...) instead of a strided view.");
     return std::span<const T>(static_cast<T*>(array.data()), array.shape(0));
 }
 

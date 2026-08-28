@@ -93,6 +93,11 @@ class WassersteinNetwork:
                     f"Unknown method {method!r}. Choose from: {list(self._SOLVER_METHODS)}"
                 )
             solver = self._SOLVER_METHODS[method]()
+        elif method is not None:
+            raise ValueError(
+                "Pass either solver= or method=, not both "
+                f"(got solver={solver!r} and method={method!r})."
+            )
         if max_distance is None or max_distance == float("inf"):
             max_distance = CWassersteinNetwork.max_value()
         elif round_max_distance:
@@ -148,7 +153,8 @@ class WassersteinNetwork:
                 vec_base, vec_targets, distance, max_distance, p
             )
         # Intensities are carried as real doubles into the int64 solver, which
-        # quantizes them to integer supplies as round(real * intensity_scale).
+        # quantizes them to integer supplies as trunc(real * intensity_scale)
+        # (round toward zero).
         # None => auto: 1.0 for integer-valued intensities (bit-compatible) or
         # p != 1 (the joint cost/intensity budget is future work), else a scale
         # that lifts fractional intensities onto a fine integer grid without
@@ -447,13 +453,19 @@ class SubgraphWrapper:
 
         return draw_residual(self.as_networkx(), **kwargs)
 
-    def residual_graph(self) -> "networkx.DiGraph":
+    def residual_graph(self) -> "networkx.MultiDiGraph":
         """Build the residual graph of the solved min-cost flow network.
 
         For each edge with remaining forward capacity, a forward residual edge
         is added.  For each edge with positive flow, a reverse residual edge
         (with negated cost) is added.  The resulting graph has no negative
         cycles (a property of optimal min-cost flow solutions).
+
+        Returns a ``networkx.MultiDiGraph``: with antiparallel original edges
+        (e.g. the bidirectional arcs of the 1D chain factory) the forward
+        residual of one edge and the reverse residual of its opposite share
+        the same (u, v) node pair, so a plain DiGraph would silently drop one
+        of them.
 
         Raises:
             RuntimeError: If the subgraph has not been solved yet.
@@ -465,7 +477,7 @@ class SubgraphWrapper:
         import networkx as nx
 
         G = self.as_networkx()
-        R = nx.DiGraph()
+        R = nx.MultiDiGraph()
         for node, data in G.nodes(data=True):
             R.add_node(node, **data)
         for u, v, data in G.edges(data=True):

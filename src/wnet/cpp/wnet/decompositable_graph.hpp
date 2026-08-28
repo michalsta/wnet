@@ -324,11 +324,19 @@ inline int64_t pick_cost_scale(double c_max, double total_flow, bool p_is_one) {
     if (p_is_one || !(c_max > 0.0)) return 1;
     constexpr double PER_EDGE_TARGET = 4503599627370496.0;   // 2^52
     constexpr double ACCUMULATOR_TARGET = 4611686018427387904.0; // 2^62
+    // Ceiling on the scale itself: with a tiny c_max (< ~4.9e-4) the raw
+    // quotient exceeds the int64 range and the double->int64 cast below is
+    // UB — observed wrapping to INT64_MIN, i.e. a *negative* scale that
+    // quantizes every cost negative and silently corrupts total_cost().
+    // 2^60 is far above any scale the two budget ceilings can make useful,
+    // is exactly representable in double, and keeps the cast well-defined.
+    constexpr double SCALE_CEILING = 1152921504606846976.0;  // 2^60
     double s = std::floor(PER_EDGE_TARGET / c_max);
     if (total_flow > 0.0) {
         const double s_acc = std::floor(ACCUMULATOR_TARGET / (c_max * total_flow));
         if (s_acc < s) s = s_acc;
     }
+    if (s > SCALE_CEILING) s = SCALE_CEILING;
     return s >= 1.0 ? static_cast<int64_t>(s) : 1;
 }
 
@@ -585,6 +593,22 @@ class WassersteinNetworkSubgraph {
     // after update_positions); for NetworkSimplex the cost map must be
     // re-pushed before warmRun so that the dual variables are consistent.
     void _run_solver(bool costs_changed = false) {
+        // LEMON solvers report INFEASIBLE/UNBOUNDED via their return value
+        // and leave whatever flow state they last had; discarding the status
+        // (the old behaviour) served that state as if it were a valid
+        // solution.  Throw instead, naming the status.
+        auto require_optimal = [](auto status, const char* solver_name) {
+            using PT = decltype(status);
+            if (status == PT::INFEASIBLE)
+                throw std::runtime_error(std::string(solver_name) +
+                    ": flow problem is INFEASIBLE (no flow satisfies the "
+                    "current supplies/capacities); the solver state is not a "
+                    "valid solution.");
+            if (status == PT::UNBOUNDED)
+                throw std::runtime_error(std::string(solver_name) +
+                    ": flow problem is UNBOUNDED (negative-cost cycle with "
+                    "unlimited capacity).");
+        };
         std::visit([&](const auto& cfg) {
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, NetworkSimplexConfig>) {
@@ -596,14 +620,16 @@ class WassersteinNetworkSubgraph {
                     ns_lct_solver->upperMap(capacities_map);
                     ns_lct_solver->supplyMap(node_supply_map);
                     if (costs_changed) ns_lct_solver->costMap(costs_map);
-                    ns_lct_solver->warmRun();
+                    require_optimal(ns_lct_solver->warmRun(),
+                                    "NetworkSimplexLCT::warmRun()");
                 } else {
                     ++_cold_starts_via_run;
                     ns_lct_solver.emplace(lemon_graph);
                     ns_lct_solver->upperMap(capacities_map);
                     ns_lct_solver->costMap(costs_map);
                     ns_lct_solver->supplyMap(node_supply_map);
-                    ns_lct_solver->run();
+                    require_optimal(ns_lct_solver->run(),
+                                    "NetworkSimplexLCT::run()");
                 }
               } else {
                 using LemonPR = lemon::NetworkSimplex<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::PivotRule;
@@ -631,14 +657,16 @@ class WassersteinNetworkSubgraph {
                     // costs_changed disables the "repair == optimal" fast
                     // path inside warmRun (stale potentials); the basis is
                     // still reused and start() reoptimizes.
-                    ns_solver->warmRun(pivot, strategy, costs_changed);
+                    require_optimal(ns_solver->warmRun(pivot, strategy, costs_changed),
+                                    "NetworkSimplex::warmRun()");
                 } else {
                     ++_cold_starts_via_run;
                     ns_solver.emplace(lemon_graph);
                     ns_solver->upperMap(capacities_map);
                     ns_solver->costMap(costs_map);
                     ns_solver->supplyMap(node_supply_map);
-                    ns_solver->run(pivot);
+                    require_optimal(ns_solver->run(pivot),
+                                    "NetworkSimplex::run()");
                 }
               }
             } else if constexpr (std::is_same_v<T, CycleCancelingConfig>) {
@@ -647,20 +675,24 @@ class WassersteinNetworkSubgraph {
                 cc_solver->upperMap(capacities_map);
                 cc_solver->costMap(costs_map);
                 cc_solver->supplyMap(node_supply_map);
-                cc_solver->run(static_cast<LemonM>(cfg.method));
+                require_optimal(cc_solver->run(static_cast<LemonM>(cfg.method)),
+                                "CycleCanceling::run()");
             } else if constexpr (std::is_same_v<T, CostScalingConfig>) {
                 using LemonM = lemon::CostScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>::Method;
                 cs_solver.emplace(lemon_graph);
                 cs_solver->upperMap(capacities_map);
                 cs_solver->costMap(costs_map);
                 cs_solver->supplyMap(node_supply_map);
-                cs_solver->run(static_cast<LemonM>(cfg.method), cfg.factor);
+                require_optimal(
+                    cs_solver->run(static_cast<LemonM>(cfg.method), cfg.factor),
+                    "CostScaling::run()");
             } else if constexpr (std::is_same_v<T, CapacityScalingConfig>) {
                 cap_solver.emplace(lemon_graph);
                 cap_solver->upperMap(capacities_map);
                 cap_solver->costMap(costs_map);
                 cap_solver->supplyMap(node_supply_map);
-                cap_solver->run(cfg.factor);
+                require_optimal(cap_solver->run(cfg.factor),
+                                "CapacityScaling::run()");
             } else {
                 static_assert(std::is_same_v<T, SlopeDPConfig>);
                 // SlopeDP is dispatched from set_point(); reaching here means
@@ -1088,6 +1120,18 @@ public:
         if (_sdp_c_theo >= 0) ch.push_back({_sdp_c_theo, T, 1});
         if (_sdp_c_s >= 0)    ch.push_back({_sdp_c_s, std::numeric_limits<VALUE_TYPE>::max(), 2});
         std::sort(ch.begin(), ch.end(), [](const Ch& a, const Ch& b) { return a.price < b.price; });
+        // No trash channel at all: the DP prices matching against the trash
+        // alternative (finite tau), so it cannot represent the forced
+        // full-matching of a trash-less balanced chain — a configuration
+        // NetworkSimplex handles fine.  Say so, instead of the generic
+        // "infeasible trash configuration" the trash_of() bookkeeping would
+        // otherwise report for a perfectly feasible problem.
+        if (ch.empty() && F > 0)
+            throw std::runtime_error(
+                "SlopeDP backend requires trash edges "
+                "(add_simple_trash/add_experimental_trash/"
+                "add_theoretical_trash before build()); "
+                "use the NetworkSimplex solver for trash-less chain networks.");
         auto trash_of = [&](VALUE_TYPE M) -> W {
             VALUE_TYPE need = F - M;
             if (need < 0) throw std::runtime_error("SlopeDP: matched mass exceeds supply.");
@@ -2563,6 +2607,17 @@ public:
     void solve(const std::vector<double>& point) {
         if(!built)
             throw std::runtime_error("You must call build() before calling solve().");
+        // A negative proportion produces negative arc capacities (an
+        // infeasible LP the solver cannot represent), and a non-finite one
+        // corrupts the double->int64 capacity casts.  Reject both loudly
+        // instead of returning a meaningless flow.
+        for (size_t i = 0; i < point.size(); ++i)
+            if (!std::isfinite(point[i]) || point[i] < 0.0)
+                throw std::invalid_argument(
+                    "solve(): point[" + std::to_string(i) + "] = " +
+                    std::to_string(point[i]) +
+                    " is invalid; every spectrum proportion must be finite "
+                    "and >= 0.");
         check_accumulator_budget(point);
 
         _last_point = point;

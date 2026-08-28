@@ -16,9 +16,11 @@ template<typename T>
 std::vector<T> numpy_to_vector(const nb::ndarray<T, nb::shape<-1>>& array) {
     std::vector<T> result;
     result.reserve(array.shape(0));
-    T* data_ptr = static_cast<T*>(array.data());
+    // Per-element access (operator() honours strides).  A raw data() pointer
+    // walk would silently misread non-contiguous views (e.g. arr[::2]) and
+    // read out of bounds for negative strides.
     for (size_t ii = 0; ii < array.shape(0); ++ii) {
-        result.push_back(data_ptr[ii]);
+        result.push_back(array(ii));
     }
     return result;
 }
