@@ -195,6 +195,7 @@ class WassersteinNetwork:
         self._simple_trash_cost: Optional[float] = None
         self._exp_trash_cost: Optional[float] = None
         self._theo_trash_cost: Optional[float] = None
+        self._independent_trash_costs: Optional[tuple] = None
         self._cost_scaling_arg: Optional[int] = None
         self._flow_budget_arg: Optional[float] = None
 
@@ -226,6 +227,10 @@ class WassersteinNetwork:
             raise RuntimeError(
                 "add_simple_trash() is exclusive with experimental/theoretical trash."
             )
+        if self._independent_trash_costs is not None:
+            raise RuntimeError(
+                "add_simple_trash() is exclusive with independent trash."
+            )
         self._simple_trash_cost = float(cost)
 
     def add_experimental_trash(self, cost: float) -> None:
@@ -233,6 +238,10 @@ class WassersteinNetwork:
         if self._simple_trash_cost is not None:
             raise RuntimeError(
                 "add_experimental_trash() is exclusive with simple trash."
+            )
+        if self._independent_trash_costs is not None:
+            raise RuntimeError(
+                "add_experimental_trash() is exclusive with independent trash."
             )
         if self._exp_trash_cost is not None:
             raise RuntimeError("Experimental trash already added.")
@@ -244,9 +253,41 @@ class WassersteinNetwork:
             raise RuntimeError(
                 "add_theoretical_trash() is exclusive with simple trash."
             )
+        if self._independent_trash_costs is not None:
+            raise RuntimeError(
+                "add_theoretical_trash() is exclusive with independent trash."
+            )
         if self._theo_trash_cost is not None:
             raise RuntimeError("Theoretical trash already added.")
         self._theo_trash_cost = float(cost)
+
+    def add_independent_asymmetric_trash(self, C_exp: float, C_theo: float) -> None:
+        """Independent asymmetric trash (dualdeconv4 semantics): every
+        discarded empirical unit costs C_exp and every phantom-filled
+        theoretical unit C_theo, charged independently — an excess pair costs
+        C_exp + C_theo, never the annihilating model's min(C_exp, C_theo).
+        Requires the dense factory (forced automatically); exclusive with the
+        other trash models and with explicit chain semantics. Must be called
+        before build()."""
+        self._check_not_built("add_independent_asymmetric_trash")
+        if (
+            self._simple_trash_cost is not None
+            or self._exp_trash_cost is not None
+            or self._theo_trash_cost is not None
+        ):
+            raise RuntimeError(
+                "add_independent_asymmetric_trash() is exclusive with the "
+                "simple/experimental/theoretical trash models."
+            )
+        if self._independent_trash_costs is not None:
+            raise RuntimeError("Independent trash already added.")
+        if self._explicit_split:
+            raise ValueError(
+                "Independent asymmetric trash requires the dense factory; it "
+                "cannot be combined with explicit chain semantics "
+                "(split_distance)."
+            )
+        self._independent_trash_costs = (float(C_exp), float(C_theo))
 
     def set_cost_scaling(self, scale: int = 0) -> None:
         """Opt-in p=1 cost scaling (lets a caller pass real distances instead
@@ -272,7 +313,7 @@ class WassersteinNetwork:
     # ------------------------------------------------------------------ #
 
     def _active_trash_costs(self) -> list:
-        return [
+        costs = [
             c
             for c in (
                 self._simple_trash_cost,
@@ -281,6 +322,9 @@ class WassersteinNetwork:
             )
             if c is not None
         ]
+        if self._independent_trash_costs is not None:
+            costs.extend(self._independent_trash_costs)
+        return costs
 
     def _chain_gate_threshold(self) -> Optional[float]:
         """Distance beyond which transport is provably dominated by trashing
@@ -331,6 +375,9 @@ class WassersteinNetwork:
             and self._p == 1.0
             and chain_capable_solver
             and not self._force_dense_1d
+            # Independent trash charges a per-matched-unit cost shift that
+            # cannot ride per-hop chain arcs: dense only.
+            and self._independent_trash_costs is None
         )
         if chain_possible and not self._cap_is_inf:
             threshold = self._chain_gate_threshold()
@@ -391,6 +438,8 @@ class WassersteinNetwork:
             wnet.add_experimental_trash(self._exp_trash_cost)
         if self._theo_trash_cost is not None:
             wnet.add_theoretical_trash(self._theo_trash_cost)
+        if self._independent_trash_costs is not None:
+            wnet.add_independent_asymmetric_trash(*self._independent_trash_costs)
         wnet.build(self._solver)
         self._wnet_obj = wnet
 

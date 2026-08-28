@@ -374,6 +374,19 @@ class WassersteinNetworkSubgraph {
     bool simple_trash_added = false;
     bool experimental_trash_added = false;
     bool theoretical_trash_added = false;
+    // Independent asymmetric trash (dualdeconv4 semantics): implemented by
+    // cost shifting, not extra plumbing.  The identity
+    //   sum_matched f*d + Xe*C_exp + Xt*C_theo
+    //     = sum_matched f*(d - C_exp - C_theo) + E*C_exp + T(w)*C_theo
+    // lets the MCF run with zero-cost trash arcs and matching costs shifted
+    // by -(C_exp + C_theo); total_cost() adds the bracket back (linear in
+    // this subgraph's own E and T(w), so the subgraph decomposition is
+    // exact), and the theoretical marginals gain the constant C_theo term.
+    // Chain factories are rejected: a per-matched-unit shift cannot ride
+    // per-hop chain arcs.
+    bool independent_trash = false;
+    double _ind_c_exp = 0.0, _ind_c_theo = 0.0;   // real costs
+    VALUE_TYPE _ind_c_exp_q = 0, _ind_c_theo_q = 0;  // quantized in build_impl
     VALUE_TYPE lemon_empirical_intensity;
     VALUE_TYPE lemon_theoretical_intensity;
     const size_t no_target_distributions;
@@ -828,6 +841,22 @@ public:
         theoretical_trash_added = true;
     }
 
+    // Independent asymmetric trash (see the member comment for the cost-shift
+    // identity).  Creates zero-cost trash arcs on both sides; the real costs
+    // are charged via the matching shift and the analytic term.
+    void add_independent_asymmetric_trash(double C_exp, double C_theo) {
+        if (independent_trash)
+            throw std::runtime_error("Independent trash already added.");
+        if (built)
+            throw std::runtime_error(
+                "add_independent_asymmetric_trash() must be called before build().");
+        add_experimental_trash(0.0);
+        add_theoretical_trash(0.0);
+        independent_trash = true;
+        _ind_c_exp = C_exp;
+        _ind_c_theo = C_theo;
+    }
+
     // Real (unscaled) simple-trash cost.  The scaled value used inside the
     // solver/derivatives is costs_map[arc at simple_trash_idx].
     double simple_trash_cost() const {
@@ -857,16 +886,32 @@ public:
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(nodes.size()); ++ii)
             node_supply_map[lemon_graph.nodeFromId(ii)] = 0;
 
+        // Independent trash: quantize the analytic per-unit costs with the
+        // network-wide scale, and shift matching costs by their (real) sum
+        // below — shifting before quantization costs one rounding, not two.
+        if (independent_trash) {
+            _ind_c_exp_q = quantize_cost<VALUE_TYPE>(_ind_c_exp, _scale, _p_is_one);
+            _ind_c_theo_q = quantize_cost<VALUE_TYPE>(_ind_c_theo, _scale, _p_is_one);
+        }
+        const double _ind_shift = independent_trash ? (_ind_c_exp + _ind_c_theo) : 0.0;
+
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
             costs_map[lemon_graph.arcFromId(ii)] = std::visit([&](const auto& arg) -> VALUE_TYPE {
                     using T = std::decay_t<decltype(arg)>;
                     // Cost-bearing edges hold a real (double) cost; quantise it to
                     // the integer solver cost here using the network-wide scale.
-                    if constexpr (std::is_same_v<T, MatchingEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
+                    if constexpr (std::is_same_v<T, MatchingEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost() - _ind_shift, _scale, _p_is_one);
                     else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SimpleTrashEdge>) { simple_trash_idx = ii; return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one); }
-                    else if constexpr (std::is_same_v<T, ChainEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
+                    else if constexpr (std::is_same_v<T, ChainEdge>) {
+                        if (independent_trash)
+                            throw std::runtime_error(
+                                "Independent asymmetric trash requires the dense factory "
+                                "(chain hop arcs cannot carry the per-match cost shift); "
+                                "build the network with force_dense_1d=True.");
+                        return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
+                    }
                     else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
                     else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
@@ -1281,7 +1326,14 @@ public:
 
     VALUE_TYPE total_cost() const {
         if(!_solver_has_value()) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
-        return _solver_total_cost();
+        VALUE_TYPE cost = _solver_total_cost();
+        // Independent trash: the solver ran on shifted matching costs with
+        // free trash arcs; add back the analytic bracket E*C_exp + T(w)*C_theo
+        // (both totals are this subgraph's own, so decomposition stays exact).
+        if (independent_trash)
+            cost += _ind_c_exp_q * lemon_empirical_intensity
+                    + _ind_c_theo_q * lemon_theoretical_intensity;
+        return cost;
     };
 
     int warm_start_count() const {
@@ -2143,12 +2195,15 @@ public:
 
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
     _signal_part_derivatives_impl(const DerivContext& ctx) const {
+        // Independent trash: each extra unit of theoretical supply also pays
+        // the analytic C_theo term on top of the (shifted-cost) MCF marginal.
+        const VALUE_TYPE ind_theo = independent_trash ? _ind_c_theo_q : 0;
         std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
         for (const auto& node : nodes) {
             auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
             if (!theo) continue;
             result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(),
-                                _node_deriv(node.get_id(), ctx));
+                                _node_deriv(node.get_id(), ctx) + ind_theo);
         }
         return result;
     }
@@ -2162,11 +2217,12 @@ public:
         // fractional, so this must accumulate in double, not the integer
         // VALUE_TYPE (which would floor sub-unit intensities to zero).
         std::vector<double> accum(no_target_distributions, 0.0);
+        const VALUE_TYPE ind_theo = independent_trash ? _ind_c_theo_q : 0;
         for (const auto& node : nodes) {
             auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
             if (!theo) continue;
             accum[theo->get_spectrum_id()] +=
-                static_cast<double>(_node_deriv(node.get_id(), ctx))
+                static_cast<double>(_node_deriv(node.get_id(), ctx) + ind_theo)
                 * static_cast<double>(theo->get_intensity());
         }
         std::vector<std::pair<size_t, double>> result;
@@ -2280,6 +2336,9 @@ class WassersteinNetwork {
     double _emp_flow_total = 0.0;
     std::vector<double> _theo_flow_totals;
 
+    // See add_independent_asymmetric_trash().
+    bool _independent_trash_added = false;
+
 public:
     WassersteinNetwork(std::vector<FlowNode<intensity_type>>&& nodes_,
                        std::vector<FlowEdge<intensity_type>>&& edges_,
@@ -2382,7 +2441,8 @@ public:
         _intensity_scale(other._intensity_scale),
         _flow_budget(other._flow_budget),
         _emp_flow_total(other._emp_flow_total),
-        _theo_flow_totals(std::move(other._theo_flow_totals))
+        _theo_flow_totals(std::move(other._theo_flow_totals)),
+        _independent_trash_added(other._independent_trash_added)
     {
         other.built = false;
     }
@@ -2554,6 +2614,39 @@ public:
         _max_real_cost = std::max(_max_real_cost, cost);
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_theoretical_trash(cost);
+    };
+
+    // Independent asymmetric trash (dualdeconv4 semantics): every discarded
+    // empirical unit costs C_exp and every phantom-filled theoretical unit
+    // costs C_theo, charged independently — an (empirical, theoretical)
+    // excess pair costs C_exp + C_theo, never the annihilating model's
+    // min(C_exp, C_theo), and the match-vs-dump threshold is C_exp + C_theo.
+    // Implemented per subgraph by cost shifting (see the subgraph member
+    // comment); the excess pricing is linear per node, so the subgraph
+    // decomposition and the isolated-node terms are exact.  Requires the
+    // dense factory; mutually exclusive with the other trash models.
+    void add_independent_asymmetric_trash(double C_exp, double C_theo) {
+        if (built)
+            throw std::runtime_error(
+                "add_independent_asymmetric_trash() must be called before build().");
+        if (_independent_trash_added)
+            throw std::runtime_error("Independent trash already added.");
+        if (!(C_exp >= 0.0) || !(C_theo >= 0.0) || !std::isfinite(C_exp + C_theo))
+            throw std::invalid_argument(
+                "add_independent_asymmetric_trash: costs must be finite and >= 0.");
+        if (count_edges_of_type<ChainEdge>() > 0)
+            throw std::runtime_error(
+                "add_independent_asymmetric_trash() requires the dense factory "
+                "(chain hop arcs cannot carry the per-match cost shift); "
+                "construct the network with force_dense_1d=True.");
+        // Isolated (dead-end) nodes are charged the full per-unit costs by the
+        // existing isolated-trash terms in total_cost()/derivatives.
+        _isolated_exp_trash_cost = C_exp;
+        _isolated_theo_trash_cost = C_theo;
+        _max_real_cost = std::max(_max_real_cost, C_exp + C_theo);
+        for (auto& flow_subgraph : flow_subgraphs)
+            flow_subgraph->add_independent_asymmetric_trash(C_exp, C_theo);
+        _independent_trash_added = true;
     };
 
     void build(SolverConfig config = NetworkSimplexConfig{}) {

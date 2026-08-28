@@ -9,6 +9,7 @@ nb::class_<WNetII> bind_network_ii(nb::module_& m) {
         .def("add_simple_trash", &WassersteinNetwork<int64_t, int64_t>::add_simple_trash)
         .def("add_experimental_trash", &WassersteinNetwork<int64_t, int64_t>::add_experimental_trash)
         .def("add_theoretical_trash", &WassersteinNetwork<int64_t, int64_t>::add_theoretical_trash)
+        .def("add_independent_asymmetric_trash", &WassersteinNetwork<int64_t, int64_t>::add_independent_asymmetric_trash, nb::arg("C_exp"), nb::arg("C_theo"))
         .def("build", &WassersteinNetwork<int64_t, int64_t>::build, nb::arg("config") = NetworkSimplexConfig{})
         .def("solve",
              [](WassersteinNetwork<int64_t, int64_t>& self) { self.solve(); })
