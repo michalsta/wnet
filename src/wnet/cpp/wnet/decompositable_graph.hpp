@@ -1901,6 +1901,20 @@ public:
     // are >= 0 on every residual arc (complementary slackness), so Dijkstra applies.
     // O((V+E) log V) vs Bellman-Ford's O(V*E).
     // true_dist[v] = dijkstra_reduced_dist[v] + pi[v] - pi[source]
+    //
+    // Caveat — the "unlimited" matching arcs break that premise in one case:
+    // the residual graph deliberately treats MatchingEdge arcs as traversable
+    // even when saturated (their LEMON capacity, min of the endpoint
+    // intensities, is an optimization, not a real bound — the derivative
+    // semantics ask about *intensity* perturbations).  For the capped LP that
+    // LEMON solved, a saturated arc may legally carry NEGATIVE reduced cost,
+    // and which dual the solver lands on is basis-dependent: a cold solve and
+    // a warm-restarted solve of the same optimum can disagree.  Clamping such
+    // an arc's rcost to 0 silently understates residual distances (observed:
+    // exact marginal -90 fresh vs -60 after warm point cycling on the same
+    // flows).  Dijkstra is therefore only run after verifying every
+    // saturated unlimited arc has nonnegative reduced cost; otherwise fall
+    // back to Bellman-Ford, which uses true costs and no potentials.
     std::vector<VALUE_TYPE> dijkstra_residual(LEMON_INDEX source_id) const {
         const LEMON_INDEX n = lemon_graph.nodeNum();
         const VALUE_TYPE INF = std::numeric_limits<VALUE_TYPE>::max();
@@ -1908,6 +1922,20 @@ public:
         std::vector<VALUE_TYPE> pi(n);
         for (LEMON_INDEX i = 0; i < n; ++i)
             pi[i] = _solver_potential(lemon_graph.nodeFromId(i));
+
+        // Premise check (see the caveat above).  Only saturated unlimited
+        // arcs can violate rc >= 0 on a traversable residual arc: reverse
+        // arcs (flow > 0) have rc_rev = -rc >= 0 and unsaturated forward
+        // arcs have rc >= 0 by optimality of the capped LP.
+        for (LEMON_INDEX ii = 0; ii < lemon_graph.arcNum(); ++ii) {
+            if (!_unlimited_arc[ii]) continue;
+            const auto arc = lemon_graph.arcFromId(ii);
+            if (_solver_flow(arc) < capacities_map[arc]) continue;
+            const LEMON_INDEX u = lemon_graph.id(lemon_graph.source(arc));
+            const LEMON_INDEX v = lemon_graph.id(lemon_graph.target(arc));
+            if (costs_map[arc] + pi[u] - pi[v] < 0)
+                return bellman_ford_residual(source_id);
+        }
 
         std::vector<VALUE_TYPE> rdist(n, INF);
         rdist[source_id] = 0;
@@ -2550,8 +2578,19 @@ public:
         double total_flow = _emp_flow_total;
         for (const double t : _theo_flow_totals)
             total_flow += t;
-        if (_flow_budget > total_flow)
-            total_flow = _flow_budget;
+        if (_flow_budget > 0.0) {
+            if (_flow_budget > total_flow)
+                total_flow = _flow_budget;
+        } else {
+            // No explicit budget: size the accumulator ceiling for 4x the
+            // build-time supplies (2 bits of headroom) instead of exactly 1x,
+            // so nearby points — an optimizer probing slightly past 1.0, a
+            // moderate proportion sweep — don't trip the solve()-time guard
+            // on a network whose scale was sized with zero slack.  Costs the
+            // auto scale 2 bits of precision; an explicit set_flow_budget()
+            // overrides.  p == 1 legacy truncation (scale 1) is unaffected.
+            total_flow *= 4.0;
+        }
         // Choose one global cost scale from the largest real cost across the whole
         // network (matching + trash), so every subgraph's integer costs — and the
         // summed total_cost — share the same units.  p == 1 keeps _scale == 1.

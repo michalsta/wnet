@@ -745,3 +745,52 @@ def test_all_sensible_explicit_scales_near_fine_reference_1d():
         assert _solve_real_cost(emp, theo, 1.0, 1.0, 1.0, explicit=K) == pytest.approx(
             ref, rel=1e-2
         )
+
+
+# ---------------------------------------------------------------------------
+# Auto intensity scale must see trash costs declared after __init__
+# ---------------------------------------------------------------------------
+
+
+def test_auto_intensity_scale_sees_late_trash_cost():
+    """The auto FineGridScaler runs at build() so it sees add_simple_trash()
+    costs declared after __init__.  A huge trash cost must shrink the
+    intensity grid to keep the int64 cost accumulator safe; sizing the grid
+    blind (trash_costs=[]) overflows the budget at solve()."""
+    # Fractional intensities -> the auto grid engages.  Both sides carry the
+    # SAME per-peak intensities so truncation quantizes them identically and
+    # the supplies balance exactly at any scale — otherwise a 1-unit quantized
+    # imbalance would ride the 1e10 trash edge and swamp the cost comparison
+    # (an inherent truncation artifact, not what this test is about).
+    emp = d1([0.0, 5.0], [0.3, 0.7])
+    theo = d1([1.0, 6.0], [0.3, 0.7])
+    trash = 1e10
+
+    # The blind scale (what __init__-time sizing used to pick) busts the
+    # solve()-time accumulator guard once the trash cost exists.
+    blind_scale = FineGridScaler(
+        emp, [theo], DistanceMetric.L1, 100.0, trash_costs=[], p=1.0
+    ).sf_intensity()
+    W_blind = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, intensity_scale=blind_scale
+    )
+    W_blind.add_simple_trash(trash)
+    W_blind.build()
+    with pytest.raises(OverflowError):
+        W_blind.solve([1.0])
+
+    # Auto sizing (build-time, trash-aware) must succeed.
+    W_auto = WassersteinNetwork(emp, [theo], DistanceMetric.L1, 100)
+    W_auto.add_simple_trash(trash)
+    W_auto.build()
+    W_auto.solve([1.0])
+    auto_cost = W_auto.total_cost()
+
+    # And match an explicitly chosen safe grid.
+    W_safe = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, intensity_scale=1e6
+    )
+    W_safe.add_simple_trash(trash)
+    W_safe.build()
+    W_safe.solve([1.0])
+    assert auto_cost == pytest.approx(W_safe.total_cost(), rel=1e-4)

@@ -50,17 +50,31 @@ def test_point_one_unchanged_without_budget():
 
 
 def test_guard_rejects_points_past_sizing_without_budget():
-    # Without a declared budget the auto scale is sized for the build-time
-    # supplies (point == 1), so the worst-case accumulated cost of points
-    # meaningfully above 1 exceeds the 2^62 ceiling and solve() must refuse
-    # rather than risk a silent int64 wrap -- even for points (like [5, 10]
-    # here) whose actual cost would have been fine.  Callers that need such
-    # points declare them via set_flow_budget().
+    # Without a declared budget the auto scale is sized for 4x the build-time
+    # supplies (2 bits of headroom over point == 1), so moderate points fit,
+    # but the worst-case accumulated cost of points past the 4x sizing exceeds
+    # the 2^62 ceiling and solve() must refuse rather than risk a silent int64
+    # wrap -- even for points (like [100, 10] here) whose actual cost would
+    # have been fine.  Callers that need such points declare them via
+    # set_flow_budget().
     W = make_network()
+    # Build-time supplies: emp 200 + theo 25 = 225; auto sizing covers 900.
     with pytest.raises(OverflowError, match="set_flow_budget"):
-        W.solve([196.0, 0.44])
+        W.solve([196.0, 0.44])  # point-scaled flow 2166.6 > 900
     with pytest.raises(OverflowError, match="set_flow_budget"):
-        W.solve([5.0, 10.0])
+        W.solve([100.0, 10.0])  # point-scaled flow 1350 > 900
+
+
+def test_default_headroom_accepts_moderate_points():
+    # The 2-bit default headroom exists exactly so that nearby points -- an
+    # optimizer probing past 1.0 -- don't trip the guard on a freshly built
+    # network.  [2.0, 2.0] (flow 250) and [5.0, 10.0] (flow 400) fit the 4x
+    # sizing (900) and must solve; [5, 10] matches all theoretical mass at
+    # distance 0, so its cost is 0.
+    W = make_network()
+    W.solve([2.0, 2.0])
+    W.solve([5.0, 10.0])
+    assert W.total_cost() == pytest.approx(0.0, abs=1e-6)
 
 
 def test_budget_widens_sizing_and_point_computes_correctly():

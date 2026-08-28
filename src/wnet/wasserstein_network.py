@@ -52,16 +52,38 @@ class WassersteinNetwork:
     """
     A network class for computing Wasserstein distances between a base distribution and multiple target distributions.
 
-    The majority of functionality is implemented in the underlying C++ class `CWassersteinNetwork`, which this class extends.
+    The majority of functionality is implemented in the underlying C++ class `CWassersteinNetwork`, which this class wraps.
+    The C++ network is created lazily in :meth:`build` (trash costs, declared via ``add_*_trash()`` between construction
+    and ``build()``, feed both the factory choice and the automatic intensity scale).
+
+    Distance-cap semantics — exactly one of two named parameters:
+
+    * ``max_distance`` (dense semantics, the default): a **per-pair matching threshold**.  Mass is never transported
+      between an empirical and a theoretical peak farther apart than ``max_distance``, guaranteed.  Internally the O(m+n)
+      1D chain factory may still be used, but only when provably equivalent to the dense factory: when the cap is
+      None/infinite, or when both-side trash exists (simple, or experimental+theoretical) and ``max_distance`` is at
+      least the sum of the two per-unit trash costs (simple trash ``t`` counts as ``2t``; asymmetric as ``t_exp +
+      t_theo``) — beyond that distance transport is dominated by trashing both sides, so the cap is provably inactive.
+      Otherwise the dense factory is used.
+    * ``split_distance``: **explicit chain semantics**.  The merged 1D peak sequence is split into independent components
+      wherever the gap between *consecutive* peaks exceeds ``split_distance``; within a component mass may legally ride
+      the chain arbitrarily far (multi-hop), i.e. this is a component-splitting radius, not a per-pair cap.  Requires 1D
+      data, ``p == 1``, ``force_dense_1d=False`` and a chain-compatible solver (NetworkSimplex, CycleCanceling, SlopeDP);
+      anything else raises ValueError — there is no silent dense fallback, since chain semantics were requested by name.
+
+    Passing both ``max_distance`` and ``split_distance`` raises ValueError.
 
     Args:
         base_distribution (Distribution): The base distribution from which the Wasserstein distance is computed.
         target_distributions (Sequence[Distribution]): A sequence of target distributions to which the Wasserstein distance is computed.
         distance (DistanceFunction): A callable that computes the distance between points in the distributions.
-        max_distance (float | None): The maximum distance to consider. If None or infinity, it defaults to the maximum representable value.
-        force_dense_1d (bool): In 1D, force the O(m*n) dense factory instead of the O(m+n) chain factory. Default False uses the chain factory in 1D. Note: max_distance semantics differ between factories — chain only uses it to split the chain into components, while dense also caps per-pair cost.
-        p (float): Wasserstein transport order, any real number >= 1. Each matching edge costs ground_distance**p, so total_cost() and all derivatives are in W_p**p units; take the p-th root for the literal W_p distance (the high-level WassersteinDistance() does this). For p != 1 the cost is fractional, so the integer solver works in auto-scaled units (round(scale_factor() * d**p)); the public total_cost()/derivatives divide that back out. p == 1 is bit-exact with the legacy 1-Wasserstein (scale_factor() == 1, truncation). p != 1 always uses the dense factory (the 1D chain factory is invalid for p != 1, since exponentiated gap costs are not additive); in 1D with p != 1 the chain factory is bypassed automatically.
-        solver: Solver configuration object. One of NetworkSimplex(), CostScaling(), CycleCanceling(), or CapacityScaling(). Defaults to NetworkSimplex() (warm restarts, BLOCK_SEARCH pivot).
+        max_distance (float | None): Per-pair matching threshold (dense semantics, see above). If None or infinity, no cap.
+        force_dense_1d (bool): In 1D, force the O(m*n) dense factory instead of the O(m+n) chain factory; the chain factory is never used. Incompatible with split_distance.
+        p (float): Wasserstein transport order, any real number >= 1. Each matching edge costs ground_distance**p, so total_cost() and all derivatives are in W_p**p units; take the p-th root for the literal W_p distance (the high-level WassersteinDistance() does this). For p != 1 the cost is fractional, so the integer solver works in auto-scaled units (round(scale_factor() * d**p)); the public total_cost()/derivatives divide that back out. p == 1 is bit-exact with the legacy 1-Wasserstein (scale_factor() == 1, truncation). p != 1 always uses the dense factory (the 1D chain factory is invalid for p != 1, since exponentiated gap costs are not additive).
+        solver: Solver configuration object. One of NetworkSimplex(), CostScaling(), CycleCanceling(), CapacityScaling(), or SlopeDP(). Defaults to NetworkSimplex() (warm restarts, BLOCK_SEARCH pivot). SlopeDP is chain-native: it requires either split_distance or a max_distance for which the chain factory is provably equivalent (see above).
+        intensity_scale (float | None): None => auto (FineGridScaler, chosen at build() time so it sees the declared trash costs); an explicit value is used verbatim.
+        round_max_distance (bool): Round a fractional cap up to an integer (legacy p == 1 truncation behaviour) with a warning. Applied to whichever of max_distance/split_distance was given.
+        split_distance (float | None): Explicit chain-semantics split radius (see above).
     """
 
     _SOLVER_METHODS = {
@@ -71,6 +93,29 @@ class WassersteinNetwork:
         "capacity_scaling": CapacityScaling,
         "slope_dp": SlopeDP,
     }
+
+    # C++ methods reachable directly on the wrapper once build() has run
+    # (previously bound-method aliases assigned in __init__; delegated lazily
+    # now that the C++ network is created in build()).
+    _CPP_DELEGATES = frozenset({
+        "solve",
+        "scale_factor",
+        "intensity_scale_factor",
+        "get_subgraph",
+        "no_subgraphs",
+        "flows_for_target",
+        "count_empirical_nodes",
+        "count_theoretical_nodes",
+        "matching_density",
+        "lemon_to_string",
+        "count_matching_edges",
+        "count_theoretical_to_sink_edges",
+        "count_src_to_empirical_edges",
+        "count_simple_trash_edges",
+        "count_chain_edges",
+        "no_theoretical_spectra",
+        "theoretical_spectra_sizes",
+    })
 
     def __init__(
         self,
@@ -84,7 +129,10 @@ class WassersteinNetwork:
         method: str = None,
         intensity_scale: Optional[float] = None,
         round_max_distance: bool = True,
+        split_distance: Optional[float] = None,
     ) -> None:
+        # Must exist before anything that could trigger __getattr__.
+        self._wnet_obj = None
         if solver is None and method is None:
             solver = NetworkSimplex()
         elif solver is None:
@@ -98,23 +146,35 @@ class WassersteinNetwork:
                 "Pass either solver= or method=, not both "
                 f"(got solver={solver!r} and method={method!r})."
             )
-        if max_distance is None or max_distance == float("inf"):
-            max_distance = CWassersteinNetwork.max_value()
-        elif round_max_distance:
-            # Default: with p == 1 cost truncation the matching threshold is
-            # effectively integer, so round a fractional cap up (inclusive) and
-            # warn — preserving the legacy behaviour.  Callers that opt into
-            # cost scaling (real distances) pass round_max_distance=False and
-            # keep the real threshold.
-            md_int = int(math.ceil(max_distance))
-            if md_int != max_distance:
-                warnings.warn(
-                    f"max_distance={max_distance!r} is not an integer; the solver "
-                    f"uses an integer distance threshold, so it was rounded up to "
-                    f"{md_int}. Pass an integer max_distance to avoid this.",
-                    stacklevel=2,
-                )
-            max_distance = md_int
+        if max_distance is not None and split_distance is not None:
+            raise ValueError(
+                "Pass either max_distance (per-pair matching threshold, dense "
+                "semantics) or split_distance (chain component-splitting "
+                "radius), not both."
+            )
+        self._explicit_split = split_distance is not None
+        cap = split_distance if self._explicit_split else max_distance
+        cap_name = "split_distance" if self._explicit_split else "max_distance"
+        if cap is None or cap == float("inf"):
+            self._cap_is_inf = True
+            cap = CWassersteinNetwork.max_value()
+        else:
+            self._cap_is_inf = False
+            if round_max_distance:
+                # Default: with p == 1 cost truncation the matching threshold is
+                # effectively integer, so round a fractional cap up (inclusive)
+                # and warn — preserving the legacy behaviour.  Callers that opt
+                # into cost scaling (real distances) pass
+                # round_max_distance=False and keep the real threshold.
+                md_int = int(math.ceil(cap))
+                if md_int != cap:
+                    warnings.warn(
+                        f"{cap_name}={cap!r} is not an integer; the solver "
+                        f"uses an integer distance threshold, so it was rounded up to "
+                        f"{md_int}. Pass an integer {cap_name} to avoid this.",
+                        stacklevel=2,
+                    )
+                cap = md_int
         p = float(p)
         if not (p >= 1.0) or not np.isfinite(p):
             raise ValueError(
@@ -122,35 +182,183 @@ class WassersteinNetwork:
             )
         self._distance = distance
         self._p = p
-        vec_base = base_distribution.vecdist
-        vec_targets = [t.vecdist for t in target_distributions]
-        # CostScaling / CapacityScaling cannot solve the 1D chain factory: the
-        # bidirectional chain arcs carry unbounded (INF) capacity, on which these
-        # two LEMON algorithms return INFEASIBLE (garbage total cost) or loop. Only
-        # NetworkSimplex / CycleCanceling handle the chain. Force the dense
-        # factory for them so 1D results stay correct.
-        chain_incompatible = isinstance(solver, (CostScaling, CapacityScaling))
-        # The 1D chain factory is only valid for p == 1; for p != 1 fall back to
-        # the dense factory (whose per-pair d**p costs are the correct transport cost).
-        use_chain = (
-            base_distribution.dimension == 1
-            and not force_dense_1d
-            and p == 1.0
-            and not chain_incompatible
-        )
-        # SlopeDP is chain-native only: it needs the 1D chain factory graph.
-        if isinstance(solver, SlopeDP) and not use_chain:
-            raise ValueError(
-                "SlopeDP solver requires the 1D chain factory "
-                "(1D data, p == 1, force_dense_1d=False)."
+        self._cap = cap
+        self._base_distribution = base_distribution
+        self._target_distributions = list(target_distributions)
+        self._force_dense_1d = bool(force_dense_1d)
+        self._solver = solver
+        self._intensity_scale_arg = intensity_scale
+        # Trash costs / pre-build settings are recorded here and replayed onto
+        # the C++ network in build() — the factory gate and the auto intensity
+        # scale both need the trash costs, which arrive between __init__ and
+        # build().
+        self._simple_trash_cost: Optional[float] = None
+        self._exp_trash_cost: Optional[float] = None
+        self._theo_trash_cost: Optional[float] = None
+        self._cost_scaling_arg: Optional[int] = None
+        self._flow_budget_arg: Optional[float] = None
+
+    # ------------------------------------------------------------------ #
+    # Pre-build configuration (recorded, replayed onto the C++ network in
+    # build()).  Validation mirrors the C++ methods so errors surface at the
+    # call site, not at build().
+    # ------------------------------------------------------------------ #
+
+    @property
+    def wnet(self):
+        """The underlying C++ network. Available after build()."""
+        if self._wnet_obj is None:
+            raise RuntimeError(
+                "The C++ network does not exist yet: call build() first "
+                "(trash edges and pre-build settings are applied at build time)."
             )
+        return self._wnet_obj
+
+    def _check_not_built(self, what: str) -> None:
+        if self._wnet_obj is not None:
+            raise RuntimeError(f"{what}() must be called before build(), not after.")
+
+    def add_simple_trash(self, cost: float) -> None:
+        self._check_not_built("add_simple_trash")
+        if self._simple_trash_cost is not None:
+            raise RuntimeError("Simple trash edge already added.")
+        if self._exp_trash_cost is not None or self._theo_trash_cost is not None:
+            raise RuntimeError(
+                "add_simple_trash() is exclusive with experimental/theoretical trash."
+            )
+        self._simple_trash_cost = float(cost)
+
+    def add_experimental_trash(self, cost: float) -> None:
+        self._check_not_built("add_experimental_trash")
+        if self._simple_trash_cost is not None:
+            raise RuntimeError(
+                "add_experimental_trash() is exclusive with simple trash."
+            )
+        if self._exp_trash_cost is not None:
+            raise RuntimeError("Experimental trash already added.")
+        self._exp_trash_cost = float(cost)
+
+    def add_theoretical_trash(self, cost: float) -> None:
+        self._check_not_built("add_theoretical_trash")
+        if self._simple_trash_cost is not None:
+            raise RuntimeError(
+                "add_theoretical_trash() is exclusive with simple trash."
+            )
+        if self._theo_trash_cost is not None:
+            raise RuntimeError("Theoretical trash already added.")
+        self._theo_trash_cost = float(cost)
+
+    def set_cost_scaling(self, scale: int = 0) -> None:
+        """Opt-in p=1 cost scaling (lets a caller pass real distances instead
+        of pre-scaling positions). scale <= 0 => auto. Must be called before
+        build()."""
+        self._check_not_built("set_cost_scaling")
+        self._cost_scaling_arg = int(scale)
+
+    def set_flow_budget(self, flow: float) -> None:
+        """Declared upper bound on point-scaled total flow (real intensity
+        units): build() sizes the cost scale so any point within the budget
+        stays inside the int64 cost accumulator, and solve() rejects points
+        past the ceiling. Must be called before build()."""
+        if self._wnet_obj is not None:
+            raise RuntimeError("set_flow_budget() must be called before build().")
+        flow = float(flow)
+        if not np.isfinite(flow) or flow < 0.0:
+            raise ValueError("set_flow_budget: flow must be finite and >= 0.")
+        self._flow_budget_arg = flow
+
+    # ------------------------------------------------------------------ #
+    # Factory decision + build
+    # ------------------------------------------------------------------ #
+
+    def _active_trash_costs(self) -> list:
+        return [
+            c
+            for c in (
+                self._simple_trash_cost,
+                self._exp_trash_cost,
+                self._theo_trash_cost,
+            )
+            if c is not None
+        ]
+
+    def _chain_gate_threshold(self) -> Optional[float]:
+        """Distance beyond which transport is provably dominated by trashing
+        both sides — None when no both-side trash escape exists."""
+        if self._simple_trash_cost is not None:
+            return 2.0 * self._simple_trash_cost
+        if self._exp_trash_cost is not None and self._theo_trash_cost is not None:
+            return self._exp_trash_cost + self._theo_trash_cost
+        return None
+
+    def _decide_chain(self) -> bool:
+        """True => use the 1D chain factory.  Raises for impossible requests."""
+        solver = self._solver
+        chain_capable_solver = not isinstance(solver, (CostScaling, CapacityScaling))
+        if self._explicit_split:
+            # Chain semantics requested by name: no silent dense fallback.
+            problems = []
+            if self._base_distribution.dimension != 1:
+                problems.append(
+                    f"data is {self._base_distribution.dimension}D (need 1D)"
+                )
+            if self._p != 1.0:
+                problems.append(f"p={self._p} (need p == 1)")
+            if self._force_dense_1d:
+                problems.append("force_dense_1d=True")
+            if not chain_capable_solver:
+                # CostScaling / CapacityScaling cannot solve the chain: the
+                # bidirectional chain arcs carry unbounded (INF) capacity, on
+                # which these two LEMON algorithms return INFEASIBLE (garbage
+                # total cost) or loop.
+                problems.append(
+                    f"solver {type(solver).__name__} cannot solve the chain "
+                    "(use NetworkSimplex, CycleCanceling or SlopeDP)"
+                )
+            if problems:
+                raise ValueError(
+                    "split_distance requests explicit chain semantics, but: "
+                    + "; ".join(problems)
+                    + "."
+                )
+            return True
+        # max_distance semantics: dense per-pair threshold, GUARANTEED.  The
+        # chain factory is an invisible implementation detail, allowed only
+        # when provably equivalent: no cap at all, or both-side trash making
+        # any transport beyond the cap dominated by double-trashing.
+        chain_possible = (
+            self._base_distribution.dimension == 1
+            and self._p == 1.0
+            and chain_capable_solver
+            and not self._force_dense_1d
+        )
+        if chain_possible and not self._cap_is_inf:
+            threshold = self._chain_gate_threshold()
+            chain_possible = threshold is not None and self._cap >= threshold
+        if isinstance(self._solver, SlopeDP) and not chain_possible:
+            raise ValueError(
+                "SlopeDP is chain-native, but the requested configuration "
+                "cannot use the 1D chain factory (it needs 1D data, p == 1, "
+                "force_dense_1d=False, and either no max_distance or a "
+                "max_distance provably inactive under both-side trash). "
+                "Pass split_distance=... for explicit chain semantics, or "
+                "drop max_distance."
+            )
+        return chain_possible
+
+    def build(self) -> None:
+        """Create the C++ network (factory chosen from the recorded settings),
+        replay trash edges and pre-build settings onto it, and build it."""
+        use_chain = self._decide_chain()
+        vec_base = self._base_distribution.vecdist
+        vec_targets = [t.vecdist for t in self._target_distributions]
         if use_chain:
-            self.wnet = CWassersteinNetworkFactory.create_1d(
-                vec_base, vec_targets, distance, max_distance, p
+            wnet = CWassersteinNetworkFactory.create_1d(
+                vec_base, vec_targets, self._distance, self._cap, self._p
             )
         else:
-            self.wnet = CWassersteinNetworkFactory.create(
-                vec_base, vec_targets, distance, max_distance, p
+            wnet = CWassersteinNetworkFactory.create(
+                vec_base, vec_targets, self._distance, self._cap, self._p
             )
         # Intensities are carried as real doubles into the int64 solver, which
         # quantizes them to integer supplies as trunc(real * intensity_scale)
@@ -158,59 +366,46 @@ class WassersteinNetwork:
         # None => auto: 1.0 for integer-valued intensities (bit-compatible) or
         # p != 1 (the joint cost/intensity budget is future work), else a scale
         # that lifts fractional intensities onto a fine integer grid without
-        # overflowing the cost accumulator. An explicit value (e.g. 1.0) is used
-        # verbatim. Must be set before build().
+        # overflowing the cost accumulator — the scaler runs here, at build
+        # time, so it sees the declared trash costs (a large trash cost
+        # shrinks the safe intensity grid).  An explicit value is used
+        # verbatim.
+        intensity_scale = self._intensity_scale_arg
         if intensity_scale is None:
-            # Float-backend intensity scaling uses the FineGridScaler:
-            # no position pre-scale, intensities mapped onto a ~2**30 total-flow
-            # grid, capped by cost_bound**p so the network's own cost scale
-            # stays >= 1. Returns 1.0 for integer-valued data.
             intensity_scale = FineGridScaler(
-                base_distribution,
-                list(target_distributions),
-                distance,
-                max_distance,
-                trash_costs=[],
-                p=p,
+                self._base_distribution,
+                self._target_distributions,
+                self._distance,
+                self._cap,
+                trash_costs=self._active_trash_costs(),
+                p=self._p,
             ).sf_intensity()
-        self.wnet.set_intensity_scale(float(intensity_scale))
+        wnet.set_intensity_scale(float(intensity_scale))
+        if self._cost_scaling_arg is not None:
+            wnet.set_cost_scaling(self._cost_scaling_arg)
+        if self._flow_budget_arg is not None:
+            wnet.set_flow_budget(self._flow_budget_arg)
+        if self._simple_trash_cost is not None:
+            wnet.add_simple_trash(self._simple_trash_cost)
+        if self._exp_trash_cost is not None:
+            wnet.add_experimental_trash(self._exp_trash_cost)
+        if self._theo_trash_cost is not None:
+            wnet.add_theoretical_trash(self._theo_trash_cost)
+        wnet.build(self._solver)
+        self._wnet_obj = wnet
 
-        self.add_simple_trash = self.wnet.add_simple_trash
-        self.add_experimental_trash = self.wnet.add_experimental_trash
-        self.add_theoretical_trash = self.wnet.add_theoretical_trash
-        # Opt-in p=1 cost scaling (lets a caller pass real distances instead of
-        # pre-scaling positions). Must be called before build().
-        self.set_cost_scaling = self.wnet.set_cost_scaling
-        # Declared upper bound on point-scaled total flow (real intensity
-        # units): build() sizes the cost scale so any point within the budget
-        # stays inside the int64 cost accumulator, and solve() rejects points
-        # past the ceiling. Must be called before build().
-        self.set_flow_budget = self.wnet.set_flow_budget
-
-        # Avoid capturing self in the lambda to prevent reference cycles that could lead to memory leaks.  The underlying C++ object should be freed when this wrapper is freed, but if we capture self in the lambda, the lambda's reference to self would keep it alive indefinitely.
-        # Without this trick, the lambda would hold a reference to self, which holds a reference to the C++ object, which holds a reference back to the lambda, creating a cycle that prevents garbage collection.
-        # Without this, the incremental GC introduced in Python3.14 can't collect WassersteinNetwork instances that are no longer needed, leading to memory leaks.
-        _wnet = self.wnet  # avoid capturing self in the lambda (reference cycle).
-        _solver = solver
-        self.build = lambda: _wnet.build(_solver)
-
-        self.solve = self.wnet.solve
-        self.scale_factor = self.wnet.scale_factor
-        self.intensity_scale_factor = self.wnet.intensity_scale_factor
-        self.get_subgraph = self.wnet.get_subgraph
-        self.no_subgraphs = self.wnet.no_subgraphs
-        self.flows_for_target = self.wnet.flows_for_target
-        self.count_empirical_nodes = self.wnet.count_empirical_nodes
-        self.count_theoretical_nodes = self.wnet.count_theoretical_nodes
-        self.matching_density = self.wnet.matching_density
-        self.lemon_to_string = self.wnet.lemon_to_string
-        self.count_matching_edges = self.wnet.count_matching_edges
-        self.count_theoretical_to_sink_edges = self.wnet.count_theoretical_to_sink_edges
-        self.count_src_to_empirical_edges = self.wnet.count_src_to_empirical_edges
-        self.count_simple_trash_edges = self.wnet.count_simple_trash_edges
-        self.count_chain_edges = self.wnet.count_chain_edges
-        self.no_theoretical_spectra = self.wnet.no_theoretical_spectra
-        self.theoretical_spectra_sizes = self.wnet.theoretical_spectra_sizes
+    def __getattr__(self, name):
+        # Lazily delegate the C++ surface (only consulted when normal
+        # attribute lookup fails; bound methods are created per access, so no
+        # reference cycle keeps the wrapper alive — see the Python 3.14
+        # incremental-GC note in the git history).
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name in WassersteinNetwork._CPP_DELEGATES:
+            return getattr(self.wnet, name)  # raises RuntimeError pre-build
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
 
     def __str__(self) -> str:
         """Returns a string representation of the Wasserstein network."""

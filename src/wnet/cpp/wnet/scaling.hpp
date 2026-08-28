@@ -176,10 +176,15 @@ protected:
     // Maps real intensities onto a fine integer supply grid targeting ~2^30
     // total flow without overflowing the int64 cost accumulator.
     // Returns 1.0 when all intensities are already integer-valued.
+    // trash_costs participate in the accumulator bound: they are already in
+    // cost (W_p^p) units and a large trash cost (e.g. 1e10) is often the
+    // dominant per-unit cost, so ignoring it here would size a grid whose
+    // trash flow overflows int64 at solve time.
     static double fine_grid_intensity_scale(
         const VecDist& empirical,
         const std::vector<const VecDist*>& theoretical,
-        double p, double max_distance, double max_int)
+        double p, double max_distance, double max_int,
+        const std::vector<double>& trash_costs = {})
     {
         static constexpr double FINE_GRID_TARGET_FLOW =
             static_cast<double>(int64_t(1) << 30);
@@ -217,7 +222,9 @@ protected:
         for (size_t k = 0; k < DIM; ++k) span += (gmax[k] - gmin[k]);
 
         const double cost_bound = std::max(std::min(span, max_distance), 1.0);
-        const double max_real_cost = std::pow(cost_bound, p);
+        double max_real_cost = std::pow(cost_bound, p);
+        for (double t : trash_costs)          // already in cost (W_p^p) units
+            max_real_cost = std::max(max_real_cost, t);
         const double cap = max_int / (max_real_cost * total);
         const double target = FINE_GRID_TARGET_FLOW / total;
         return std::max(1.0, std::min(target, cap));
@@ -345,7 +352,7 @@ public:
         // fine_grid_intensity_scale degrades gracefully to 1.0 for empty spectra.
         this->sf_distance_ = 1.0;
         this->sf_intensity_ = ScalerBase<DIM>::fine_grid_intensity_scale(
-            empirical, theoretical, p, max_distance, max_int);
+            empirical, theoretical, p, max_distance, max_int, trash_costs);
         this->validate_factors();
     }
 };

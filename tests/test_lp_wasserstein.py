@@ -78,7 +78,10 @@ def test_p_neq_1_forces_dense_in_1d():
     assert W2.count_chain_edges() == 0
     assert W2.count_matching_edges() > 0
 
-    W1 = WassersteinNetwork(base, [target], DistanceMetric.L1, BIG, p=1)
+    # No cap (dense semantics trivially preserved) => chain factory in 1D for
+    # p == 1.  A finite max_distance without both-side trash now guarantees
+    # dense per-pair semantics, so it would use the dense factory instead.
+    W1 = WassersteinNetwork(base, [target], DistanceMetric.L1, None, p=1)
     W1.build()
     assert W1.count_chain_edges() > 0  # chain factory in 1D for p == 1
 
