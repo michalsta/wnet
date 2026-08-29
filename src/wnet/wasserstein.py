@@ -78,11 +78,12 @@ def WassersteinDistance(
         [distribution2],
         distance,
         None,
-        # Cost scaling needs the dense factory here: on a trash-less network
-        # the 1D chain factory never picks an automatic cost scale, so its
-        # gap costs would be llround()ed at scale 1 (wrong for fractional
-        # positions).  With integer positions the chain stays available.
-        force_dense_1d=force_dense_1d or enable_cost_scaling,
+        # No cap (max_distance=None), so the chain factory is provably
+        # equivalent in 1D and stays available for fractional positions too:
+        # the chain factory tallies its gap costs into the auto cost scale
+        # (create_1d's max_real_cost), so under set_cost_scaling() fractional
+        # gaps are priced exactly, same as dense matching costs.
+        force_dense_1d=force_dense_1d,
         p=p,
         solver=solver,
         method=method,

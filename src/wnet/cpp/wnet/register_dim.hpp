@@ -76,17 +76,21 @@ using WNetFactory = WassersteinNetworkFactory<int64_t>;
         .def("size", &VectorDistribution_##DIM::size) \
         .def("py_get_positions", &VectorDistribution_##DIM::py_get_positions) \
         .def("py_get_intensities", &VectorDistribution_##DIM::py_get_intensities) \
+        /* Read-only views: the const scalar type makes nanobind clear the \
+           numpy writeable flag on the returned array.  Writing through these \
+           views would desync the distribution's sorted_indices and corrupt \
+           later matching, so they must never be writable. */ \
         .def("positions_view", [](nb::object self_obj) { \
             auto& d = nb::cast<VectorDistribution_##DIM&>(self_obj); \
             const auto& pos = d.get_positions(); \
-            return nb::ndarray<nb::numpy, double>( \
-                (void*)pos.data(), {pos.size(), (size_t)DIM}, self_obj); \
+            return nb::ndarray<nb::numpy, const double>( \
+                pos.data(), {pos.size(), (size_t)DIM}, self_obj); \
         }) \
         .def("intensities_view", [](nb::object self_obj) { \
             auto& d = nb::cast<VectorDistribution_##DIM&>(self_obj); \
             const auto& ints = d.get_intensities(); \
-            return nb::ndarray<nb::numpy, LEMON_INT>( \
-                (void*)ints.data(), {ints.size()}, self_obj); \
+            return nb::ndarray<nb::numpy, const LEMON_INT>( \
+                ints.data(), {ints.size()}, self_obj); \
         }) \
         .def("get_point", &VectorDistribution_##DIM::get_point) \
         .def("n_highest", &VectorDistribution_##DIM::n_highest) \
@@ -107,17 +111,18 @@ using WNetFactory = WassersteinNetworkFactory<int64_t>;
         .def("size", &VectorDistributionFloat_##DIM::size) \
         .def("py_get_positions", &VectorDistributionFloat_##DIM::py_get_positions) \
         .def("py_get_intensities", &VectorDistributionFloat_##DIM::py_get_intensities) \
+        /* Read-only views — see the comment on the int-intensity variant. */ \
         .def("positions_view", [](nb::object self_obj) { \
             auto& d = nb::cast<VectorDistributionFloat_##DIM&>(self_obj); \
             const auto& pos = d.get_positions(); \
-            return nb::ndarray<nb::numpy, double>( \
-                (void*)pos.data(), {pos.size(), (size_t)DIM}, self_obj); \
+            return nb::ndarray<nb::numpy, const double>( \
+                pos.data(), {pos.size(), (size_t)DIM}, self_obj); \
         }) \
         .def("intensities_view", [](nb::object self_obj) { \
             auto& d = nb::cast<VectorDistributionFloat_##DIM&>(self_obj); \
             const auto& ints = d.get_intensities(); \
-            return nb::ndarray<nb::numpy, double>( \
-                (void*)ints.data(), {ints.size()}, self_obj); \
+            return nb::ndarray<nb::numpy, const double>( \
+                ints.data(), {ints.size()}, self_obj); \
         }) \
         .def("get_point", &VectorDistributionFloat_##DIM::get_point) \
         .def("n_highest", &VectorDistributionFloat_##DIM::n_highest) \

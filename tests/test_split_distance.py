@@ -3,7 +3,10 @@ Tests for the explicit chain-vs-dense distance-cap semantics.
 
 ``max_distance`` is a per-pair matching threshold (dense semantics,
 guaranteed); the 1D chain factory may implement it only when provably
-equivalent (no cap, or both-side trash rendering the cap inactive).
+equivalent, which means: no cap at all.  A finite cap always builds dense —
+the 1.3.0 trash-threshold gate (cap >= 2t) was refuted by fuzz (partition
+mismatch: chain-connected but dense-isolated dead-ends are priced
+differently at ANY cap multiple; see test_finite_cap_always_dense_ladder).
 ``split_distance`` requests chain semantics by name: a component-splitting
 radius on the merged 1D sequence, within which mass may legally ride the
 chain arbitrarily far (multi-hop).
@@ -65,7 +68,7 @@ def test_tight_cap_max_distance_matches_dense():
     forced_dense = _build(max_distance=6, force_dense_1d=True)
     assert forced_dense.total_cost() == DENSE_COST
     assert chain_free.total_cost() == DENSE_COST
-    # The gate must have chosen the dense factory (2 * trash = 200 > 6).
+    # A finite cap always builds dense.
     assert chain_free.count_chain_edges() == 0
 
 
@@ -77,14 +80,13 @@ def test_split_distance_reproduces_chain_semantics():
     assert net.total_cost() == CHAIN_COST
 
 
-def test_generous_cap_uses_chain_and_matches_dense():
-    # Cap 250 >= 2 * trash = 200: transport beyond the cap is dominated by
-    # double-trashing, so the chain factory is provably equivalent and may be
-    # used invisibly.  Cost must equal the forced-dense build bit for bit.
+def test_generous_cap_still_builds_dense():
+    # Even a cap far beyond the trash costs builds dense: the 1.3.0
+    # cap >= 2t gate was refuted (partition mismatch, see the ladder test
+    # below), so ANY finite cap means the dense factory.
     gated = _build(max_distance=250)
     forced_dense = _build(max_distance=250, force_dense_1d=True)
-    assert gated.count_chain_edges() > 0  # gate chose the chain factory
-    assert forced_dense.count_chain_edges() == 0
+    assert gated.count_chain_edges() == 0
     assert gated.total_cost() == forced_dense.total_cost()
 
 
@@ -95,8 +97,9 @@ def test_no_cap_uses_chain_and_matches_dense():
     assert gated.total_cost() == forced_dense.total_cost()
 
 
-def test_asymmetric_trash_gate():
-    # Asymmetric gate threshold is t_exp + t_theo.
+def test_asymmetric_trash_finite_cap_dense():
+    # Both-side asymmetric trash no longer gates the chain in: a finite cap
+    # always builds dense, whatever the trash costs.
     def build_asym(md, te, tt):
         net = WassersteinNetwork(
             d1(EMP_POS, EMP_INT),
@@ -109,12 +112,12 @@ def test_asymmetric_trash_gate():
         net.build()
         return net
 
-    assert build_asym(100, 30.0, 40.0).count_chain_edges() > 0  # 100 >= 70
-    assert build_asym(50, 30.0, 40.0).count_chain_edges() == 0  # 50 < 70
+    assert build_asym(100, 30.0, 40.0).count_chain_edges() == 0
+    assert build_asym(50, 30.0, 40.0).count_chain_edges() == 0
 
 
-def test_one_sided_trash_never_gates_chain():
-    # Only both-side trash makes the cap provably inactive.
+def test_one_sided_trash_finite_cap_dense():
+    # Finite cap -> dense, trash configuration irrelevant.
     net = WassersteinNetwork(
         d1(EMP_POS, EMP_INT),
         [d1(THEO_POS, THEO_INT)],
@@ -194,17 +197,22 @@ def test_slopedp_with_split_distance_matches_chain():
     assert net.total_cost() == CHAIN_COST
 
 
-def test_slopedp_with_generous_cap_gate():
-    # Gate passes (cap >= 2 * trash) -> SlopeDP runs on the invisible chain
-    # and matches NetworkSimplex.
-    ns = _build(max_distance=250)
-    dp = _build(max_distance=250, solver=SlopeDP())
+def test_slopedp_finite_cap_raises():
+    # SlopeDP is chain-native and a finite cap now always means dense, so
+    # any finite max_distance with SlopeDP raises, however generous.
+    with pytest.raises(ValueError, match="split_distance"):
+        _build(max_distance=250, solver=SlopeDP())
+
+
+def test_slopedp_no_cap_matches_ns():
+    ns = _build(max_distance=None)
+    dp = _build(max_distance=None, solver=SlopeDP())
     assert dp.total_cost() == ns.total_cost()
 
 
-def test_trash_added_after_init_feeds_the_gate():
-    # The gate decision runs at build() so it sees trash declared after
-    # __init__ — the same network flips factory purely on the trash cost.
+def test_finite_cap_dense_regardless_of_trash_cost():
+    # The refuted 1.3.0 gate flipped factory on the trash cost; now a finite
+    # cap is dense no matter what trash is declared before build().
     def build_with_trash(t):
         net = WassersteinNetwork(
             d1(EMP_POS, EMP_INT),
@@ -216,5 +224,37 @@ def test_trash_added_after_init_feeds_the_gate():
         net.build()
         return net
 
-    assert build_with_trash(50.0).count_chain_edges() > 0  # 100 >= 2*50
-    assert build_with_trash(60.0).count_chain_edges() == 0  # 100 < 2*60
+    assert build_with_trash(50.0).count_chain_edges() == 0
+    assert build_with_trash(60.0).count_chain_edges() == 0
+
+
+def test_finite_cap_always_dense_ladder():
+    # Regression for the refuted 1.3.0 cap >= 2t gate (2026-08 fuzz, 600
+    # trials x 16 caps): the trash-domination argument only covers pricing
+    # inside a shared partition.  Here emp 0/90/180 (mass 1 each) is
+    # chain-connected by same-side gaps <= cap, but every emp peak except
+    # emp@180 is dense-ISOLATED (nearest theo@270 beyond cap 100): dense
+    # charges the isolated dead-ends t per unit while the chain LP absorbs
+    # them against theo's excess for free (per-subgraph supply = max(E, T)),
+    # 250 vs the correct 350 — at cap == 2t, and at every tested multiple up
+    # to 3.9t.  Hence: a finite max_distance now ALWAYS builds dense.  (In
+    # the fuzz, equality held in all 5085 pairs whose chain runs coincided
+    # with the dense components, where cap >= t already suffices — so a
+    # future partition-parity gate could soundly win the chain back.)
+    def build(force_dense):
+        net = WassersteinNetwork(
+            d1([0.0, 90.0, 180.0], [1.0, 1.0, 1.0]),
+            [d1([270.0], [5.0])],
+            DistanceMetric.L1,
+            max_distance=100,
+            force_dense_1d=force_dense,
+        )
+        net.add_simple_trash(50.0)
+        net.build()
+        net.solve([1.0])
+        return net
+
+    gated, forced = build(False), build(True)
+    assert gated.count_chain_edges() == 0  # finite cap -> dense factory
+    assert forced.total_cost() == 350.0
+    assert gated.total_cost() == 350.0

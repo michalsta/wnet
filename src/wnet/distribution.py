@@ -92,6 +92,8 @@ class Distribution:
     def positions(self) -> np.ndarray:
         # Read-only (dimension, n_points) view over the C++ buffer (zero-copy;
         # the view keeps the C++ object alive). Copy it if you need to mutate.
+        # The binding already returns the view read-only (const-qualified
+        # nanobind ndarray); re-clearing the flag here is defense in depth.
         v = self._cpp.positions_view().T
         v.flags.writeable = False
         return v
@@ -99,6 +101,7 @@ class Distribution:
     @property
     def intensities(self) -> np.ndarray:
         # Read-only (n_points,) view over the C++ buffer (zero-copy).
+        # Read-only at the binding level too; see `positions`.
         v = self._cpp.intensities_view()
         v.flags.writeable = False
         return v

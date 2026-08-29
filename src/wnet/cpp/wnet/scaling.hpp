@@ -44,10 +44,15 @@ protected:
 
     // ---- Validation ---------------------------------------------------------
 
-    static void validate_positive_costs(double max_cost, double min_cost) {
-        if (max_cost <= 0.0 || min_cost <= 0.0)
+    // Costs may legitimately be zero: max_distance == 0 means exact-position-
+    // only matching (matching edges are free), and a zero trash cost means
+    // free trash.  Only the costs that actually enter the chosen scale need to
+    // be positive — a zero cost simply contributes nothing to the overflow
+    // budget.  Negative (or NaN) costs are always invalid.
+    static void validate_nonnegative_costs(double max_cost, double min_cost) {
+        if (!(min_cost >= 0.0) || !(max_cost >= 0.0))
             throw std::invalid_argument(
-                "Scaler: cost per unit flow (max_distance / trash costs) must be positive.");
+                "Scaler: cost per unit flow (max_distance / trash costs) must be non-negative.");
     }
 
     static void validate_max_sum(double max_sum) {
@@ -88,7 +93,11 @@ protected:
     }
 
     // int64 overflow cap: sf_intensity * max_cost * max_sum must not exceed max_int.
+    // A zero max_cost means every cost entering the objective is zero — no
+    // int64 cost accumulation at all, hence no overflow bound (returns +inf).
     static double overflow_cap(double max_cost, double max_sum, double max_int) {
+        if (max_cost <= 0.0)
+            return std::numeric_limits<double>::infinity();
         return max_int / (max_cost * max_sum);
     }
 
@@ -255,7 +264,7 @@ public:
         this->metric_ = metric;
 
         auto [max_c, min_c] = ScalerBase<DIM>::cost_bounds(max_distance, trash_costs);
-        ScalerBase<DIM>::validate_positive_costs(max_c, min_c);
+        ScalerBase<DIM>::validate_nonnegative_costs(max_c, min_c);
 
         auto [emp_sum, theo_sum, max_sum] =
             ScalerBase<DIM>::intensity_sums(empirical, theoretical);
@@ -265,7 +274,10 @@ public:
         if (std::isinf(product))
             throw std::overflow_error(
                 "WNetAlignScaler: max_sum * max_cost overflows double.");
-        const double f = std::sqrt(max_int / product);
+        // All cost bounds zero (max_distance == 0, no/zero trash costs):
+        // every unit of flow is free, no cost can accumulate, so any scale is
+        // valid — 1.0 is the natural choice.
+        const double f = (product > 0.0) ? std::sqrt(max_int / product) : 1.0;
         this->sf_distance_ = f;
         this->sf_intensity_ = f;
         this->validate_factors();
@@ -300,7 +312,7 @@ public:
         this->metric_ = metric;
 
         auto [max_c, min_c] = ScalerBase<DIM>::cost_bounds(max_distance, trash_costs);
-        ScalerBase<DIM>::validate_positive_costs(max_c, min_c);
+        ScalerBase<DIM>::validate_nonnegative_costs(max_c, min_c);
 
         auto [emp_sum, theo_sum, max_sum] =
             ScalerBase<DIM>::intensity_sums(empirical, theoretical);
@@ -348,8 +360,10 @@ public:
     {
         this->metric_ = metric;
         auto [max_c, min_c] = ScalerBase<DIM>::cost_bounds(max_distance, trash_costs);
-        ScalerBase<DIM>::validate_positive_costs(max_c, min_c);
-        // fine_grid_intensity_scale degrades gracefully to 1.0 for empty spectra.
+        ScalerBase<DIM>::validate_nonnegative_costs(max_c, min_c);
+        // fine_grid_intensity_scale degrades gracefully to 1.0 for empty
+        // spectra; a zero max_distance is likewise safe there (its cost bound
+        // is clamped to >= 1).
         this->sf_distance_ = 1.0;
         this->sf_intensity_ = ScalerBase<DIM>::fine_grid_intensity_scale(
             empirical, theoretical, p, max_distance, max_int, trash_costs);
@@ -395,7 +409,7 @@ public:
                 "GenericScaler: rounding_tol must be in (0, 1].");
 
         auto [max_c, min_c] = ScalerBase<DIM>::cost_bounds(max_distance, trash_costs);
-        ScalerBase<DIM>::validate_positive_costs(max_c, min_c);
+        ScalerBase<DIM>::validate_nonnegative_costs(max_c, min_c);
 
         auto [emp_sum, theo_sum, max_sum] =
             ScalerBase<DIM>::intensity_sums(empirical, theoretical);

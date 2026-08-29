@@ -546,18 +546,28 @@ def test_zero_intensity_spectra_raises():
 
 def test_negative_cost_raises():
     emp, theo = big_pair()
-    with pytest.raises(ValueError, match="positive"):
+    with pytest.raises(ValueError, match="non-negative"):
         WNetDeconvScaler(
             emp, theo, DistanceMetric.LINF, 1.0, [-1.0], max_dropped_fraction=1.0
         )
 
 
-def test_zero_max_distance_and_cost_raises():
+def test_negative_max_distance_raises():
     emp, theo = big_pair()
-    with pytest.raises(ValueError, match="positive"):
+    with pytest.raises(ValueError, match="non-negative"):
         WNetDeconvScaler(
-            emp, theo, DistanceMetric.LINF, 0.0, [0.0], max_dropped_fraction=1.0
+            emp, theo, DistanceMetric.LINF, -1.0, [1.0], max_dropped_fraction=1.0
         )
+
+
+def test_zero_max_distance_and_zero_trash_cost_allowed():
+    # All cost bounds zero: everything is free, no overflow is possible, and
+    # the scaler must construct (exact-position-only matching is legitimate).
+    emp, theo = big_pair()
+    s = WNetDeconvScaler(
+        emp, theo, DistanceMetric.LINF, 0.0, [0.0], max_dropped_fraction=1.0
+    )
+    assert s.sf_intensity() > 0.0
 
 
 def test_trash_costs_accepts_list_and_ndarray():
@@ -794,3 +804,181 @@ def test_auto_intensity_scale_sees_late_trash_cost():
     W_safe.build()
     W_safe.solve([1.0])
     assert auto_cost == pytest.approx(W_safe.total_cost(), rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# max_distance == 0 — exact-position-only matching
+# ---------------------------------------------------------------------------
+# A zero matching-cost bound is legitimate: matching edges are free (only
+# coincident peaks may match) and the scale is derived from the trash costs
+# and intensities alone.  With ALL cost bounds zero, everything is free and a
+# scale of 1.0 is fine.
+#
+# NOTE: these tests exercise C++ behaviour (scaler zero-cost validation and
+# network acceptance of max_distance=0) introduced together with this test
+# section — they require a rebuilt wnet_cpp extension.
+
+
+@pytest.mark.parametrize(
+    "cls,kwargs",
+    [
+        (WNetDeconvScaler, {"max_dropped_fraction": 1.0}),
+        (WNetAlignScaler, {}),
+        (FineGridScaler, {}),
+        (GenericScaler, {"max_dropped_frac": 1.0}),
+    ],
+)
+def test_zero_max_distance_scalers_construct_with_trash(cls, kwargs):
+    emp, theo = big_pair()
+    s = cls(emp, theo, DistanceMetric.LINF, 0.0, [1.0], **kwargs)
+    for v in (s.sf_distance(), s.sf_intensity(), s.scale_factor(), s.ftol()):
+        assert isinstance(v, float) and v > 0.0
+
+
+def test_zero_max_distance_deconv_scale_from_trash_and_intensities():
+    # With max_distance=0 the scale must be driven by the trash costs and the
+    # intensities alone: the p95 formula still sets sf, and the overflow cap
+    # is computed from the trash cost (the only positive cost bound).
+    emp, theo = big_pair()  # min_p95 = 50, max_sum = 600
+    s = WNetDeconvScaler(
+        emp, theo, DistanceMetric.LINF, 0.0, [1.0], max_dropped_fraction=1.0
+    )
+    assert s.sf_distance() == 1.0
+    assert s.sf_intensity() == pytest.approx(1.0 / (0.10 * 50.0), rel=RTOL)
+
+    # Force the cap to bind: cap = max_int / (max_trash_cost * max_sum).
+    trash_cost, max_sum, target_sf = 4.0, 600.0, 0.01
+    mi = max_int_cap_sf_at(target_sf, trash_cost, max_sum)
+    capped = WNetDeconvScaler(
+        emp,
+        theo,
+        DistanceMetric.LINF,
+        0.0,
+        [trash_cost],
+        max_int=mi,
+        max_dropped_fraction=1.0,
+    )
+    assert capped.sf_intensity() == pytest.approx(target_sf, rel=1e-6)
+
+
+def test_zero_max_distance_align_scale_from_trash():
+    # Tied scaler: f = sqrt(max_int / (max_sum * max_cost)) with the cost
+    # bound coming entirely from the trash costs.
+    emp, theo = big_pair()  # max_sum = 600
+    s = WNetAlignScaler(emp, theo, DistanceMetric.LINF, 0.0, [2.0])
+    expected = np.sqrt(MAX_INT / (600.0 * 2.0))
+    assert s.sf_distance() == pytest.approx(expected, rel=RTOL)
+    assert s.sf_intensity() == pytest.approx(expected, rel=RTOL)
+
+
+def test_all_costs_zero_align_scale_is_one():
+    # No trash and max_distance=0: every unit of flow is free, any scale is
+    # valid; the scaler settles on 1.0.
+    emp, theo = big_pair()
+    for trash in ([], [0.0]):
+        s = WNetAlignScaler(emp, theo, DistanceMetric.LINF, 0.0, trash)
+        assert s.sf_distance() == pytest.approx(1.0, rel=RTOL)
+        assert s.sf_intensity() == pytest.approx(1.0, rel=RTOL)
+
+
+def test_all_costs_zero_deconv_and_generic_construct():
+    # Zero cost bounds disable the overflow cap (nothing can accumulate cost),
+    # so the p95 formula applies uncapped.
+    emp, theo = big_pair()  # min_p95 = 50
+    d = WNetDeconvScaler(
+        emp, theo, DistanceMetric.LINF, 0.0, [], max_dropped_fraction=1.0
+    )
+    g = GenericScaler(emp, theo, DistanceMetric.LINF, 0.0, [], max_dropped_frac=1.0)
+    for s in (d, g):
+        assert s.sf_distance() == 1.0
+        assert s.sf_intensity() == pytest.approx(1.0 / (0.10 * 50.0), rel=RTOL)
+
+
+def test_zero_max_distance_finegrid_fractional():
+    # Fractional intensities, max_distance=0, no trash: the fine grid still
+    # targets ~2^30 total flow (its internal cost bound clamps to >= 1).
+    emp = d1([0.0, 5.0], [0.5, 0.5])
+    theo = d1([1.0, 6.0], [0.5, 0.5])
+    s = FineGridScaler(emp, [theo], DistanceMetric.L1, 0.0, [])
+    assert s.sf_distance() == pytest.approx(1.0, rel=RTOL)
+    assert s.sf_intensity() == pytest.approx(2.0**30 / 2.0, rel=1e-9)
+
+
+def _dist1d_int(positions, intensities):
+    return Distribution(
+        np.array([positions], dtype=np.float64),
+        np.array(intensities, dtype=np.float64),
+    )
+
+
+def test_zero_max_distance_network_1d_int_with_trash():
+    # emp: pos [0, 1] ints [2, 3]; theo: pos [0, 2] ints [2, 5].
+    # Only the coincident pair (pos 0) may match: 2 units at cost 0.
+    # Leftover emp 3 -> exp trash @7 = 21; leftover theo 5 -> theo trash @10 = 50.
+    emp = _dist1d_int([0.0, 1.0], [2.0, 3.0])
+    theo = _dist1d_int([0.0, 2.0], [2.0, 5.0])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, max_distance=0)
+    W.add_experimental_trash(7)
+    W.add_theoretical_trash(10)
+    W.build()
+    W.solve([1.0])
+    assert W.total_cost() == pytest.approx(71.0, rel=1e-9)
+    # Only exact-position pairs get a matching edge.
+    assert W.count_matching_edges() == 1
+
+
+def test_zero_max_distance_network_1d_identical_no_trash():
+    # Identical integer spectra: everything matches in place at cost 0, and
+    # the (trash-free) problem stays feasible.
+    emp = _dist1d_int([0.0, 1.0, 2.5], [2.0, 3.0, 4.0])
+    theo = _dist1d_int([0.0, 1.0, 2.5], [2.0, 3.0, 4.0])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, max_distance=0)
+    W.build()
+    W.solve([1.0])
+    assert W.total_cost() == pytest.approx(0.0, abs=1e-12)
+    assert W.count_matching_edges() == 3
+
+
+def test_zero_max_distance_network_1d_fractional_with_trash():
+    # Fractional intensities engage the auto fine-grid scale; with
+    # max_distance=0 it must be sized from the trash cost + intensities.
+    # emp: [0.0, 1.0] w [0.5, 0.25]; theo: [0.0] w [0.5].
+    # Match 0.5 at pos 0 (free); emp leftover 0.25 -> exp trash @2.0 = 0.5.
+    emp = d1([0.0, 1.0], [0.5, 0.25])
+    theo = d1([0.0], [0.5])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, max_distance=0)
+    W.add_experimental_trash(2.0)
+    W.build()
+    W.solve([1.0])
+    assert W.total_cost() == pytest.approx(0.5, rel=1e-6)
+    assert W.count_matching_edges() == 1
+
+
+def test_zero_max_distance_network_2d_fractional_with_trash():
+    # 2-D, fractional: emp {(0,0): 0.5, (1,1): 0.25};
+    # theo {(0,0): 0.5, (2,2): 0.75}.  Exact pair at (0,0) matches 0.5 free;
+    # emp leftover 0.25 -> exp trash @2.0 = 0.5;
+    # theo leftover 0.75 -> theo trash @3.0 = 2.25.  Total 2.75.
+    emp = dN([[0.0, 1.0], [0.0, 1.0]], [0.5, 0.25])
+    theo = dN([[0.0, 2.0], [0.0, 2.0]], [0.5, 0.75])
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.L2, max_distance=0)
+    W.add_experimental_trash(2.0)
+    W.add_theoretical_trash(3.0)
+    W.build()
+    W.solve([1.0])
+    assert W.total_cost() == pytest.approx(2.75, rel=1e-6)
+    assert W.count_matching_edges() == 1
+
+
+def test_zero_max_distance_network_2d_identical_fractional_no_trash():
+    # Identical fractional 2-D spectra: all mass matches in place at cost 0.
+    rng = np.random.default_rng(42)
+    pos = rng.uniform(0, 5, (2, 6))
+    ints = rng.uniform(0.05, 0.4, 6)
+    emp = dN(pos, ints)
+    theo = dN(pos, ints)
+    W = WassersteinNetwork(emp, [theo], DistanceMetric.LINF, max_distance=0)
+    W.build()
+    W.solve([1.0])
+    assert W.total_cost() == pytest.approx(0.0, abs=1e-12)
+    assert W.count_matching_edges() == 6

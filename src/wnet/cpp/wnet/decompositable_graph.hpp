@@ -3314,6 +3314,16 @@ public:
             throw std::invalid_argument(
                 "create_1d (chain factory) only supports p=1; use the dense factory for p!=1.");
         using intensity_type = intensity_type_;
+        // Largest real per-unit path cost a unit of flow can accumulate: the
+        // span (sum of gap costs) of the widest emitted run.  A chain ride may
+        // traverse many gap edges, so the max single gap would under-state the
+        // accumulator bound; the run span is the true per-unit ceiling.  This
+        // sizes the build-time auto cost scale (pick_cost_scale) exactly like
+        // the dense factory's max matching cost — without it a trash-less
+        // chain network kept _max_real_cost == 0 and scale_factor() == 1, so
+        // under set_cost_scaling() fractional gap costs were llround()ed at
+        // scale 1 (a 0.6 gap priced as 1).
+        double max_real_cost = 0.0;
         std::vector<FlowNode<intensity_type>> nodes;
         std::vector<FlowEdge<intensity_type>> edges;
         std::vector<LEMON_INDEX> dead_end_node_ids;  // recomputed in build_subgraphs()
@@ -3409,6 +3419,12 @@ public:
             }
             if (!(has_emp && has_theo)) return;  // single-side run → drop
 
+            // Entries are sorted, so the run span equals the sum of its gap
+            // costs — the largest real cost one unit can accumulate here.
+            const double run_span =
+                entries[run_end - 1].position - entries[run_start].position;
+            if (run_span > max_real_cost) max_real_cost = run_span;
+
             for (size_t i = run_start + 1; i < run_end; ++i) {
                 const double gap_d = entries[i].position - entries[i-1].position;
                 if (gap_d > static_cast<double>(std::numeric_limits<VALUE_TYPE>::max()))
@@ -3456,7 +3472,9 @@ public:
             std::move(edges),
             theoretical_spectra.size(),
             std::move(theoretical_spectra_sizes),
-            std::move(dead_end_node_ids)
+            std::move(dead_end_node_ids),
+            p,  // validated == 1.0 above
+            max_real_cost
         );
     };
 };

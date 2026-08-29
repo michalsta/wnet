@@ -326,15 +326,6 @@ class WassersteinNetwork:
             costs.extend(self._independent_trash_costs)
         return costs
 
-    def _chain_gate_threshold(self) -> Optional[float]:
-        """Distance beyond which transport is provably dominated by trashing
-        both sides — None when no both-side trash escape exists."""
-        if self._simple_trash_cost is not None:
-            return 2.0 * self._simple_trash_cost
-        if self._exp_trash_cost is not None and self._theo_trash_cost is not None:
-            return self._exp_trash_cost + self._theo_trash_cost
-        return None
-
     def _decide_chain(self) -> bool:
         """True => use the 1D chain factory.  Raises for impossible requests."""
         solver = self._solver
@@ -367,9 +358,20 @@ class WassersteinNetwork:
                 )
             return True
         # max_distance semantics: dense per-pair threshold, GUARANTEED.  The
-        # chain factory is an invisible implementation detail, allowed only
-        # when provably equivalent: no cap at all, or both-side trash making
-        # any transport beyond the cap dominated by double-trashing.
+        # chain factory is an invisible implementation detail, allowed ONLY
+        # when the cap is absent (None/INF): then dense components and chain
+        # runs coincide and the LPs are identical.  A finite cap always builds
+        # dense.  A trash-cost threshold gate (cap >= 2t) was tried in 1.3.0
+        # and REFUTED by fuzz: even with transport-beyond-cap dominated by
+        # double-trashing, the two factories PARTITION peaks differently — a
+        # peak bridged into a chain run by same-side gaps <= cap but with no
+        # cross-side peak within cap is charged trash by dense (isolated
+        # dead-end) yet absorbed free against other-side excess by the chain
+        # LP (per-subgraph supply = max(E, T)).  Repro: emp {0,90,180} x1,
+        # theo {270} x5, simple trash 50, cap 100 -> chain 250, dense 350.
+        # No cap multiple fixes that; a sound gate needs partition-parity
+        # (chain runs == dense components + identical dead-end sets), which is
+        # future work.
         chain_possible = (
             self._base_distribution.dimension == 1
             and self._p == 1.0
@@ -378,16 +380,14 @@ class WassersteinNetwork:
             # Independent trash charges a per-matched-unit cost shift that
             # cannot ride per-hop chain arcs: dense only.
             and self._independent_trash_costs is None
+            and self._cap_is_inf
         )
-        if chain_possible and not self._cap_is_inf:
-            threshold = self._chain_gate_threshold()
-            chain_possible = threshold is not None and self._cap >= threshold
         if isinstance(self._solver, SlopeDP) and not chain_possible:
             raise ValueError(
                 "SlopeDP is chain-native, but the requested configuration "
                 "cannot use the 1D chain factory (it needs 1D data, p == 1, "
-                "force_dense_1d=False, and either no max_distance or a "
-                "max_distance provably inactive under both-side trash). "
+                "force_dense_1d=False, and no max_distance — a finite "
+                "max_distance means per-pair dense semantics). "
                 "Pass split_distance=... for explicit chain semantics, or "
                 "drop max_distance."
             )
