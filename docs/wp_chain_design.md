@@ -215,10 +215,27 @@ Mirror of today's `dist_src`/`dist_sink` structure, in DP form:
 
 ## 10. Risks / open questions
 
-* **R1 (main):** H1 — the greedy/Monge inner structure of the windowed
-  partial transportation. Hoffman covers the balanced case; the skip/trash
-  options need either a proof (likely via adding boundary dummy rows and a
-  profit threshold argument) or the 5.1 fallback. Prototype first.
+* **R1 (main): RESOLVED, favourably and beyond H1.** The stage-1 prototype
+  (`prototypes/wp_sweep_prototype.py`) established a stronger structure than
+  the Monge machinery H1 hoped for:
+  - *Suffix lemma*: an optimal solution never matches a unit rightward past
+    an unmatched same-side unit (swap improves by strict convexity), so the
+    pending set at any sweep point is a contiguous suffix of one side's
+    processed units — the DP state is (side, pending count) with pending
+    identity determined.
+  - *Collapse*: matching consumes the oldest pendings (monotonicity), and
+    with T(k) = newest-rank prefix profit sums the transition telescopes to
+    `V'(g) = max_{g<=k<=g+q}[V(k) + T(k)] - T(g)` — a windowed max, no
+    convolution, no SMAWK.
+  Validated: 300 fuzz trials at p=2 and 150 each at p=3, p=1.5 — exact
+  against the unit-level alignment DP and against the wnet dense factory
+  (worst error 4e-14, float accumulation only). Pruning at radius R is
+  loss-free (drop from the OLD end; suffix states anchored at the newest
+  end survive truncation).
+  - *Concavity of V(k) is REFUTED* (79 violations / 200 instances): the
+    -T(g) term is convex. The C++ representation is therefore a general
+    piecewise-linear function over k with breakpoints on pending-block
+    boundaries (all transitions preserve this), not a slope multiset.
 * **R2:** marginal exactness proof for the prefix/suffix construction at
   degenerate optima (ties). The W1 experience says: prove or fuzz against
   dense residual marginals, not against intuition.
