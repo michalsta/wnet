@@ -1,8 +1,20 @@
 # Chain-native solver for W_p, p > 1 — design note
 
-Status: design only, no implementation. Written before any code, so that the
-correctness-critical claims are stated (and separated from hypotheses) up
-front.
+Status: IMPLEMENTED through stage 3 (`convex_sweep.hpp`, solver config
+`ConvexSweep`, wnet commit 82a7d1f; wnetdeconv exposes `p` and routes 1-D
+p != 1 to it).  Validation: standalone kernel fuzz vs a unit-level alignment
+oracle (1200 trials, p = 2/3/1.5, integer-exact); network-level totals and
+gradients exact vs the dense factory (independent trash any span,
+annihilating trash on partition-parity spans) and BIT-EXACT vs SlopeDP at
+p = 1 on identical chain partitions; FD gradient checks.  Marginals use the
+forward+adjoint composition below, run in both orientations.
+
+Measured performance (profile NMR, perfumes 12 449 pts, 4 components,
+squared trash costs): construct 0.5 s, solve 76 s, gradient 392 s — usable
+but heavy for the outer optimizer (hours per deconvolution); remaining
+constant-factor work is allocation churn in the PL engine (buffer reuse,
+op fusion), plus optional windowed-max output slimming.  Written 2026-08-29;
+the sections below are the original design plus resolved-risk annotations.
 
 ## 1. Problem
 
