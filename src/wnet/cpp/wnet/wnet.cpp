@@ -80,6 +80,9 @@ NB_MODULE(wnet_cpp, m) {
     nb::class_<SlopeDPConfig>(m, "SlopeDP")
         .def(nb::init<>());
 
+    nb::class_<ConvexSweepConfig>(m, "ConvexSweep")
+        .def(nb::init<>());
+
     nb::class_<FlowNode<int64_t>>(m, "FlowNode")
         .def(nb::init<LEMON_INDEX, SourceNode>())
         .def(nb::init<LEMON_INDEX, SinkNode>())

@@ -38,6 +38,7 @@ from wnet.wnet_cpp import (
     CycleCanceling,
     CapacityScaling,
     SlopeDP,
+    ConvexSweep,
     NSPivotRule,
     CSMethod,
     CCMethod,
@@ -92,6 +93,7 @@ class WassersteinNetwork:
         "cost_scaling": CostScaling,
         "capacity_scaling": CapacityScaling,
         "slope_dp": SlopeDP,
+        "convex_sweep": ConvexSweep,
     }
 
     # C++ methods reachable directly on the wrapper once build() has run
@@ -282,11 +284,13 @@ class WassersteinNetwork:
             )
         if self._independent_trash_costs is not None:
             raise RuntimeError("Independent trash already added.")
-        if self._explicit_split and not isinstance(self._solver, SlopeDP):
+        if self._explicit_split and not isinstance(
+            self._solver, (SlopeDP, ConvexSweep)
+        ):
             raise ValueError(
                 "Independent asymmetric trash on the chain (split_distance) "
-                "requires the SlopeDP solver; other solvers need the dense "
-                "factory (max_distance semantics)."
+                "requires the SlopeDP or ConvexSweep solver; other solvers "
+                "need the dense factory (max_distance semantics)."
             )
         self._independent_trash_costs = (float(C_exp), float(C_theo))
 
@@ -338,8 +342,11 @@ class WassersteinNetwork:
                 problems.append(
                     f"data is {self._base_distribution.dimension}D (need 1D)"
                 )
-            if self._p != 1.0:
-                problems.append(f"p={self._p} (need p == 1)")
+            if self._p != 1.0 and not isinstance(solver, ConvexSweep):
+                problems.append(
+                    f"p={self._p} (chain with p != 1 needs the ConvexSweep "
+                    "solver)"
+                )
             if self._force_dense_1d:
                 problems.append("force_dense_1d=True")
             if not chain_capable_solver:
@@ -352,11 +359,11 @@ class WassersteinNetwork:
                     "(use NetworkSimplex, CycleCanceling or SlopeDP)"
                 )
             if self._independent_trash_costs is not None and not isinstance(
-                solver, SlopeDP
+                solver, (SlopeDP, ConvexSweep)
             ):
                 problems.append(
                     "independent asymmetric trash on the chain requires the "
-                    "SlopeDP solver"
+                    "SlopeDP or ConvexSweep solver"
                 )
             if problems:
                 raise ValueError(
@@ -382,7 +389,7 @@ class WassersteinNetwork:
         # future work.
         chain_possible = (
             self._base_distribution.dimension == 1
-            and self._p == 1.0
+            and (self._p == 1.0 or isinstance(solver, ConvexSweep))
             and chain_capable_solver
             and not self._force_dense_1d
             # Independent trash charges a per-matched-unit cost shift that
@@ -390,13 +397,13 @@ class WassersteinNetwork:
             # analytically on the chain.
             and (
                 self._independent_trash_costs is None
-                or isinstance(solver, SlopeDP)
+                or isinstance(solver, (SlopeDP, ConvexSweep))
             )
             and self._cap_is_inf
         )
-        if isinstance(self._solver, SlopeDP) and not chain_possible:
+        if isinstance(self._solver, (SlopeDP, ConvexSweep)) and not chain_possible:
             raise ValueError(
-                "SlopeDP is chain-native, but the requested configuration "
+                f"{type(self._solver).__name__} is chain-native, but the requested configuration "
                 "cannot use the 1D chain factory (it needs 1D data, p == 1, "
                 "force_dense_1d=False, and no max_distance — a finite "
                 "max_distance means per-pair dense semantics). "

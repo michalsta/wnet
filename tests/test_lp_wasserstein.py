@@ -86,13 +86,18 @@ def test_p_neq_1_forces_dense_in_1d():
     assert W1.count_chain_edges() > 0  # chain factory in 1D for p == 1
 
 
-def test_create_1d_rejects_p_neq_1():
+def test_create_1d_p_neq_1_requires_convex_sweep():
+    # The chain skeleton is buildable for any p >= 1, but only the
+    # ConvexSweep backend may solve it (gap costs are additive p=1
+    # semantics); any other solver is rejected at build().
     base = Distribution_1D(np.array([0.0]), np.array([1]))
     target = Distribution_1D(np.array([1.0]), np.array([1]))
-    with pytest.raises(Exception):
-        CWassersteinNetworkFactory.create_1d(
-            base.vecdist, [target.vecdist], DistanceMetric.L1, BIG, 2
-        )
+    net = CWassersteinNetworkFactory.create_1d(
+        base.vecdist, [target.vecdist], DistanceMetric.L1, BIG, 2
+    )
+    net.add_simple_trash(10.0)
+    with pytest.raises(Exception, match="ConvexSweep"):
+        net.build()
 
 
 # --------------------------------------------------------------------------
@@ -243,16 +248,18 @@ def test_invalid_p_rejected(bad_p):
         )
 
 
-def test_fractional_p_forces_dense_and_rejects_chain():
+def test_fractional_p_forces_dense_without_convex_sweep():
     base = Distribution_1D(np.array([0.0, 5.0]), np.array([1, 1]))
     target = Distribution_1D(np.array([2.0, 7.0]), np.array([1, 1]))
     W = WassersteinNetwork(base, [target], DistanceMetric.L1, BIG, p=1.5)
     W.build()
     assert W.count_chain_edges() == 0
     assert W.count_matching_edges() > 0
+    # create_1d itself accepts any p >= 1 now (the ConvexSweep backend
+    # solves such chains); invalid orders are still rejected.
     with pytest.raises(Exception):
         CWassersteinNetworkFactory.create_1d(
-            base.vecdist, [target.vecdist], DistanceMetric.L1, BIG, 1.5
+            base.vecdist, [target.vecdist], DistanceMetric.L1, BIG, 0.5
         )
 
 

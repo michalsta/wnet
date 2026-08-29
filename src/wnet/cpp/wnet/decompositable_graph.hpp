@@ -88,9 +88,16 @@ struct CapacityScalingConfig {
 // 21 ms vs 6.2 s merged / ~26 s on the full wnet graph).
 struct SlopeDPConfig {};
 
+// Chain-native exact solver for W_p^p with p > 1: monotone-coupling sweep
+// over the sorted 1-D positions (see convex_sweep.hpp and
+// docs/wp_chain_design.md).  Valid only for chain-factory subgraphs; prices
+// trash analytically like SlopeDP (affine trash_of, constant marginal tau).
+struct ConvexSweepConfig {};
+
 using SolverConfig = std::variant<
     NetworkSimplexConfig, CostScalingConfig,
-    CycleCancelingConfig, CapacityScalingConfig, SlopeDPConfig>;
+    CycleCancelingConfig, CapacityScalingConfig, SlopeDPConfig,
+    ConvexSweepConfig>;
 
 // Convex piecewise-linear function support for the slope-DP chain solver.
 // F(s): slope(s) = sum(right masses at keys < s) - sum(left masses at keys > s);
@@ -287,6 +294,7 @@ struct ConvexPL {
 
 //#include "pylmcf/py_support.h"
 #include "graph_elements.hpp"
+#include "convex_sweep.hpp"
 #include "distribution.hpp"
 #include "distances.hpp"
 
@@ -409,6 +417,10 @@ class WassersteinNetworkSubgraph {
     // quantize_cost(real, _scale, _p_is_one).  _p_is_one => legacy S=1 truncation.
     int64_t _scale = 1;
     bool _p_is_one = true;
+    // Wasserstein order of the owning network (cost = distance^_p_order);
+    // consumed by the ConvexSweep backend, which recomputes pairwise costs
+    // from real positions instead of reading arc costs.
+    double _p_order = 1.0;
     // Intensity scaling (set by the owning network at build): real (double) node
     // intensities are mapped to integer LEMON supplies/capacities as
     // round-toward-zero(real * _intensity_scale).  1.0 reproduces the legacy
@@ -489,6 +501,7 @@ class WassersteinNetworkSubgraph {
                std::get<NetworkSimplexConfig>(_config).warm == NSWarmMode::LinkCut;
     }
     bool _use_slopedp() const { return std::holds_alternative<SlopeDPConfig>(_config); }
+    bool _use_sweep() const { return std::holds_alternative<ConvexSweepConfig>(_config); }
 
     // ---- slope-DP backend state (SlopeDPConfig) -------------------------- //
     // Per chain position: incident arc ids (-1 when absent) and the fixed
@@ -498,6 +511,7 @@ class WassersteinNetworkSubgraph {
     mutable std::vector<VALUE_TYPE> _sdp_emp_cap;      // per chain pos (0 for theo)
     mutable std::vector<VALUE_TYPE> _sdp_pos;          // per chain pos: prefix of gap_cost
     mutable std::vector<size_t> _sdp_cluster_start;    // C+1 offsets into positions
+    mutable std::vector<size_t> _sdp_node_pos;         // node id -> chain position
     mutable VALUE_TYPE _sdp_c_exp = -1, _sdp_c_theo = -1, _sdp_c_s = -1;   // quantized
     mutable std::vector<VALUE_TYPE> _slope_flow;       // per LEMON arc id
     mutable VALUE_TYPE _slope_total = 0;
@@ -506,11 +520,13 @@ class WassersteinNetworkSubgraph {
     VALUE_TYPE _solver_potential(lemon::StaticDigraph::Node nd) const {
         if (_use_slopedp())
             throw std::runtime_error("SlopeDP backend does not expose node potentials.");
+        if (_use_sweep())
+            throw std::runtime_error("ConvexSweep backend does not expose node potentials.");
         return _use_lct() ? ns_lct_solver->potential(nd)
                           : ns_solver->potential(nd);
     }
     bool _solver_has_value() const {
-        if (_use_slopedp()) return _slope_solved;
+        if (_use_slopedp() || _use_sweep()) return _slope_solved;
         if (std::holds_alternative<NetworkSimplexConfig>(_config))
             return _use_lct() ? ns_lct_solver.has_value() : ns_solver.has_value();
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver.has_value();
@@ -519,6 +535,10 @@ class WassersteinNetworkSubgraph {
     }
     VALUE_TYPE _solver_flow(lemon::StaticDigraph::Arc arc) const {
         if (_use_slopedp()) return _slope_flow[lemon_graph.id(arc)];
+        if (_use_sweep())
+            throw std::runtime_error(
+                "ConvexSweep does not report per-arc flows yet; use the "
+                "dense factory for flow introspection.");
         if (std::holds_alternative<NetworkSimplexConfig>(_config))
             return _use_lct() ? ns_lct_solver->flow(arc) : ns_solver->flow(arc);
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver->flow(arc);
@@ -526,7 +546,7 @@ class WassersteinNetworkSubgraph {
         return cap_solver->flow(arc);
     }
     VALUE_TYPE _solver_total_cost() const {
-        if (_use_slopedp()) return _slope_total;
+        if (_use_slopedp() || _use_sweep()) return _slope_total;
         if (std::holds_alternative<NetworkSimplexConfig>(_config))
             return _use_lct() ? ns_lct_solver->totalCost() : ns_solver->totalCost();
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver->totalCost();
@@ -719,12 +739,13 @@ class WassersteinNetworkSubgraph {
                 require_optimal(cap_solver->run(cfg.factor),
                                 "CapacityScaling::run()");
             } else {
-                static_assert(std::is_same_v<T, SlopeDPConfig>);
-                // SlopeDP is dispatched from set_point(); reaching here means
-                // a subgraph the chain solver cannot handle.
+                static_assert(std::is_same_v<T, SlopeDPConfig>
+                              || std::is_same_v<T, ConvexSweepConfig>);
+                // SlopeDP/ConvexSweep are dispatched from set_point();
+                // reaching here means a subgraph they cannot handle.
                 throw std::runtime_error(
-                    "SlopeDP backend supports only chain-factory subgraphs "
-                    "(no MatchingEdges).");
+                    "SlopeDP/ConvexSweep backends support only chain-factory "
+                    "subgraphs (no MatchingEdges).");
             }
         }, _config);
         // Any solve may have changed potentials/flow -> invalidate the
@@ -918,15 +939,23 @@ public:
                     else if constexpr (std::is_same_v<T, SimpleTrashEdge>) { simple_trash_idx = ii; return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one); }
                     else if constexpr (std::is_same_v<T, ChainEdge>) {
                         // On the chain the per-match shift cannot ride hop arcs;
-                        // only the SlopeDP backend prices independent trash
-                        // analytically (tau = C_exp + C_theo), so other solvers
-                        // must use the dense factory.
-                        if (independent_trash && !_use_slopedp())
+                        // only the SlopeDP/ConvexSweep backends price independent
+                        // trash analytically (tau = C_exp + C_theo), so other
+                        // solvers must use the dense factory.
+                        if (independent_trash && !_use_slopedp() && !_use_sweep())
                             throw std::runtime_error(
                                 "Independent asymmetric trash on the 1-D chain requires "
                                 "the SlopeDP solver (chain hop arcs cannot carry the "
                                 "per-match cost shift); use SlopeDP, or build the "
                                 "network with force_dense_1d=True.");
+                        // Gap costs are additive p=1 semantics; any solver that
+                        // reads them is wrong for p != 1.  ConvexSweep recomputes
+                        // pairwise costs from real positions and never reads these.
+                        if (_p_order != 1.0 && !_use_sweep())
+                            throw std::runtime_error(
+                                "Chain-factory subgraphs with p != 1 require the "
+                                "ConvexSweep solver (chain gap costs are additive "
+                                "p=1 semantics).");
                         return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
                     }
                     // Independent trash + SlopeDP (chain): the solver prices trash
@@ -989,6 +1018,7 @@ public:
         cc_solver.reset();
         _slope_solved = false;
         _sdp_cache_built = false;
+        _sweep_pos_built = false;
         _chain_arc_cache_built = false;
         _build_chain_topology();
         _matching_edge_cache.clear();
@@ -1030,10 +1060,12 @@ public:
     // Set by the owning network before build() so build_impl() quantises costs
     // with the network-wide scale.  Kept separate from build() to leave the
     // Python-facing build(config) signature unchanged.
-    void set_cost_scaling(int64_t scale, bool p_is_one, double intensity_scale = 1.0) {
+    void set_cost_scaling(int64_t scale, bool p_is_one, double intensity_scale = 1.0,
+                          double p_order = 1.0) {
         _scale = scale;
         _p_is_one = p_is_one;
         _intensity_scale = intensity_scale;
+        _p_order = p_order;
     }
 
     void build(SolverConfig config = NetworkSimplexConfig{}) {
@@ -1117,6 +1149,11 @@ public:
             ++_solution_version;
             return;
         }
+        if (_use_sweep()) {
+            _sweep_solve(lemon_total_flow);
+            ++_solution_version;
+            return;
+        }
         _run_solver();
     }
 
@@ -1167,6 +1204,7 @@ public:
                 }
             }, et);
         }
+        _sdp_node_pos = std::move(node_pos);
         _sdp_pos.assign(P, 0);
         if (_chain_topo.has_value())
             for (size_t g = 0; g + 1 < P; ++g)
@@ -1374,6 +1412,287 @@ public:
             ? (VALUE_TYPE)(transport - (W)tau * M)
             : (VALUE_TYPE)total;
         _slope_solved = true;
+    }
+
+    // ---- ConvexSweep (p != 1) chain solver ------------------------------- //
+    // Monotone-coupling sweep over real positions (convex_sweep.hpp): the
+    // kernel maximizes matching profit sum(tau - c(d)) and the total is
+    // trash_of(0) - profit, valid for every affine trash model (the same
+    // affinity SlopeDP relies on).  Costs are recomputed per pair as
+    // quantize_cost(|dx|^p) — the same function the dense factory applies
+    // per arc — so factory parity is exact up to the prefix-sum position
+    // reconstruction (grid data: exact).
+    mutable std::vector<double> _sweep_real_pos;   // per chain position
+    mutable bool _sweep_pos_built = false;
+
+    void _sweep_build_pos() const {
+        if (!_sdp_cache_built) _sdp_build_cache();
+        const size_t P = _sdp_emp_cap.size();
+        _sweep_real_pos.assign(P, 0.0);
+        if (_chain_topo.has_value()) {
+            const auto& topo = *_chain_topo;
+            for (size_t g = 0; g + 1 < P; ++g) {
+                const auto& et = edges[topo.right_arc_ids[g]].get_type();
+                _sweep_real_pos[g + 1] =
+                    _sweep_real_pos[g] + std::get<ChainEdge>(et).get_cost();
+            }
+        }
+        _sweep_pos_built = true;
+    }
+
+    // Trash pricing for the sweep, identical semantics to _slope_dp_solve's
+    // channel greedy (keep in sync): the trash bill at matched mass M with
+    // supplies (E, T) and flow budget F.  Affine in M per price regime.
+    slopedp_detail::wide_t _sweep_trash_cost(
+        VALUE_TYPE E, VALUE_TYPE T, VALUE_TYPE F, VALUE_TYPE M) const {
+        using W = slopedp_detail::wide_t;
+        if (independent_trash) {
+            if (M > E || M > T)
+                throw std::runtime_error("ConvexSweep: matched mass exceeds supply.");
+            return (W)_ind_c_exp_q * (E - M) + (W)_ind_c_theo_q * (T - M);
+        }
+        struct Ch { VALUE_TYPE price; VALUE_TYPE cap0; int kind; };
+        std::vector<Ch> ch;
+        if (_sdp_c_exp >= 0)  ch.push_back({_sdp_c_exp, E, 0});
+        if (_sdp_c_theo >= 0) ch.push_back({_sdp_c_theo, T, 1});
+        if (_sdp_c_s >= 0)    ch.push_back({_sdp_c_s, std::numeric_limits<VALUE_TYPE>::max(), 2});
+        std::sort(ch.begin(), ch.end(),
+                  [](const Ch& a, const Ch& b) { return a.price < b.price; });
+        if (ch.empty() && F > 0)
+            throw std::runtime_error(
+                "ConvexSweep backend requires trash edges "
+                "(add_simple_trash/add_experimental_trash/"
+                "add_theoretical_trash before build()).");
+        VALUE_TYPE need = F - M;
+        if (need < 0) throw std::runtime_error("ConvexSweep: matched mass exceeds supply.");
+        W c = 0;
+        for (const auto& x : ch) {
+            if (need <= 0) break;
+            VALUE_TYPE cap = x.kind == 2 ? need : x.cap0 - M;
+            VALUE_TYPE take = std::min(need, std::max<VALUE_TYPE>(cap, 0));
+            c += (W)x.price * take; need -= take;
+        }
+        if (need > 0) throw std::runtime_error("ConvexSweep: infeasible trash configuration.");
+        return c;
+    }
+
+    void _sweep_solve(VALUE_TYPE F) const {
+        using W = slopedp_detail::wide_t;
+        if (!_sdp_cache_built) _sdp_build_cache();
+        if (!_sweep_pos_built) _sweep_build_pos();
+        const size_t P = _sdp_emp_cap.size();
+        const bool chained = _chain_topo.has_value();
+
+        std::vector<VALUE_TYPE> e(P, 0), t(P, 0);
+        VALUE_TYPE E = 0, T = 0;
+        for (size_t p = 0; p < P; ++p) {
+            e[p] = _sdp_emp_cap[p];
+            E += e[p];
+            if (_sdp_sink_arc[p] >= 0) {
+                t[p] = capacities_map[lemon_graph.arcFromId(_sdp_sink_arc[p])];
+                T += t[p];
+            }
+        }
+
+        const W trash0 = _sweep_trash_cost(E, T, F, 0);
+        const VALUE_TYPE tau =
+            std::min(E, T) >= 1
+                ? (VALUE_TYPE)(trash0 - _sweep_trash_cost(E, T, F, 1))
+                : 0;
+
+        VALUE_TYPE profit = 0;
+        if (tau > 0 && chained) {
+            std::vector<convex_sweep::Event> ev;
+            ev.reserve(2 * P);
+            for (size_t p = 0; p < P; ++p) {
+                if (e[p] > 0) ev.push_back({_sweep_real_pos[p], 0, e[p]});
+                if (t[p] > 0) ev.push_back({_sweep_real_pos[p], 1, t[p]});
+            }
+            // Prune radius: profits are strictly negative past it (llround /
+            // trunc rounding included), so pruning there is loss-free.
+            const double eff_scale = _p_is_one ? 1.0 : (double)_scale;
+            const double radius =
+                std::pow(((double)tau + 1.0) / eff_scale, 1.0 / _p_order);
+            const double p_ord = _p_order;
+            const int64_t scale = _scale;
+            const bool trunc = _p_is_one;
+            auto profit_fn = [tau, p_ord, scale, trunc](double a, double z)
+                -> VALUE_TYPE {
+                const double d = z > a ? z - a : a - z;
+                return tau - quantize_cost<VALUE_TYPE>(
+                    std::pow(d, p_ord), scale, trunc);
+            };
+            profit = convex_sweep::sweep_solve(ev, profit_fn, radius);
+        }
+
+        // total = trash0 - profit for every affine trash model.  Independent
+        // trash uses the shifted convention (total_cost() adds the bracket
+        // E*C_exp + T*C_theo, which equals trash0): report -profit.
+        _slope_total = independent_trash
+            ? (VALUE_TYPE)(-(W)profit)
+            : (VALUE_TYPE)(trash0 - (W)profit);
+        _slope_flow.clear();   // per-arc flows not derivable; _solver_flow throws
+        _sweep_last_F = F;
+        _slope_solved = true;
+    }
+
+    mutable VALUE_TYPE _sweep_last_F = 0;
+
+    // Flow budget the set_point() dispatch would choose for supplies (E, T)
+    // — mirrors the branch there (keep in sync).
+    VALUE_TYPE _sweep_budget(VALUE_TYPE E, VALUE_TYPE T) const {
+        if (simple_trash_added ||
+            (experimental_trash_added && theoretical_trash_added))
+            return std::max(E, T);
+        if (experimental_trash_added) return E;
+        if (theoretical_trash_added) return T;
+        return E;  // trash-less sweeps are rejected earlier
+    }
+
+    // True per-unit marginal cost (scaled units) of one extra theoretical
+    // supply unit at each chain position:
+    //   marg(p) = [trash0(T+1) - trash0(T)] - gain(p)
+    // with gain(p) from the forward+adjoint composition of convex_sweep.hpp
+    // run in both orientations (extra unit matched leftward / rightward /
+    // not at all).  Exact within the current affine trash regime; at regime
+    // boundaries this is the discrete +1-unit right difference, matching
+    // the residual-marginal convention of the other backends.
+    std::vector<VALUE_TYPE> _sweep_position_marginals() const {
+        using W = slopedp_detail::wide_t;
+        if (!_solver_has_value())
+            throw std::runtime_error("Must call solve() before derivatives.");
+        if (!_sdp_cache_built) _sdp_build_cache();
+        if (!_sweep_pos_built) _sweep_build_pos();
+        const size_t P = _sdp_emp_cap.size();
+        const bool chained = _chain_topo.has_value();
+
+        std::vector<VALUE_TYPE> e(P, 0), t(P, 0);
+        VALUE_TYPE E = 0, T = 0;
+        for (size_t p = 0; p < P; ++p) {
+            e[p] = _sdp_emp_cap[p];
+            E += e[p];
+            if (_sdp_sink_arc[p] >= 0) {
+                t[p] = capacities_map[lemon_graph.arcFromId(_sdp_sink_arc[p])];
+                T += t[p];
+            }
+        }
+        const VALUE_TYPE F = _sweep_last_F;
+        const W trash0 = _sweep_trash_cost(E, T, F, 0);
+        const VALUE_TYPE tau =
+            std::min(E, T) >= 1
+                ? (VALUE_TYPE)(trash0 - _sweep_trash_cost(E, T, F, 1))
+                : (VALUE_TYPE)0;
+        const VALUE_TYPE dtrash0 = (VALUE_TYPE)(
+            _sweep_trash_cost(E, T + 1, _sweep_budget(E, T + 1), 0) - trash0);
+
+        std::vector<VALUE_TYPE> marg(P, dtrash0);
+        // With no empirical mass the extra theoretical unit can never match.
+        if (!chained || E < 1) return marg;
+
+        const double eff_scale = _p_is_one ? 1.0 : (double)_scale;
+        // tau for the kernel: if min(E,T) == 0 the solve used tau = 0, but
+        // the +1-unit probe can create the first match; price it with the
+        // regime tau of (E, T+1).
+        VALUE_TYPE tau_eff = tau;
+        if (std::min(E, T) < 1) {
+            const VALUE_TYPE F1 = _sweep_budget(E, T + 1);
+            const W tr0 = _sweep_trash_cost(E, T + 1, F1, 0);
+            tau_eff = std::min<VALUE_TYPE>(E, T + 1) >= 1
+                ? (VALUE_TYPE)(tr0 - _sweep_trash_cost(E, T + 1, F1, 1))
+                : 0;
+        }
+        if (tau_eff <= 0) return marg;
+        const double radius =
+            std::pow(((double)tau_eff + 1.0) / eff_scale, 1.0 / _p_order);
+        const double p_ord = _p_order;
+        const int64_t scale = _scale;
+        const bool trunc = _p_is_one;
+        const VALUE_TYPE tq = tau_eff;
+        auto profit_fn = [tq, p_ord, scale, trunc](double a, double z)
+            -> VALUE_TYPE {
+            const double d = z > a ? z - a : a - z;
+            return tq - quantize_cost<VALUE_TYPE>(
+                std::pow(d, p_ord), scale, trunc);
+        };
+
+        // Events with zero-count theoretical probes at every theo-hosting
+        // position; theo_event_pos[i] = chain position of theo event i.
+        auto run_orientation = [&](bool mirror,
+                                   std::vector<VALUE_TYPE>& gains) {
+            std::vector<convex_sweep::Event> ev;
+            std::vector<size_t> theo_pos_of_event;
+            ev.reserve(2 * P);
+            theo_pos_of_event.reserve(2 * P);
+            auto emit = [&](size_t p) {
+                const double z =
+                    mirror ? -_sweep_real_pos[p] : _sweep_real_pos[p];
+                if (e[p] > 0) {
+                    ev.push_back({z, 0, e[p]});
+                    theo_pos_of_event.push_back(SIZE_MAX);
+                }
+                if (_sdp_sink_arc[p] >= 0) {
+                    ev.push_back({z, 1, t[p]});
+                    theo_pos_of_event.push_back(p);
+                }
+            };
+            if (mirror)
+                for (size_t p = P; p-- > 0;) emit(p);
+            else
+                for (size_t p = 0; p < P; ++p) emit(p);
+            std::vector<convex_sweep::Snapshot> snaps;
+            const convex_sweep::i64 opt =
+                convex_sweep::forward_store(ev, profit_fn, radius, snaps);
+            std::vector<convex_sweep::i64> composed;
+            convex_sweep::adjoint_compose(ev, profit_fn, snaps, composed);
+            for (size_t i = 0; i < ev.size(); ++i) {
+                if (theo_pos_of_event[i] == SIZE_MAX) continue;
+                const convex_sweep::i64 g = composed[i] - opt;
+                VALUE_TYPE& slot = gains[theo_pos_of_event[i]];
+                if ((VALUE_TYPE)g > slot) slot = (VALUE_TYPE)g;
+            }
+        };
+        std::vector<VALUE_TYPE> gains(P, 0);
+        run_orientation(false, gains);
+        run_orientation(true, gains);
+        for (size_t p = 0; p < P; ++p)
+            marg[p] = dtrash0 - gains[p];
+        return marg;
+    }
+
+    std::vector<std::pair<size_t, double>> _sweep_spectrum_derivs() const {
+        auto marg = _sweep_position_marginals();
+        std::vector<double> accum(no_target_distributions, 0.0);
+        for (const auto& node : nodes) {
+            auto* theo =
+                std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
+            if (!theo) continue;
+            const size_t p = _sdp_node_pos[node.get_id()];
+            if (p == std::numeric_limits<size_t>::max()) continue;
+            accum[theo->get_spectrum_id()] +=
+                static_cast<double>(marg[p])
+                * static_cast<double>(theo->get_intensity());
+        }
+        std::vector<std::pair<size_t, double>> result;
+        result.reserve(no_target_distributions);
+        for (size_t s = 0; s < no_target_distributions; ++s)
+            result.emplace_back(s, accum[s]);
+        return result;
+    }
+
+    std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
+    _sweep_signal_derivs() const {
+        auto marg = _sweep_position_marginals();
+        std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
+        for (const auto& node : nodes) {
+            auto* theo =
+                std::get_if<TheoreticalNode<intensity_type>>(&node.get_type());
+            if (!theo) continue;
+            const size_t p = _sdp_node_pos[node.get_id()];
+            if (p == std::numeric_limits<size_t>::max()) continue;
+            result.emplace_back(theo->get_spectrum_id(),
+                                theo->get_peak_index(), marg[p]);
+        }
+        return result;
     }
 
   public:
@@ -2173,6 +2492,9 @@ public:
     // non-NS subgraphs have no potentials so they ignore want_pi and stay
     // exact).
     DerivContext _make_deriv_context(bool want_pi) const {
+        if (_use_sweep())
+            throw std::runtime_error(
+                "ConvexSweep derivatives are not implemented yet.");
         if (!_solver_has_value())
             throw std::runtime_error("Must call solve() before signal_part_derivatives().");
         if (simple_trash_idx == std::numeric_limits<LEMON_INDEX>::max()
@@ -2305,6 +2627,7 @@ public:
     // (spectrum_id, peak_index, derivative).  Exact: cheapest residual
     // augmenting route (Dijkstra on reduced costs).
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> signal_part_derivatives() const {
+        if (_use_sweep()) return _sweep_signal_derivs();
         return _signal_part_derivatives_impl(_get_deriv_context(/*use_pi=*/false));
     }
 
@@ -2315,6 +2638,7 @@ public:
     // signal_part_derivatives(); opt-in only.
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
     signal_part_derivatives_fast_approx() const {
+        if (_use_sweep()) return _sweep_signal_derivs();
         return _signal_part_derivatives_impl(_get_deriv_context(/*use_pi=*/true));
     }
 
@@ -2322,6 +2646,7 @@ public:
     // (spectrum_id, derivative) = sum_i(peak_derivative_i * intensity_i).
     // Exact residual marginals.
     std::vector<std::pair<size_t, double>> spectrum_proportion_derivatives() const {
+        if (_use_sweep()) return _sweep_spectrum_derivs();
         return _spectrum_proportion_derivatives_impl(_get_deriv_context(/*use_pi=*/false));
     }
 
@@ -2330,6 +2655,7 @@ public:
     // caveat).  Different VALUES from spectrum_proportion_derivatives().
     std::vector<std::pair<size_t, double>>
     spectrum_proportion_derivatives_fast_approx() const {
+        if (_use_sweep()) return _sweep_spectrum_derivs();
         return _spectrum_proportion_derivatives_impl(_get_deriv_context(/*use_pi=*/true));
     }
 };
@@ -2765,7 +3091,8 @@ public:
         else
             _scale = pick_cost_scale(_max_real_cost, total_flow * _intensity_scale, _truncate);
         for (auto& flow_subgraph : flow_subgraphs) {
-            flow_subgraph->set_cost_scaling(_scale, _truncate, _intensity_scale);
+            flow_subgraph->set_cost_scaling(_scale, _truncate, _intensity_scale,
+                                            _p_order);
             flow_subgraph->build(config);
         }
         built = true;
@@ -3374,11 +3701,15 @@ public:
         double max_dist = std::numeric_limits<double>::max(),
         double p = 1.0
     ) {
-        // The chain factory's gap costs are additive along the line, which only
-        // equals the transport cost for p == 1 (|a-c|^p != |a-b|^p + |b-c|^p).
-        if (p != 1.0)
+        // The chain factory's gap costs are additive along the line, which
+        // only equals the transport cost for p == 1.  For p != 1 the graph
+        // skeleton (runs, src/sink/trash arcs) is still valid — the
+        // ConvexSweep backend recomputes pairwise costs from real positions
+        // and never reads gap costs — and build() rejects any other solver
+        // on a p != 1 chain.
+        if (!(p >= 1.0) || !std::isfinite(p))
             throw std::invalid_argument(
-                "create_1d (chain factory) only supports p=1; use the dense factory for p!=1.");
+                "create_1d: Wasserstein order p must be a finite real >= 1.");
         using intensity_type = intensity_type_;
         // Largest real per-unit path cost a unit of flow can accumulate: the
         // span (sum of gap costs) of the widest emitted run.  A chain ride may
@@ -3487,9 +3818,12 @@ public:
 
             // Entries are sorted, so the run span equals the sum of its gap
             // costs — the largest real cost one unit can accumulate here.
+            // For p != 1 a pair inside the run can cost up to span^p.
             const double run_span =
                 entries[run_end - 1].position - entries[run_start].position;
-            if (run_span > max_real_cost) max_real_cost = run_span;
+            const double run_cost =
+                p == 1.0 ? run_span : std::pow(run_span, p);
+            if (run_cost > max_real_cost) max_real_cost = run_cost;
 
             for (size_t i = run_start + 1; i < run_end; ++i) {
                 const double gap_d = entries[i].position - entries[i-1].position;
@@ -3539,7 +3873,7 @@ public:
             theoretical_spectra.size(),
             std::move(theoretical_spectra_sizes),
             std::move(dead_end_node_ids),
-            p,  // validated == 1.0 above
+            p,
             max_real_cost
         );
     };
