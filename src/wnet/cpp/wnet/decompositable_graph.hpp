@@ -382,8 +382,11 @@ class WassersteinNetworkSubgraph {
     // by -(C_exp + C_theo); total_cost() adds the bracket back (linear in
     // this subgraph's own E and T(w), so the subgraph decomposition is
     // exact), and the theoretical marginals gain the constant C_theo term.
-    // Chain factories are rejected: a per-matched-unit shift cannot ride
-    // per-hop chain arcs.
+    // Chain factories: the per-matched-unit shift cannot ride per-hop chain
+    // arcs, so only the SlopeDP backend supports independent trash there —
+    // it prices trash analytically (trash_of(M) is exactly affine, marginal
+    // tau = C_exp + C_theo) and reports the same shifted total; other
+    // solvers on the chain are rejected at build().
     bool independent_trash = false;
     double _ind_c_exp = 0.0, _ind_c_theo = 0.0;   // real costs
     VALUE_TYPE _ind_c_exp_q = 0, _ind_c_theo_q = 0;  // quantized in build_impl
@@ -424,6 +427,15 @@ class WassersteinNetworkSubgraph {
         VALUE_TYPE INF;
         bool supply_fixed;
         bool asymmetric;
+        // Independent trash: the supply_fixed one-sided dispatch encodes the
+        // annihilating max(E, T) budget and misses valid adjustments for the
+        // independent model (e.g. re-matching a trashed empirical unit when
+        // T >= E).  The correct shifted marginal is min(dist_src, dist_sink):
+        // with E > T a trashed empirical unit always exists (Xe >= E-T > 0),
+        // so a zero-cost sink->emp->src relay makes dist_sink <= dist_src and
+        // the min never admits an infeasible source-augmenting path; with
+        // T >= E both the cycle and the source augmentation are feasible.
+        bool independent;
         VALUE_TYPE trash_cost, src_adjust, sink_adjust;
         std::vector<VALUE_TYPE> dist_src, dist_sink;
         std::vector<VALUE_TYPE> theo_sink_slack;
@@ -905,14 +917,34 @@ public:
                     else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SimpleTrashEdge>) { simple_trash_idx = ii; return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one); }
                     else if constexpr (std::is_same_v<T, ChainEdge>) {
-                        if (independent_trash)
+                        // On the chain the per-match shift cannot ride hop arcs;
+                        // only the SlopeDP backend prices independent trash
+                        // analytically (tau = C_exp + C_theo), so other solvers
+                        // must use the dense factory.
+                        if (independent_trash && !_use_slopedp())
                             throw std::runtime_error(
-                                "Independent asymmetric trash requires the dense factory "
-                                "(chain hop arcs cannot carry the per-match cost shift); "
-                                "build the network with force_dense_1d=True.");
+                                "Independent asymmetric trash on the 1-D chain requires "
+                                "the SlopeDP solver (chain hop arcs cannot carry the "
+                                "per-match cost shift); use SlopeDP, or build the "
+                                "network with force_dense_1d=True.");
                         return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
                     }
-                    else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
+                    // Independent trash + SlopeDP (chain): the solver prices trash
+                    // analytically and ignores these costs, but the residual
+                    // derivative search reads them.  It must see the residual of
+                    // the SHIFTED problem (matched unit worth s = C_exp + C_theo,
+                    // trash free, analytic bracket added outside): with no
+                    // matching arcs to carry -s, the shift moves to the matched-
+                    // mass carriers — emp-trash arcs cost +s here and src arcs
+                    // carry -/+s in the chain relay (_chain_src_shift).  Phantom
+                    // (theoretical trash) arcs stay 0 like the dense shifted net.
+                    else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>) {
+                        if (independent_trash)
+                            return _use_slopedp()
+                                ? (VALUE_TYPE)(_ind_c_exp_q + _ind_c_theo_q)
+                                : (VALUE_TYPE) quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
+                        return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
+                    }
                     else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
@@ -1171,23 +1203,36 @@ public:
         // trash channels (quantized prices; cap at M=0)
         struct Ch { VALUE_TYPE price; VALUE_TYPE cap0; int kind; };  // 0=exp,1=theo,2=simple
         std::vector<Ch> ch;
-        if (_sdp_c_exp >= 0)  ch.push_back({_sdp_c_exp, E, 0});
-        if (_sdp_c_theo >= 0) ch.push_back({_sdp_c_theo, T, 1});
-        if (_sdp_c_s >= 0)    ch.push_back({_sdp_c_s, std::numeric_limits<VALUE_TYPE>::max(), 2});
-        std::sort(ch.begin(), ch.end(), [](const Ch& a, const Ch& b) { return a.price < b.price; });
+        if (!independent_trash) {
+            if (_sdp_c_exp >= 0)  ch.push_back({_sdp_c_exp, E, 0});
+            if (_sdp_c_theo >= 0) ch.push_back({_sdp_c_theo, T, 1});
+            if (_sdp_c_s >= 0)    ch.push_back({_sdp_c_s, std::numeric_limits<VALUE_TYPE>::max(), 2});
+            std::sort(ch.begin(), ch.end(), [](const Ch& a, const Ch& b) { return a.price < b.price; });
+        }
         // No trash channel at all: the DP prices matching against the trash
         // alternative (finite tau), so it cannot represent the forced
         // full-matching of a trash-less balanced chain — a configuration
         // NetworkSimplex handles fine.  Say so, instead of the generic
         // "infeasible trash configuration" the trash_of() bookkeeping would
         // otherwise report for a perfectly feasible problem.
-        if (ch.empty() && F > 0)
+        if (!independent_trash && ch.empty() && F > 0)
             throw std::runtime_error(
                 "SlopeDP backend requires trash edges "
                 "(add_simple_trash/add_experimental_trash/"
                 "add_theoretical_trash before build()); "
                 "use the NetworkSimplex solver for trash-less chain networks.");
+        // Independent trash: every unmatched empirical unit pays C_exp and
+        // every unfilled theoretical unit pays C_theo, charged independently —
+        // trash_of(M) = C_exp*(E-M) + C_theo*(T-M), exactly affine in M, so
+        // the DP's constant marginal tau = C_exp + C_theo is exact (the
+        // annihilating channel greedy below is affine too, but only piecewise
+        // per price ordering; here there is no channel coupling at all).
         auto trash_of = [&](VALUE_TYPE M) -> W {
+            if (independent_trash) {
+                if (M > E || M > T)
+                    throw std::runtime_error("SlopeDP: matched mass exceeds supply.");
+                return (W)_ind_c_exp_q * (E - M) + (W)_ind_c_theo_q * (T - M);
+            }
             VALUE_TYPE need = F - M;
             if (need < 0) throw std::runtime_error("SlopeDP: matched mass exceeds supply.");
             W c = 0;
@@ -1277,7 +1322,11 @@ public:
 
         // channel amounts for M, then per-node distribution (greedy in order)
         VALUE_TYPE D = 0, PH = 0, SI = 0;
-        {
+        if (independent_trash) {
+            // All excess is disposed on its own side, no budget sharing.
+            D = E - M;
+            PH = T - M;
+        } else {
             VALUE_TYPE need = F - M;
             for (const auto& x : ch) {
                 if (need <= 0) break;
@@ -1318,7 +1367,12 @@ public:
                 _slope_flow[topo.left_arc_ids[g]]  = s[g] < 0 ? -s[g] : 0;
             }
         }
-        _slope_total = (VALUE_TYPE)total;
+        // Independent trash reports the SHIFTED total (transport - tau*M), the
+        // same convention as the dense factory's shifted matching costs:
+        // total_cost() then adds the analytic bracket E*C_exp + T*C_theo.
+        _slope_total = independent_trash
+            ? (VALUE_TYPE)(transport - (W)tau * M)
+            : (VALUE_TYPE)total;
         _slope_solved = true;
     }
 
@@ -1621,6 +1675,10 @@ public:
     mutable std::vector<LEMON_INDEX> _chain_src_arc, _chain_sink_arc,
                                      _chain_et_arc, _chain_tt_arc;   // -1 = absent
     mutable std::vector<VALUE_TYPE> _chain_src_cap;                  // fixed emp caps
+    // Independent trash (SlopeDP chain): the residual search runs on the
+    // shifted problem, where src arcs are matched-mass carriers and cost
+    // -s forward / +s reverse (s = C_exp + C_theo).  0 otherwise.
+    mutable VALUE_TYPE _chain_src_shift = 0;
 
     void _chain_build_arc_cache() const {
         const auto& topo = *_chain_topo;
@@ -1631,6 +1689,8 @@ public:
         _chain_et_arc.assign(K, -1);
         _chain_tt_arc.assign(K, -1);
         _chain_src_cap.assign(K, 0);
+        _chain_src_shift = independent_trash
+            ? (VALUE_TYPE)(_ind_c_exp_q + _ind_c_theo_q) : (VALUE_TYPE)0;
         // Static parts of the search state: trash costs (scaled — see below)
         // and the trash forward flags (trash arc caps are INF, so residual
         // forward capacity is a fixed property of arc existence).
@@ -1754,8 +1814,9 @@ public:
             for (size_t i = 0; i < K; ++i) {
                 const VALUE_TYPE d = dist[topo.order[i]];
                 if (d == INF) continue;
-                // Cost-0: reverse SrcToEmpiricalEdge, forward TheoreticalToSinkEdge.
-                if (has_src_rev[i])  update_min(dist[src_id],  d);
+                // Reverse SrcToEmpiricalEdge (+shift under independent trash,
+                // else cost 0); forward TheoreticalToSinkEdge (cost 0).
+                if (has_src_rev[i])  update_min(dist[src_id],  d + _chain_src_shift);
                 if (has_sink_fwd[i]) update_min(dist[sink_id], d);
                 // Forward EmpiricalTrashEdge (Emp→Sink, cost +C_exp).
                 if (exp_trash_fwd[i]) update_min(dist[sink_id], d + exp_trash_cost[i]);
@@ -1764,8 +1825,9 @@ public:
             }
             const VALUE_TYPE ds = dist[src_id], dk = dist[sink_id];
             for (size_t i = 0; i < K; ++i) {
-                // Cost-0: forward SrcToEmpiricalEdge, reverse TheoreticalToSinkEdge.
-                if (ds != INF && has_src_fwd[i])  update_min(dist[topo.order[i]], ds);
+                // Forward SrcToEmpiricalEdge (-shift under independent trash,
+                // else cost 0); reverse TheoreticalToSinkEdge (cost 0).
+                if (ds != INF && has_src_fwd[i])  update_min(dist[topo.order[i]], ds - _chain_src_shift);
                 if (dk != INF && has_sink_rev[i]) update_min(dist[topo.order[i]], dk);
                 // Forward TheoreticalTrashEdge (Source→Theo, cost +C_theo).
                 if (ds != INF && theo_trash_fwd[i]) update_min(dist[topo.order[i]], ds + theo_trash_cost[i]);
@@ -2121,12 +2183,13 @@ public:
         ctx.INF = std::numeric_limits<VALUE_TYPE>::max();
         ctx.supply_fixed = (lemon_empirical_intensity > lemon_theoretical_intensity);
         ctx.asymmetric = experimental_trash_added || theoretical_trash_added;
+        ctx.independent = independent_trash;
         const LEMON_INDEX sink_id = 1;
         const bool use_chain = has_chain_edges();
         const bool use_dijkstra = !use_chain &&
             (_use_lct() ? ns_lct_solver.has_value() : ns_solver.has_value());
-        const bool need_src  = !ctx.asymmetric || !ctx.supply_fixed;
-        const bool need_sink = !ctx.asymmetric ||  ctx.supply_fixed;
+        const bool need_src  = !ctx.asymmetric || !ctx.supply_fixed || ctx.independent;
+        const bool need_sink = !ctx.asymmetric ||  ctx.supply_fixed || ctx.independent;
         if (use_chain) {
             _chain_build_search_state();
             if (need_src)  ctx.dist_src  = _chain_run_search(0);
@@ -2177,10 +2240,15 @@ public:
 
     VALUE_TYPE _node_deriv(LEMON_INDEX node_id, const DerivContext& ctx) const {
         const VALUE_TYPE slack = ctx.theo_sink_slack[node_id];
-        if (slack != VALUE_TYPE(-1) && slack > 0 && ctx.supply_fixed)
+        if (slack != VALUE_TYPE(-1) && slack > 0 && ctx.supply_fixed && !ctx.independent)
             return VALUE_TYPE(0);
         VALUE_TYPE deriv;
-        if (ctx.asymmetric) {
+        if (ctx.independent) {
+            // Shifted marginal: min over the source augmentation and the
+            // residual cycle through the sink (see the DerivContext comment).
+            deriv = std::min(ctx.dist_src[node_id], ctx.dist_sink[node_id]);
+            if (deriv == ctx.INF) deriv = 0;
+        } else if (ctx.asymmetric) {
             deriv = ctx.supply_fixed ? ctx.dist_sink[node_id] : ctx.dist_src[node_id];
             if (deriv == ctx.INF) deriv = 0;
         } else {
@@ -2623,8 +2691,11 @@ public:
     // min(C_exp, C_theo), and the match-vs-dump threshold is C_exp + C_theo.
     // Implemented per subgraph by cost shifting (see the subgraph member
     // comment); the excess pricing is linear per node, so the subgraph
-    // decomposition and the isolated-node terms are exact.  Requires the
-    // dense factory; mutually exclusive with the other trash models.
+    // decomposition and the isolated-node terms are exact.  On the dense
+    // factory any solver works; on the 1-D chain factory only the SlopeDP
+    // backend supports it (it prices trash analytically — the per-match cost
+    // shift cannot ride chain hop arcs), enforced at build().  Mutually
+    // exclusive with the other trash models.
     void add_independent_asymmetric_trash(double C_exp, double C_theo) {
         if (built)
             throw std::runtime_error(
@@ -2634,11 +2705,6 @@ public:
         if (!(C_exp >= 0.0) || !(C_theo >= 0.0) || !std::isfinite(C_exp + C_theo))
             throw std::invalid_argument(
                 "add_independent_asymmetric_trash: costs must be finite and >= 0.");
-        if (count_edges_of_type<ChainEdge>() > 0)
-            throw std::runtime_error(
-                "add_independent_asymmetric_trash() requires the dense factory "
-                "(chain hop arcs cannot carry the per-match cost shift); "
-                "construct the network with force_dense_1d=True.");
         // Isolated (dead-end) nodes are charged the full per-unit costs by the
         // existing isolated-trash terms in total_cost()/derivatives.
         _isolated_exp_trash_cost = C_exp;

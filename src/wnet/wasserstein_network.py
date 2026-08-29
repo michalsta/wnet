@@ -266,9 +266,10 @@ class WassersteinNetwork:
         discarded empirical unit costs C_exp and every phantom-filled
         theoretical unit C_theo, charged independently — an excess pair costs
         C_exp + C_theo, never the annihilating model's min(C_exp, C_theo).
-        Requires the dense factory (forced automatically); exclusive with the
-        other trash models and with explicit chain semantics. Must be called
-        before build()."""
+        Solvable on the dense factory by any solver, and on the 1-D chain
+        factory by SlopeDP only (it prices the trash analytically; the
+        per-match cost shift cannot ride chain hop arcs). Exclusive with the
+        other trash models. Must be called before build()."""
         self._check_not_built("add_independent_asymmetric_trash")
         if (
             self._simple_trash_cost is not None
@@ -281,11 +282,11 @@ class WassersteinNetwork:
             )
         if self._independent_trash_costs is not None:
             raise RuntimeError("Independent trash already added.")
-        if self._explicit_split:
+        if self._explicit_split and not isinstance(self._solver, SlopeDP):
             raise ValueError(
-                "Independent asymmetric trash requires the dense factory; it "
-                "cannot be combined with explicit chain semantics "
-                "(split_distance)."
+                "Independent asymmetric trash on the chain (split_distance) "
+                "requires the SlopeDP solver; other solvers need the dense "
+                "factory (max_distance semantics)."
             )
         self._independent_trash_costs = (float(C_exp), float(C_theo))
 
@@ -350,6 +351,13 @@ class WassersteinNetwork:
                     f"solver {type(solver).__name__} cannot solve the chain "
                     "(use NetworkSimplex, CycleCanceling or SlopeDP)"
                 )
+            if self._independent_trash_costs is not None and not isinstance(
+                solver, SlopeDP
+            ):
+                problems.append(
+                    "independent asymmetric trash on the chain requires the "
+                    "SlopeDP solver"
+                )
             if problems:
                 raise ValueError(
                     "split_distance requests explicit chain semantics, but: "
@@ -378,8 +386,12 @@ class WassersteinNetwork:
             and chain_capable_solver
             and not self._force_dense_1d
             # Independent trash charges a per-matched-unit cost shift that
-            # cannot ride per-hop chain arcs: dense only.
-            and self._independent_trash_costs is None
+            # cannot ride per-hop chain arcs; only SlopeDP prices it
+            # analytically on the chain.
+            and (
+                self._independent_trash_costs is None
+                or isinstance(solver, SlopeDP)
+            )
             and self._cap_is_inf
         )
         if isinstance(self._solver, SlopeDP) and not chain_possible:
