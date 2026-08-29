@@ -313,3 +313,269 @@ if __name__ == "__main__":
         ok = run_toys()
         ok &= run_fuzz()
         sys.exit(0 if ok else 1)
+
+
+# --------------------------------------------------------------------------- #
+# Marginals: d(kernel profit)/d(one extra theo unit at block b), by oracle
+# re-solve and by the forward/backward interface formula (design stage 3).
+# --------------------------------------------------------------------------- #
+
+def marginal_gain_oracle(emp_blocks, theo_blocks, tau, cost, b_pos):
+    """OPT(theo + one unit at b_pos) - OPT(theo): the profit gain."""
+    base = sweep_dp(emp_blocks, theo_blocks, tau, cost)
+    plus = sweep_dp(emp_blocks, sorted(theo_blocks + [(b_pos, 1)]), tau, cost)
+    return plus - base
+
+
+def run_marginal_fuzz(n_trials=120, p=2.0, c_exp=0.5, c_theo=0.8125, seed=21):
+    """Validate that the true total-cost marginal of one extra theoretical
+    unit equals  C_theo - gain  (independent trash), against the wnet dense
+    factory marginal computed by unit finite difference on supplies."""
+    cost = lambda d: d ** p
+    tau = c_exp + c_theo
+    rng = np.random.default_rng(seed)
+    worst = 0.0
+    fails = 0
+    for trial in range(n_trials):
+        emp_b, theo_b = random_instance(rng, max_blocks=6, max_cnt=3)
+        # pick a probe position: an existing theo block or a fresh spot
+        if rng.random() < 0.5 and theo_b:
+            b_pos = theo_b[rng.integers(0, len(theo_b))][0]
+        else:
+            b_pos = float(rng.integers(0, 80)) * 0.25
+        gain = marginal_gain_oracle(emp_b, theo_b, tau, cost, b_pos)
+        marg = c_theo - gain
+        # reference: dense-factory total cost difference with the extra unit
+        E = sum(c for _, c in emp_b)
+        T = sum(c for _, c in theo_b)
+        base_true = c_exp * E + c_theo * T - sweep_dp(emp_b, theo_b, tau, cost)
+        plus_true = (c_exp * E + c_theo * (T + 1)
+                     - sweep_dp(emp_b, sorted(theo_b + [(b_pos, 1)]), tau, cost))
+        err = abs((plus_true - base_true) - marg)
+        worst = max(worst, err)
+        if err > 1e-9:
+            fails += 1
+    print(f"marginal identity fuzz: {n_trials} trials, {fails} failures, "
+          f"worst {worst:.2e}")
+    return fails == 0
+
+
+# --------------------------------------------------------------------------- #
+# Efficient marginals: forward + adjoint (completion) DP, both orientations.
+# gain(b) = best profit improvement from one extra theo unit at position z_b.
+# The extra unit matched to an emp on its LEFT is caught by the forward
+# orientation; matched on its RIGHT by the mirrored orientation; unmatched
+# contributes 0.  See design note stage 3.
+# --------------------------------------------------------------------------- #
+
+def _sweep_forward_store(events, tau, cost):
+    """Forward sweep storing per-event state.
+
+    Returns (states, opt) where states[i] = snapshot BEFORE event i:
+    dict(side -> (blocks list copy, V array copy)); states[n] = final.
+    """
+    sides = [_Side(), _Side()]
+
+    def snap():
+        return [
+            (list(sides[0].blocks), sides[0].V.copy()),
+            (list(sides[1].blocks), sides[1].V.copy()),
+        ]
+
+    states = []
+    for z, sigma, q in events:
+        states.append(snap())
+        own, opp = sides[sigma], sides[1 - sigma]
+        opp.nonincreasing()
+        K = len(opp.V) - 1
+        T = opp.rank_prefix_profits(z, tau, cost)
+        VT = opp.V + T
+        newVopp = np.empty(K + 1)
+        for g in range(K + 1):
+            hi = min(K, g + q)
+            newVopp[g] = np.max(VT[g:hi + 1]) - T[g]
+        flip = np.full(q + 1, -np.inf)
+        for j in range(min(K, q) + 1):
+            flip[q - j] = VT[j]
+        own.append_block(z, q)
+        for m in range(min(q, len(own.V) - 1) + 1):
+            if flip[m] > own.V[m]:
+                own.V[m] = flip[m]
+        opp.V = newVopp
+        best0 = max(sides[0].V[0], sides[1].V[0])
+        sides[0].V[0] = best0
+        sides[1].V[0] = best0
+    states.append(snap())
+    opt = float(max(sides[0].V.max(), sides[1].V.max()))
+    return states, opt
+
+
+def _adjoint_store(events, tau, cost, states):
+    """Completion values: comps[i][side] = array C(k) = best additional
+    profit from events i..n-1 given k pendings of `side` (origins = the
+    last k units of that side's prefix before event i, as recorded in
+    states[i])."""
+    n = len(events)
+    comps = [None] * (n + 1)
+    K0 = len(states[n][0][1]) - 1
+    K1 = len(states[n][1][1]) - 1
+    comps[n] = [np.zeros(K0 + 1), np.zeros(K1 + 1)]
+    for i in range(n - 1, -1, -1):
+        z, sigma, q = events[i]
+        own_s, opp_s = sigma, 1 - sigma
+        # sizes before event i
+        pre_own_blocks, pre_ownV = states[i][own_s]
+        pre_opp_blocks, pre_oppV = states[i][opp_s]
+        K_own = len(pre_ownV) - 1
+        K_opp = len(pre_oppV) - 1
+        C_after = comps[i + 1]
+        # T over opp pendings BEFORE event i vs z
+        side_tmp = _Side()
+        side_tmp.blocks = list(pre_opp_blocks)
+        T = side_tmp.rank_prefix_profits(z, tau, cost)
+        # --- opp side completion before event i ---
+        # (A) stay: from state k: drop d, match j <= q, land g = k - d - j.
+        #   value = T(kappa) - T(g) + C_after[opp](g), kappa = k - d in
+        #   [g, min(k, g+q)].  Prefix-max form:
+        #   H(kappa) = T(kappa) + max_{g in [kappa-q, kappa]} (C(g) - T(g))
+        #   C_pre(k) = max_{kappa <= k} H(kappa)
+        Copp_after = C_after[opp_s]
+        L = min(K_opp, len(Copp_after) - 1)
+        CT = np.array([Copp_after[g] - T[g] for g in range(L + 1)])
+        H = np.full(L + 1, -np.inf)
+        for kappa in range(L + 1):
+            lo = max(kappa - q, 0)
+            H[kappa] = T[kappa] + np.max(CT[lo:kappa + 1])
+        Copp_pre = np.full(K_opp + 1, -np.inf)
+        run = -np.inf
+        for k in range(K_opp + 1):
+            if k <= L:
+                run = max(run, H[k])
+            Copp_pre[k] = run
+        # (B) flip: drop k-j, match j <= min(q, k), keep m = q - j of the
+        # incoming block pending on side sigma.
+        Cown_after = C_after[own_s]
+        flip_best = np.full(K_opp + 1, -np.inf)
+        run = -np.inf
+        for j in range(min(q, K_opp) + 1):
+            m = q - j
+            if j <= L and m < len(Cown_after):
+                run = max(run, T[j] + Cown_after[m])
+            flip_best[j] = run
+        for k in range(K_opp + 1):
+            j_max = min(q, k)
+            Copp_pre[k] = max(Copp_pre[k], flip_best[j_max])
+        # --- own side completion before event i ---
+        # append up to q units then free drops: C_pre(m) = max_{m' <= m+q} C(m')
+        Cown_pre = np.full(K_own + 1, -np.inf)
+        pref = np.maximum.accumulate(Cown_after)
+        for m in range(K_own + 1):
+            idx = min(m + q, len(Cown_after) - 1)
+            Cown_pre[m] = pref[idx]
+        out = [None, None]
+        out[own_s] = Cown_pre
+        out[opp_s] = Copp_pre
+        comps[i] = out
+    return comps
+
+
+def _compose_with_extra(events, tau, cost, states, comps, b_idx, z):
+    """Best total profit with one extra theo unit at position z, where the
+    extra unit is consumed at event b_idx (a theo event at position z with
+    real count q -> q + 1), or remains unmatched."""
+    zb, sigma, q = events[b_idx]
+    assert sigma == 1 and abs(zb - z) == 0.0
+    qh = q + 1
+    opp_s = 0
+    pre_opp_blocks, pre_oppV = states[b_idx][opp_s]
+    K = len(pre_oppV) - 1
+    side_tmp = _Side()
+    side_tmp.blocks = list(pre_opp_blocks)
+    T = side_tmp.rank_prefix_profits(z, tau, cost)
+    Vt = pre_oppV.copy()
+    Vt = np.maximum.accumulate(Vt[::-1])[::-1]   # free drops
+    C_after = comps[b_idx + 1]
+    Copp_after = C_after[0]
+    Cown_after = C_after[1]
+    best = -np.inf
+    # (A') stay on emp side: match j <= qh, kappa = matched-from state,
+    # land g; complete with Copp_after(g).
+    L = min(K, len(Copp_after) - 1)
+    for kappa in range(K + 1):
+        for g in range(max(kappa - qh, 0), kappa + 1):
+            if g <= L:
+                best = max(best, Vt[kappa] + T[kappa] - T[g] + Copp_after[g])
+    # (B') flip: match j <= min(qh, K), keep m = qh - j theo pending.
+    # m real-representable states only (extra consumed => m <= q).
+    for j in range(min(qh, K) + 1):
+        m = qh - j
+        if m < len(Cown_after) and m <= q:
+            best = max(best, Vt[j] + T[j] + Cown_after[m])
+        # j with m == q + 1 would leave the EXTRA pending; that case is
+        # covered by the mirrored orientation.
+    return float(best)
+
+
+def marginal_gains_fb(emp_blocks, theo_blocks, tau, cost, probes):
+    """gain(z) for each probe position z, via forward+adjoint DP in both
+    orientations.  probes: list of positions (fresh or existing)."""
+    def orient(mirror):
+        eb = [(-p, c) for p, c in emp_blocks] if mirror else list(emp_blocks)
+        tb = [(-p, c) for p, c in theo_blocks] if mirror else list(theo_blocks)
+        pr = [-z for z in probes] if mirror else list(probes)
+        # build events with virtual q=0 theo events at fresh probe positions
+        ev = []
+        for pos, cnt in eb:
+            if cnt > 0:
+                ev.append((pos, 0, cnt))
+        tpos = {}
+        for pos, cnt in tb:
+            if cnt > 0:
+                tpos[pos] = tpos.get(pos, 0) + cnt
+        for z in pr:
+            tpos.setdefault(z, 0)
+        for pos, cnt in tpos.items():
+            ev.append((pos, 1, cnt))
+        ev.sort()
+        states, opt = _sweep_forward_store(ev, tau, cost)
+        comps = _adjoint_store(ev, tau, cost, states)
+        gains = {}
+        for z in pr:
+            b_idx = next(i for i, (p, s, _) in enumerate(ev)
+                         if s == 1 and p == z)
+            val = _compose_with_extra(ev, tau, cost, states, comps, b_idx, z)
+            gains[z] = val - opt
+        return gains, opt
+
+    g_fwd, opt = orient(False)
+    g_mir, opt2 = orient(True)
+    assert abs(opt - opt2) < 1e-9
+    return [max(g_fwd[z], g_mir[-z], 0.0) for z in probes]
+
+
+def run_fb_marginal_fuzz(n_trials=150, p=2.0, c_exp=0.5, c_theo=0.8125,
+                         seed=31):
+    cost = lambda d: d ** p
+    tau = c_exp + c_theo
+    rng = np.random.default_rng(seed)
+    worst = 0.0
+    fails = 0
+    for trial in range(n_trials):
+        emp_b, theo_b = random_instance(rng, max_blocks=6, max_cnt=3)
+        probes = sorted({b[0] for b in theo_b}
+                        | {float(rng.integers(0, 80)) * 0.25 for _ in range(3)})
+        gains = marginal_gains_fb(emp_b, theo_b, tau, cost, probes)
+        for z, gain in zip(probes, gains):
+            ref = marginal_gain_oracle(emp_b, theo_b, tau, cost, z)
+            err = abs(ref - gain)
+            worst = max(worst, err)
+            if err > 1e-9:
+                fails += 1
+                if fails <= 5:
+                    print(f"FAIL trial {trial} z={z}: fb={gain:.6f} "
+                          f"oracle={ref:.6f}")
+                    print(f"  emp={emp_b}")
+                    print(f"  theo={theo_b}")
+    print(f"fb-marginal fuzz: {n_trials} trials, {fails} failures, "
+          f"worst {worst:.2e}")
+    return fails == 0
