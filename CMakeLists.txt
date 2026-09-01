@@ -20,33 +20,98 @@ find_package(nanobind REQUIRED CONFIG)
 # frontend/backend pair must agree on compiler, C++ runtime and debug mode.
 option(WNET_NB_LINKED "Force a linked (NB_STATIC) nanobind build instead of split mode" OFF)
 
+# Is this a musl target? Ask _wnet_metadata.is_musl() -- the very predicate the
+# metadata provider uses to decide whether to declare nanobind-backend -- rather
+# than reimplementing the test here, so the build mode and the declared
+# dependency can never disagree about the platform. A failure is fatal on
+# purpose: guessing would mean silently building a mode that cannot be
+# installed, and the module ships in the sdist right beside this file, so it
+# being unimportable means the build is already broken.
+execute_process(
+    COMMAND "${Python_EXECUTABLE}" -c
+            "import sys;sys.path.insert(0,sys.argv[1]);import _wnet_metadata as m;print(int(m.is_musl()))"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+    RESULT_VARIABLE WNET_MUSL_RESULT
+    OUTPUT_VARIABLE WNET_IS_MUSL
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE WNET_MUSL_ERROR)
+if (NOT WNET_MUSL_RESULT EQUAL 0)
+    message(FATAL_ERROR
+        "wnet: could not determine the target C library via "
+        "_wnet_metadata.is_musl(): ${WNET_MUSL_ERROR}")
+endif()
+
 if (WNET_NB_LINKED)
     set(NB_MODE NB_STATIC)
+    set(NB_LINKED TRUE)
     set(NB_MODE_DESC "linked (WNET_NB_LINKED=ON)")
-    # A linked nanobind cannot target the 3.10/3.11 stable ABI -- that is what
-    # split mode is for -- and nanobind turns the combination into a hard
-    # configure error. WNET_NB_LINKED exists for local sanitizer and debug
-    # builds, not for producing distributable wheels, so drop the abi3 request
-    # rather than making the caller pass a second incantation.
-    if (DEFINED SKBUILD_SABI_VERSION AND NOT SKBUILD_SABI_VERSION STREQUAL ""
-        AND SKBUILD_SABI_VERSION VERSION_LESS "3.12")
-        message(WARNING
-            "WNET_NB_LINKED=ON overrides wheel.py-api=${SKBUILD_SABI_VERSION}: "
-            "a linked build is specific to Python ${Python_VERSION}. Any wheel "
-            "produced from this build is NOT abi3 and must not be published.")
-        set(SKBUILD_SABI_VERSION "")
-    endif()
 elseif (NOT Python_INTERPRETER_ID STREQUAL "Python")
     set(NB_MODE NB_STATIC)
+    set(NB_LINKED TRUE)
     set(NB_MODE_DESC "linked (${Python_INTERPRETER_ID} is not CPython)")
+elseif (WNET_IS_MUSL)
+    # nanobind-backend ships manylinux, macOS and Windows wheels only -- no
+    # musllinux wheel, and no sdist to build one from -- because auditwheel
+    # bundles a private libstdc++ while split mode needs the C++ runtime shared
+    # for exceptions to propagate. So split mode is unsatisfiable on musl by any
+    # route, and this branch must be tested before the free-threaded ones: a
+    # free-threaded musl interpreter has no backend to reach either.
+    set(NB_MODE NB_STATIC)
+    set(NB_LINKED TRUE)
+    set(NB_MODE_DESC "linked (musl libc: nanobind-backend publishes no musllinux wheel)")
 elseif (NB_ABI MATCHES "[0-9]t" AND Python_VERSION VERSION_LESS 3.15)
     set(NB_MODE NB_STATIC)
+    set(NB_LINKED TRUE)
     set(NB_MODE_DESC "linked (free-threaded Python ${Python_VERSION} predates abi3t)")
+elseif (NB_ABI MATCHES "[0-9]t")
+    # Free-threaded 3.15+. Split mode here is abi3t-only -- the classic Stable
+    # ABI does not exist for a free-threaded interpreter -- and nanobind makes
+    # FREE_THREADED mandatory for it, refusing to configure otherwise. That
+    # option declares Py_MOD_GIL_NOT_USED, so the module must not depend on the
+    # GIL for its own internal state.
+    # Verified for wnet_cpp: the only file-scope mutable symbol across all 23
+    # objects is the function-local `static nb::exception<InfeasibleException>
+    # infeasible_error` in wnet.cpp, constructed once during module exec and
+    # only read afterwards; everything else in .data/.bss is a vtable, typeinfo
+    # or libstdc++ fixture, and all solver state is per-network. Re-check with
+    # `nm -C --defined-only` on the objects if file-scope state is ever added.
+    # What this does NOT promise is that one WassersteinNetwork may be driven
+    # from two threads at once -- solve() mutates the instance and takes no
+    # lock, so a *shared* object stays the caller's business.
+    #
+    # This branch must also stay in step with pylmcf and the rest of the stack:
+    # mode is what decides whether these extensions can see each other's
+    # registered types, so one package falling back here while another goes
+    # split would break type sharing on that interpreter. is_nanobind_split()
+    # and the import-time check in __init__.py are the guard on that.
+    set(NB_MODE BACKEND_MODULE nanobind_backend BACKEND_PYPI nanobind-backend FREE_THREADED)
+    set(NB_LINKED FALSE)
+    set(NB_MODE_DESC "split, free-threaded abi3t (backend module: nanobind_backend)")
 else()
     set(NB_MODE BACKEND_MODULE nanobind_backend BACKEND_PYPI nanobind-backend)
+    set(NB_LINKED FALSE)
     set(NB_MODE_DESC "split (backend module: nanobind_backend)")
 endif()
 message(STATUS "wnet: nanobind build mode: ${NB_MODE_DESC}")
+
+# A linked nanobind cannot target the classic 3.10/3.11 stable ABI -- that is
+# precisely what split mode is for -- and nanobind turns the combination into a
+# hard configure error. Every linked path above can walk into it, not just
+# WNET_NB_LINKED: musl is the one that bites in practice, because there
+# wheel.py-api is honoured. (PyPy and free-threaded builds escape only because
+# scikit-build-core discards the classic abi3 request for them anyway.) Drop the
+# request rather than making the platform pass a second incantation.
+if (NB_LINKED AND DEFINED SKBUILD_SABI_VERSION
+    AND NOT SKBUILD_SABI_VERSION STREQUAL ""
+    AND SKBUILD_SABI_VERSION VERSION_LESS "3.12")
+    message(WARNING
+        "wnet: dropping the wheel.py-api=${SKBUILD_SABI_VERSION} stable-ABI "
+        "request -- this is a ${NB_MODE_DESC} build, which is specific to "
+        "Python ${Python_VERSION}. scikit-build-core still tags the wheel abi3, "
+        "so the wheel produced here is NOT portable across Python versions: "
+        "install it and discard it, never publish or reuse it.")
+    set(SKBUILD_SABI_VERSION "")
+endif()
 
 
 # Resolved after find_package(Python) so the probe uses the interpreter CMake

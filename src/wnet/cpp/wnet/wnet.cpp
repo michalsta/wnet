@@ -7,6 +7,18 @@
 #include "register_dim.hpp"
 
 NB_MODULE(wnet_cpp, m) {
+    // Build mode of *this* extension, read by is_nanobind_split() and by the
+    // import-time consistency check. NB_BACKEND_MODULE is defined only when
+    // nanobind_add_module() was given BACKEND_MODULE, i.e. only in split mode.
+    // Extensions in different modes carry different nanobind internals and
+    // silently lose sight of each other's registered types, so the mode has to
+    // be observable from Python rather than inferred from a filename.
+#if defined(NB_BACKEND_MODULE)
+    m.attr("nanobind_split") = true;
+#else
+    m.attr("nanobind_split") = false;
+#endif
+
     m.doc() = "WNet C++ imlementation module";
     // Surface C++ InfeasibleException as wnet_cpp.InfeasibleError, derived
     // from RuntimeError so existing `except RuntimeError` handlers still catch it.

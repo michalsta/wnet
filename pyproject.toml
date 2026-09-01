@@ -8,7 +8,10 @@ version = "1.3.0"
 description = "Tools for calculation of Wasserstein metric between distributions based on Network Flow algorithm"
 authors = [{ name="Michał Startek", email="michal.startek@mimuw.edu.pl" }]
 maintainers = [{ name="Michał Startek", email="michal.startek@mimuw.edu.pl" }]
-dependencies = ["pylmcf>=1.2.0", "numpy", "nanobind-backend>=1.0; implementation_name == 'cpython'"]
+# Resolved per-build by _wnet_metadata.py: nanobind-backend is required only
+# by a split-mode build, and no PEP 508 marker can see which mode CMake picked
+# (in particular none can say "not a free-threaded interpreter").
+dynamic = ["dependencies"]
 license = "MIT"
 license-files = ["LICENCE"]
 readme = "README.md"
@@ -32,6 +35,12 @@ viz = ["networkx", "pyvis>=0.3", "ipython"]
 pytest = ["pytest"]
 
 [tool.scikit-build]
+# scikit-build-core refuses dynamic-metadata plugins it did not ship itself
+# unless experimental mode is on ("experimental must be enabled currently to use
+# plugins not provided by scikit-build-core"). Needed for the
+# [tool.scikit-build.metadata.dependencies] provider at the end of this file.
+experimental = true
+
 # Split-mode extensions are stable-ABI builds. Declaring the target here gets the
 # wheel an `abi3` tag, and nanobind reads it back as SKBUILD_SABI_VERSION to set
 # the stable ABI floor, so the two can never drift apart. One wheel per platform
@@ -39,6 +48,16 @@ pytest = ["pytest"]
 # free-threaded interpreters, which is exactly when CMake falls back to a linked
 # build.
 wheel.py-api = "cp310"
+
+# A free-threaded interpreter has no classic Stable ABI, so the cp310 request
+# above is simply ignored there and the build would fall out as a version-locked
+# cp315t wheel. abi3t (PEP 803, 3.15+) is the free-threaded equivalent; ask for
+# it explicitly so that lane gets its own portable wheel. Deliberately *not*
+# "cp310.cp315t", which would emit a combined cp315-abi3.abi3t tag that a
+# GIL-enabled 3.15 would also match, quietly outranking the cp310-abi3 wheel.
+[[tool.scikit-build.overrides]]
+if.abi-flags = "t"
+wheel.py-api = "cp315t"
 
 [tool.scikit-build.sdist]
 exclude = [
@@ -61,3 +80,11 @@ markers = [
     "long: marks tests as long-running (deselect with '-m \"not long\"')",
 ]
 addopts = "-m 'not long'"
+
+# scikit-build-core reads dynamic-metadata providers from its own namespace,
+# keyed by the field they supply; a top-level [[tool.dynamic-metadata]] table is
+# silently ignored, which leaves `dynamic = ["dependencies"]` resolving to
+# nothing at all and ships a wheel that declares no dependencies whatsoever.
+[tool.scikit-build.metadata.dependencies]
+provider = "_wnet_metadata"
+provider-path = "."
