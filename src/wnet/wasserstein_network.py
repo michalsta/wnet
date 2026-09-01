@@ -575,13 +575,30 @@ class WassersteinNetwork:
         theo_grads : list of np.ndarray, each shape [N_k, DIM], dtype float64
             Gradient w.r.t. each theoretical spectrum's peak positions.
 
+        Works with the dense factory and with the 1D chain factory under
+        NetworkSimplex, CycleCanceling or SlopeDP.
+
         Raises
         ------
+        NotImplementedError
+            If the network uses the ConvexSweep backend. That solver reports no
+            per-arc flows, and the chain position gradient is derived from
+            per-gap fluxes, which only price transport additively for p == 1.
+            Use update_positions_and_solve() for warm re-solving, or the dense
+            factory for position gradients at p != 1.
         logic_error
-            If the network was built with the 1D chain factory (use force_dense_1d=True
-            or DIM >= 2 to get gradients in 1D).
+            If a chain subgraph is present and DIM > 1.
         """
         import numpy as np
+
+        if isinstance(self._solver, ConvexSweep):
+            raise NotImplementedError(
+                "update_positions_and_get_gradient() is not implemented for the "
+                "ConvexSweep backend: it reports no per-arc flows, and the chain "
+                "position gradient assumes additive gap costs (p == 1). Use "
+                "update_positions_and_solve() for warm re-solving, or the dense "
+                "factory for position gradients at p != 1."
+            )
 
         new_vec_base = new_base.vecdist
         new_vec_targets = [t.vecdist for t in new_targets]

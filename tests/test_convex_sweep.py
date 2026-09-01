@@ -31,14 +31,22 @@ def d1(pos, intens):
 def build(emp, theos, kind, independent, p, cap, intensity_scale=64.0):
     kw = dict(round_max_distance=False, intensity_scale=intensity_scale, p=p)
     if kind == "sweep":
-        W = WassersteinNetwork(emp, theos, DistanceMetric.LINF,
-                               split_distance=cap, solver=ConvexSweep(), **kw)
+        W = WassersteinNetwork(
+            emp,
+            theos,
+            DistanceMetric.LINF,
+            split_distance=cap,
+            solver=ConvexSweep(),
+            **kw,
+        )
     elif kind == "slope":
-        W = WassersteinNetwork(emp, theos, DistanceMetric.LINF,
-                               split_distance=cap, solver=SlopeDP(), **kw)
+        W = WassersteinNetwork(
+            emp, theos, DistanceMetric.LINF, split_distance=cap, solver=SlopeDP(), **kw
+        )
     else:
-        W = WassersteinNetwork(emp, theos, DistanceMetric.LINF, cap,
-                               force_dense_1d=True, **kw)
+        W = WassersteinNetwork(
+            emp, theos, DistanceMetric.LINF, cap, force_dense_1d=True, **kw
+        )
     W.set_cost_scaling(0)
     if independent:
         W.add_independent_asymmetric_trash(C_EXP, C_THEO)
@@ -54,6 +62,7 @@ def gen(rng, span, n_theos=None):
         n = rng.integers(1, maxb + 1)
         pos = np.unique(rng.integers(0, span, n)) * 0.25
         return d1(pos, rng.integers(1, maxc + 1, len(pos)).astype(float))
+
     emp = side()
     k = n_theos if n_theos is not None else int(rng.integers(1, 4))
     return emp, [side() for _ in range(k)]
@@ -62,8 +71,15 @@ def gen(rng, span, n_theos=None):
 def test_threshold_toy():
     # match iff c(d) <= tau: d^2 vs 1.3125 -> R ~ 1.1456
     for d, matched in [(1.0, True), (1.25, False)]:
-        W = build(d1([0.0], [1.0]), [d1([d], [1.0])], "sweep", True, 2.0, 5.0,
-                  intensity_scale=1.0)
+        W = build(
+            d1([0.0], [1.0]),
+            [d1([d], [1.0])],
+            "sweep",
+            True,
+            2.0,
+            5.0,
+            intensity_scale=1.0,
+        )
         W.solve([1.0])
         expect = d * d if matched else C_EXP + C_THEO
         assert W.total_cost() == pytest.approx(expect, rel=1e-9)
@@ -72,11 +88,18 @@ def test_threshold_toy():
 def test_selection_regression():
     # Design-note F4: pendings x1=0, x2=1, one theo at 1.05: match the nearer
     # x2 (d=0.05), trash x1 (C_EXP).
-    W = build(d1([0.0, 1.0], [1.0, 1.0]), [d1([1.05], [1.0])],
-              "sweep", True, 2.0, 5.0, intensity_scale=1.0)
+    W = build(
+        d1([0.0, 1.0], [1.0, 1.0]),
+        [d1([1.05], [1.0])],
+        "sweep",
+        True,
+        2.0,
+        5.0,
+        intensity_scale=1.0,
+    )
     W.solve([1.0])
     # x2 matched at cost 0.05^2, x1 trashed at C_EXP, theo fully filled.
-    assert W.total_cost() == pytest.approx(0.05 ** 2 + C_EXP, rel=1e-9)
+    assert W.total_cost() == pytest.approx(0.05**2 + C_EXP, rel=1e-9)
 
 
 @pytest.mark.parametrize("p", [2.0, 3.0, 1.5])
@@ -89,12 +112,14 @@ def test_independent_matches_dense_any_span(p):
         Wd = build(emp, theos, "dense", True, p, 5.0)
         Wc.solve(point)
         Wd.solve(point)
-        assert Wc.total_cost() == pytest.approx(Wd.total_cost(), rel=1e-9), (
-            f"p={p} trial {trial}")
+        assert Wc.total_cost() == pytest.approx(
+            Wd.total_cost(), rel=1e-9
+        ), f"p={p} trial {trial}"
         gc = np.asarray(Wc.spectrum_proportion_derivatives())
         gd = np.asarray(Wd.spectrum_proportion_derivatives())
-        np.testing.assert_allclose(gc, gd, rtol=1e-9, atol=1e-6,
-                                   err_msg=f"p={p} trial {trial}")
+        np.testing.assert_allclose(
+            gc, gd, rtol=1e-9, atol=1e-6, err_msg=f"p={p} trial {trial}"
+        )
 
 
 def test_annihilating_matches_dense_on_parity_spans():
@@ -102,18 +127,20 @@ def test_annihilating_matches_dense_on_parity_spans():
     # coupled annihilating model (partitions coincide, single run).
     rng = np.random.default_rng(202)
     for trial in range(40):
-        emp, theos = gen(rng, 16)   # span <= 4 < cap 5
+        emp, theos = gen(rng, 16)  # span <= 4 < cap 5
         point = list(rng.integers(6, 160, len(theos)) / 64.0)
         Wc = build(emp, theos, "sweep", False, 2.0, 5.0)
         Wd = build(emp, theos, "dense", False, 2.0, 5.0)
         Wc.solve(point)
         Wd.solve(point)
-        assert Wc.total_cost() == pytest.approx(Wd.total_cost(), rel=1e-9), (
-            f"trial {trial}")
+        assert Wc.total_cost() == pytest.approx(
+            Wd.total_cost(), rel=1e-9
+        ), f"trial {trial}"
         gc = np.asarray(Wc.spectrum_proportion_derivatives())
         gd = np.asarray(Wd.spectrum_proportion_derivatives())
-        np.testing.assert_allclose(gc, gd, rtol=1e-9, atol=1e-6,
-                                   err_msg=f"trial {trial}")
+        np.testing.assert_allclose(
+            gc, gd, rtol=1e-9, atol=1e-6, err_msg=f"trial {trial}"
+        )
 
 
 @pytest.mark.parametrize("independent", [True, False])
@@ -138,8 +165,13 @@ def test_gradient_matches_finite_difference():
     emp = d1([100.0, 100.4, 107.0], [2.0, 2.0, 1.0])
     theos = [d1([100.0], [3.0]), d1([104.0], [1.0])]
     W = WassersteinNetwork(
-        emp, theos, DistanceMetric.LINF, split_distance=8.0,
-        solver=ConvexSweep(), p=2.0, round_max_distance=False,
+        emp,
+        theos,
+        DistanceMetric.LINF,
+        split_distance=8.0,
+        solver=ConvexSweep(),
+        p=2.0,
+        round_max_distance=False,
         intensity_scale=1e6,
     )
     W.set_cost_scaling(0)
@@ -160,18 +192,85 @@ def test_gradient_matches_finite_difference():
         fd = (cost(up) - cost(base)) / eps
         # Tolerance bounded by the integer-supply staircase inside the finite
         # difference, not by the gradient.
-        assert fd == pytest.approx(grads[k], rel=5e-3, abs=1e-6), (
-            f"component {k}: fd={fd} vs grad={grads[k]}"
-        )
+        assert fd == pytest.approx(
+            grads[k], rel=5e-3, abs=1e-6
+        ), f"component {k}: fd={fd} vs grad={grads[k]}"
 
 
 def test_non_sweep_solver_on_p2_chain_rejected():
     emp, theos = d1([0.0], [1.0]), [d1([1.0], [1.0])]
-    W = WassersteinNetwork(emp, theos, DistanceMetric.LINF,
-                           split_distance=5.0, solver=SlopeDP(), p=2.0,
-                           round_max_distance=False)
+    W = WassersteinNetwork(
+        emp,
+        theos,
+        DistanceMetric.LINF,
+        split_distance=5.0,
+        solver=SlopeDP(),
+        p=2.0,
+        round_max_distance=False,
+    )
     # the wrapper's explicit-split validation rejects p != 1 without
     # ConvexSweep before the C++ gate is even reached
     W.add_simple_trash(1.0)
     with pytest.raises(ValueError, match="ConvexSweep"):
         W.build()
+
+
+# ---------------------------------------------------------------------------
+# Position updates
+#
+# The sweep prices pairs from real positions cached in _sweep_real_pos, which
+# the build reconstructs from the (immutable) ChainEdge costs. A position
+# update therefore has to hand the new positions down explicitly; getting that
+# wrong would silently re-solve at the old geometry, so parity against a fresh
+# build at the new positions is the property that matters.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("p", [1.5, 2.0, 3.0])
+@pytest.mark.parametrize("independent", [True, False])
+def test_update_positions_matches_fresh_build(p, independent):
+    emp = d1([0.0, 1.0, 4.0], [3.0, 2.0, 5.0])
+    theos = [d1([0.5, 3.0, 8.0], [2.0, 4.0, 3.0])]
+    moved_emp = d1([0.25, 1.75, 4.5], [3.0, 2.0, 5.0])
+    moved_theos = [d1([0.75, 3.25, 7.5], [2.0, 4.0, 3.0])]
+
+    W = build(emp, theos, "sweep", independent, p, cap=100.0)
+    W.solve()
+    W.update_positions_and_solve(moved_emp, moved_theos)
+
+    fresh = build(moved_emp, moved_theos, "sweep", independent, p, cap=100.0)
+    fresh.solve()
+    dense = build(moved_emp, moved_theos, "dense", independent, p, cap=100.0)
+    dense.solve()
+
+    assert W.total_cost() == pytest.approx(fresh.total_cost(), rel=1e-9)
+    assert W.total_cost() == pytest.approx(dense.total_cost(), rel=1e-9)
+
+
+def test_update_positions_uses_new_geometry():
+    # Guards the specific failure mode: reconstructing positions from the
+    # build-time ChainEdge costs would leave the cost unchanged after a move
+    # that provably alters it.
+    emp = d1([0.0], [2.0])
+    theos = [d1([1.0], [2.0])]
+    W = build(emp, theos, "sweep", True, 2.0, cap=100.0)
+    W.solve()
+    before = W.total_cost()
+    W.update_positions_and_solve(d1([0.0], [2.0]), [d1([3.0], [2.0])])
+    after = W.total_cost()
+    assert after != pytest.approx(before, rel=1e-9)
+    fresh = build(d1([0.0], [2.0]), [d1([3.0], [2.0])], "sweep", True, 2.0, cap=100.0)
+    fresh.solve()
+    assert after == pytest.approx(fresh.total_cost(), rel=1e-9)
+
+
+def test_update_positions_and_get_gradient_not_implemented():
+    # The chain position gradient is built on per-gap fluxes, which the sweep
+    # neither reports nor could price additively for p != 1.  It must say so
+    # rather than fall through to an unrelated error.
+    emp = d1([0.0, 1.0], [2.0, 1.0])
+    theos = [d1([0.5, 2.0], [1.0, 2.0])]
+    W = build(emp, theos, "sweep", True, 2.0, cap=100.0)
+    W.solve()
+    with pytest.raises(NotImplementedError, match="ConvexSweep"):
+        W.update_positions_and_get_gradient(emp, theos)

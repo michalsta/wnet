@@ -2153,6 +2153,11 @@ public:
         return _chain_topo.has_value() ? _chain_topo->order : empty;
     }
 
+    // True when this subgraph is solved by the ConvexSweep backend, which
+    // reports no per-arc flows and so cannot feed the chain position-gradient
+    // accumulator.
+    bool uses_convex_sweep() const { return _use_sweep(); }
+
     // Accumulate position gradients from this subgraph into caller-owned spans.
     // emp_grad is flat [N_emp * DIM] row-major; theo_grads[s] is [N_s * DIM] row-major.
     // Caller must zero both before the first call (multiple subgraphs accumulate additively).
@@ -2260,7 +2265,15 @@ public:
     // new_costs_per_edge_idx[i] is the new cost for edge i; entries for other
     // edge types (SrcToEmpirical, TheoreticalToSink, trash, ...) are ignored.
     // Precondition: build() and at least one solve() must have been called.
-    void apply_new_costs(const std::vector<VALUE_TYPE>& new_costs_per_edge_idx) {
+    //
+    // new_chain_positions, when supplied, holds the updated real 1-D positions in
+    // chain order — one per get_chain_order() entry, which is the same indexing
+    // _sdp_build_cache() assigns.  The ConvexSweep backend requires them: it
+    // prices pairs from the real positions in _sweep_real_pos, and
+    // _sweep_build_pos() reconstructs those from the ChainEdge cost members,
+    // which are const and so cannot be refreshed in place by a position update.
+    void apply_new_costs(const std::vector<VALUE_TYPE>& new_costs_per_edge_idx,
+                         const std::vector<double>* new_chain_positions = nullptr) {
         if (!built)
             throw std::runtime_error("apply_new_costs() must be called after build().");
         if (new_costs_per_edge_idx.size() != edges.size())
@@ -2283,7 +2296,42 @@ public:
             ++_solution_version;
             return;
         }
+        if (_use_sweep()) {
+            // Same as SlopeDP for the DP cache (its cluster segmentation derives
+            // from gap_cost), plus the real positions the sweep prices from.
+            _sdp_cache_built = false;
+            _sweep_pos_built = false;
+            _sdp_build_cache();
+            _refresh_sweep_positions(new_chain_positions);
+            _sweep_solve(node_supply_map[lemon_graph.nodeFromId(0)]);
+            ++_solution_version;
+            return;
+        }
         _run_solver(/*costs_changed=*/true);
+    }
+
+    // Rebuild _sweep_real_pos from caller-supplied real positions rather than
+    // from the immutable ChainEdge costs.  Keeps the build-time representation
+    // exactly — the prefix sum of |gap| from an origin of 0, so a descending
+    // chain is stored ascending just as _sweep_build_pos() would store it.
+    void _refresh_sweep_positions(const std::vector<double>* chain_pos) {
+        const size_t P = _sdp_emp_cap.size();
+        if (!_chain_topo.has_value() || P < 2) {
+            // No chain to walk: _sweep_build_pos() leaves every position at the
+            // origin here too.
+            _sweep_real_pos.assign(P, 0.0);
+            _sweep_pos_built = true;
+            return;
+        }
+        if (chain_pos == nullptr || chain_pos->size() != P)
+            throw std::runtime_error(
+                "ConvexSweep position update requires the new chain positions, "
+                "one per chain node; none were supplied.");
+        _sweep_real_pos.assign(P, 0.0);
+        for (size_t i = 1; i < P; ++i)
+            _sweep_real_pos[i] =
+                _sweep_real_pos[i - 1] + std::abs((*chain_pos)[i] - (*chain_pos)[i - 1]);
+        _sweep_pos_built = true;
     }
 
     // Dijkstra variant of residual shortest-path using NetworkSimplex potentials.
@@ -3517,6 +3565,9 @@ public:
             // monotone; a non-monotone result means peaks have genuinely crossed
             // and the topology is no longer valid.
             // nodes[i].get_id() == i by construction, so sg_nodes[nid] is a direct lookup.
+            // Kept for apply_new_costs(): the ConvexSweep backend prices pairs
+            // from real positions and cannot recover them from the edge costs.
+            const std::vector<double>* chain_positions = nullptr;
             const auto& chain_order = sg.get_chain_order();
             if (chain_order.size() >= 2) {
                 auto& chain_pos = sg.chain_pos_scratch();
@@ -3538,6 +3589,7 @@ public:
                     throw std::invalid_argument(
                         "update_positions_and_solve(): new positions violate the chain's sorted "
                         "order (peaks have crossed). Rebuild the network for the new positions.");
+                chain_positions = &chain_pos;
             }
 
             // Compute new edge costs using the pre-allocated scratch buffer.
@@ -3573,7 +3625,7 @@ public:
                 // have position-independent costs; apply_new_costs ignores them (new_costs[ii] = 0).
             }
 
-            sg.apply_new_costs(new_costs);
+            sg.apply_new_costs(new_costs, chain_positions);
         }
         // _last_point (spectrum proportions) is unchanged — intensities are fixed.
     }
@@ -3607,6 +3659,22 @@ public:
         std::vector<std::span<double>> theo_grads
     ) {
         static constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
+        // Refuse before mutating anything, so a rejected call is a no-op.
+        // accumulate_position_gradients_chain() reads the per-gap fluxes, which
+        // ConvexSweep does not produce; and the gap-flux model it is built on is
+        // p == 1 only by construction (for p > 1 a unit crossing a gap of width a
+        // after travelling t pays c(t+a) - c(t), so units sharing a gap owe
+        // different amounts -- see docs/wp_chain_design.md section 2, which is
+        // why the sweep exists at all).  A sweep-native position gradient must
+        // differentiate the monotone coupling, not the gaps.
+        for (const auto& sg_ptr : flow_subgraphs)
+            if (sg_ptr->uses_convex_sweep())
+                throw std::runtime_error(
+                    "update_positions_and_get_gradient() is not implemented for the "
+                    "ConvexSweep backend: it reports no per-arc flows, and the chain "
+                    "position gradient assumes additive gap costs (p == 1). Use "
+                    "update_positions_and_solve() for warm re-solving, or the SlopeDP "
+                    "backend (p == 1) / the dense factory for position gradients.");
         update_positions_and_solve<Distribution_t, DistMetric>(new_empirical, new_theoretical);
         for (auto& sg_ptr : flow_subgraphs) {
             if (sg_ptr->has_chain_edges()) {
