@@ -72,7 +72,14 @@ exclude = [
     "df.py",
     "example.py",
     "reinstall.sh",
+    "reinstall_ubsan.sh",
     ".coverage",
+    # Development scaffolding, instructions to the coding assistant, and local
+    # editor settings: none of it builds anything or is referenced by
+    # CMakeLists.txt. (_wnet_metadata.py stays: the build reads it.)
+    "prototypes/",
+    "CLAUDE.md",
+    ".claude/",
 ]
 
 [tool.pytest.ini_options]
