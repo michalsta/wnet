@@ -19,6 +19,7 @@ from wnet.wasserstein import TruncatedWassersteinDistance, WassersteinDistance
 
 try:
     import networkx  # noqa: F401
+
     HAS_NX = True
 except ImportError:
     HAS_NX = False
@@ -28,6 +29,7 @@ except ImportError:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _d1(pos, intens):
     return Distribution_1D(np.array(pos, dtype=float), np.array(intens, dtype=float))
 
@@ -35,6 +37,7 @@ def _d1(pos, intens):
 # ---------------------------------------------------------------------------
 # Distribution construction validation
 # ---------------------------------------------------------------------------
+
 
 def test_distribution_rejects_1d_positions():
     with pytest.raises(ValueError, match="2D array"):
@@ -60,6 +63,7 @@ def test_distribution_rejects_high_dimension():
 # Distribution_1D validation
 # ---------------------------------------------------------------------------
 
+
 def test_distribution_1d_rejects_2d_positions():
     with pytest.raises(ValueError, match="1D"):
         Distribution_1D(np.array([[1.0, 2.0]]), np.array([1.0, 1.0]))
@@ -83,6 +87,7 @@ def test_distribution_1d_accepts_lists():
 # ---------------------------------------------------------------------------
 # Distribution utility methods
 # ---------------------------------------------------------------------------
+
 
 def test_n_highest():
     d = _d1([1.0, 2.0, 3.0], [10.0, 30.0, 20.0])
@@ -138,6 +143,7 @@ def test_as_distribution_returns_base():
 #
 # All four are implemented in C++ and return a new (immutable) Distribution.
 # ---------------------------------------------------------------------------
+
 
 def test_sorted_by_positions_orders_lexicographically():
     d = _d1([3.0, 1.0, 2.0], [30.0, 10.0, 20.0])
@@ -297,6 +303,7 @@ def test_binned_multidim_bins_every_axis():
 # LinearCombination: weighted linear combination Σ wᵢ·dᵢ (masserstein ScalarProduct)
 # ---------------------------------------------------------------------------
 
+
 def test_linear_combination_weighted_combination():
     a = _d1([1.0, 2.0], [10.0, 20.0])
     b = _d1([2.0, 3.0], [5.0, 7.0])
@@ -404,6 +411,7 @@ def test_str_contains_dimension():
 # Distribution pickle round-trip
 # ---------------------------------------------------------------------------
 
+
 def test_distribution_pickle_roundtrip():
     d = _d1([1.0, 2.0, 3.0], [5.0, 10.0, 15.0])
     d2 = pickle.loads(pickle.dumps(d))
@@ -414,6 +422,7 @@ def test_distribution_pickle_roundtrip():
 # ---------------------------------------------------------------------------
 # WassersteinDistance (high-level function)
 # ---------------------------------------------------------------------------
+
 
 def test_wasserstein_distance_matched():
     d1 = _d1([0.0], [5.0])
@@ -442,6 +451,7 @@ def test_wasserstein_distance_unequal_intensities_raises():
 # TruncatedWassersteinDistance
 # ---------------------------------------------------------------------------
 
+
 def test_truncated_wasserstein_distance_basic():
     d1 = _d1([0.0], [5.0])
     d2 = _d1([2.0], [5.0])
@@ -461,6 +471,7 @@ def test_truncated_wasserstein_unequal_intensities_raises():
 # WassersteinNetwork construction guards
 # ---------------------------------------------------------------------------
 
+
 def test_wasserstein_network_str():
     d1 = _d1([0.0], [1.0])
     d2 = _d1([1.0], [1.0])
@@ -475,8 +486,9 @@ def test_unknown_method_raises():
     d1 = _d1([0.0], [1.0])
     d2 = _d1([1.0], [1.0])
     with pytest.raises(ValueError, match="Unknown method"):
-        WassersteinNetwork(d1, [d2], DistanceMetric.L1, max_distance=10,
-                           method="bogus_algo")
+        WassersteinNetwork(
+            d1, [d2], DistanceMetric.L1, max_distance=10, method="bogus_algo"
+        )
 
 
 def test_fractional_max_distance_warns():
@@ -493,6 +505,7 @@ def test_fractional_max_distance_warns():
 # ---------------------------------------------------------------------------
 # WassersteinNetwork subgraph methods
 # ---------------------------------------------------------------------------
+
 
 def _solved_network():
     d1 = _d1([0.0, 5.0], [3.0, 2.0])

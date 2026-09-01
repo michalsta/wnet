@@ -46,7 +46,6 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-
 # --------------------------------------------------------------------------- #
 # Visual grammar — kept consistent across all three schemes so a reader who
 # learns the colours once can read every picture.
@@ -54,12 +53,12 @@ from typing import Optional
 
 _ROLE_STYLE = {
     # role            colour     border      shape        base size
-    "source":      ("#43a047", "#1b5e20", "diamond",    22),
-    "sink":        ("#e53935", "#8e0000", "diamond",    22),
-    "empirical":   ("#1e88e5", "#0d47a1", "dot",        16),
-    "theoretical": ("#fb8c00", "#e65100", "square",     16),
-    "trash":       ("#9e9e9e", "#424242", "triangleDown", 18),
-    "other":       ("#b0bec5", "#546e7a", "dot",        14),
+    "source": ("#43a047", "#1b5e20", "diamond", 22),
+    "sink": ("#e53935", "#8e0000", "diamond", 22),
+    "empirical": ("#1e88e5", "#0d47a1", "dot", 16),
+    "theoretical": ("#fb8c00", "#e65100", "square", 16),
+    "trash": ("#9e9e9e", "#424242", "triangleDown", 18),
+    "other": ("#b0bec5", "#546e7a", "dot", 14),
 }
 
 _LAYER_OF_ROLE = {"source": 0, "empirical": 1, "theoretical": 2, "sink": 3}
@@ -71,12 +70,12 @@ _TRASH_SMOOTH = {"type": "curvedCCW", "roundness": 0.65}
 
 # Palette for the structure view, keyed on the semantic kind of an arc.
 _STRUCT_EDGE_STYLE = {
-    "supply":    ("#90a4ae", False),   # source -> empirical  (grey, solid)
-    "demand":    ("#90a4ae", False),   # theoretical -> sink  (grey, solid)
-    "match":     ("#5c6bc0", False),   # empirical -> theoretical (indigo)
-    "trash":     ("#8d6e63", True),    # any trash arc (brown, dashed)
-    "chain":     ("#ab47bc", True),    # 1D chain adjacency arc (purple, dashed)
-    "other":     ("#b0bec5", False),
+    "supply": ("#90a4ae", False),  # source -> empirical  (grey, solid)
+    "demand": ("#90a4ae", False),  # theoretical -> sink  (grey, solid)
+    "match": ("#5c6bc0", False),  # empirical -> theoretical (indigo)
+    "trash": ("#8d6e63", True),  # any trash arc (brown, dashed)
+    "chain": ("#ab47bc", True),  # 1D chain adjacency arc (purple, dashed)
+    "other": ("#b0bec5", False),
 }
 
 
@@ -151,6 +150,7 @@ def _edge_kind(g, u, v) -> str:
 # Node / tooltip construction
 # --------------------------------------------------------------------------- #
 
+
 def _node_label(node_id, role, data) -> str:
     if role == "source":
         return "source"
@@ -218,6 +218,7 @@ def _add_nodes(net, g):
 # --------------------------------------------------------------------------- #
 # pyvis network construction + inline rendering
 # --------------------------------------------------------------------------- #
+
 
 def _new_network(height, width, hierarchical, physics, smooth_roundness=0.0):
     from pyvis.network import Network
@@ -323,7 +324,9 @@ def _render(net, height, filename: Optional[str], legend_html: str = ""):
     import warnings
 
     with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="Consider using IPython.display.IFrame")
+        warnings.filterwarnings(
+            "ignore", message="Consider using IPython.display.IFrame"
+        )
         return HTML(legend_html + iframe)
 
 
@@ -338,6 +341,7 @@ def _to_graph(obj):
 # Legends — rendered as an HTML caption card *above* the graph iframe (so they
 # live in the notebook output, not inside the vis canvas).
 # --------------------------------------------------------------------------- #
+
 
 def _sw_node(shape, colour) -> str:
     char = _SHAPE_CHAR.get(shape, "●")
@@ -374,7 +378,7 @@ def _legend_html(groups, note=None):
         cells = "".join(
             f'<span style="display:inline-flex;align-items:center;gap:5px;'
             f'margin-right:15px;white-space:nowrap">{sw}'
-            f'<span>{txt}</span></span>'
+            f"<span>{txt}</span></span>"
             for sw, txt in items
         )
         rows.append(
@@ -389,7 +393,7 @@ def _legend_html(groups, note=None):
     return (
         '<div style="font:13px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;'
         "color:#263238;background:#fafafa;border:1px solid #cfd8dc;"
-        "border-bottom:none;border-radius:8px 8px 0 0;padding:8px 12px\">"
+        'border-bottom:none;border-radius:8px 8px 0 0;padding:8px 12px">'
         f"{''.join(rows)}{note_html}</div>"
     )
 
@@ -397,6 +401,7 @@ def _legend_html(groups, note=None):
 # --------------------------------------------------------------------------- #
 # Scheme 1 — structure
 # --------------------------------------------------------------------------- #
+
 
 def draw_network(
     graph,
@@ -437,9 +442,7 @@ def draw_network(
         cost = _cost(data)
         cap = data.get("capacity")
         title = (
-            f"{kind}: {u} → {v}"
-            f"\nunit cost: {_fmt(cost)}"
-            f"\ncapacity: {_fmt(cap)}"
+            f"{kind}: {u} → {v}" f"\nunit cost: {_fmt(cost)}" f"\ncapacity: {_fmt(cap)}"
         )
         label = f"c={_fmt(cost)}/κ={_fmt(cap)}" if edge_labels else None
         kwargs = dict(color=colour, dashes=dashed, width=1.6, title=title, label=label)
@@ -454,7 +457,9 @@ def draw_network(
     if "chain" in kinds:
         edge_items.append((_sw_edge("#ab47bc", dashed=True), "chain (1D)"))
     if "trash" in kinds:
-        edge_items.append((_sw_edge("#8d6e63", dashed=True, curved=True), "trash (discard)"))
+        edge_items.append(
+            (_sw_edge("#8d6e63", dashed=True, curved=True), "trash (discard)")
+        )
     legend = _legend_html(
         [("nodes", _node_legend_items(g)), ("arcs", edge_items)],
         note="hover for cost / capacity  ·  drag nodes to separate  ·  node size ∝ intensity",
@@ -466,13 +471,14 @@ def draw_network(
 # Scheme 2 — solved flow
 # --------------------------------------------------------------------------- #
 
+
 def _flow_edge_color(flow, cap):
     """Colour arcs by how loaded they are; grey+dashed when unused."""
     if flow <= 0:
-        return "#cfd8dc", True                      # unused: faint, dashed
+        return "#cfd8dc", True  # unused: faint, dashed
     if cap is not None and flow >= cap:
-        return "#d81b60", False                     # saturated bottleneck: pink-red
-    return "#1e88e5", False                          # carrying flow: blue
+        return "#d81b60", False  # saturated bottleneck: pink-red
+    return "#1e88e5", False  # carrying flow: blue
 
 
 def draw_flow(
@@ -540,6 +546,7 @@ def draw_flow(
 # --------------------------------------------------------------------------- #
 # Scheme 3 — residual network
 # --------------------------------------------------------------------------- #
+
 
 def residual_from_flow(graph):
     """Build the residual network of a *solved* flow as a ``networkx.MultiDiGraph``.
@@ -610,10 +617,10 @@ def draw_residual(
         cost = _cost(data)
         rescap = data.get("rescap")
         if kind == "reverse":
-            colour, dashed = "#fb8c00", True     # cancellable flow: orange dashed
+            colour, dashed = "#fb8c00", True  # cancellable flow: orange dashed
             head = "cancel up to"
         else:
-            colour, dashed = "#00897b", False    # spare capacity: teal solid
+            colour, dashed = "#00897b", False  # spare capacity: teal solid
             head = "push up to"
         neg = "  ⚠ negative cost" if cost < 0 else ""
         title = (
@@ -623,7 +630,9 @@ def draw_residual(
             f"\nresidual cost: {_fmt(cost)}"
         )
         label = _fmt(cost) if edge_labels else None
-        net.add_edge(u, v, color=colour, dashes=dashed, width=2.0, title=title, label=label)
+        net.add_edge(
+            u, v, color=colour, dashes=dashed, width=2.0, title=title, label=label
+        )
     edge_items = [
         (_sw_edge("#00897b"), "forward — spare capacity"),
         (_sw_edge("#fb8c00", dashed=True), "reverse — cancellable flow (−cost)"),

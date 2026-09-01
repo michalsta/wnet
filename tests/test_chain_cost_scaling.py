@@ -40,7 +40,8 @@ def test_trashless_chain_picks_auto_cost_scale():
     # Trash-less chain network + auto cost scaling: the gap costs alone must
     # drive the scale choice (used to stay at 1).
     net = WassersteinNetwork(
-        d1([0.0, 1.3], [2.0, 3.0]), [d1([0.6, 2.0], [4.0, 1.0])],
+        d1([0.0, 1.3], [2.0, 3.0]),
+        [d1([0.6, 2.0], [4.0, 1.0])],
         DistanceMetric.L1,
     )
     net.set_cost_scaling()
@@ -53,7 +54,8 @@ def test_trashless_chain_picks_auto_cost_scale():
 def test_legacy_integer_chain_keeps_scale_one():
     # Without set_cost_scaling, p == 1 stays in legacy truncation mode.
     net = WassersteinNetwork(
-        d1([0.0, 5.0], [2.0, 3.0]), [d1([1.0, 9.0], [4.0, 1.0])],
+        d1([0.0, 5.0], [2.0, 3.0]),
+        [d1([1.0, 9.0], [4.0, 1.0])],
         DistanceMetric.L1,
     )
     net.build()
@@ -65,9 +67,7 @@ def test_legacy_integer_chain_keeps_scale_one():
 def test_fractional_gap_priced_exactly():
     # The canonical symptom: two unit masses 0.6 apart must cost 0.6, not 1
     # (llround at scale 1) and not 0 (legacy truncation).
-    w = WassersteinDistance(
-        d1([0.0], [1.0]), d1([0.6], [1.0]), DistanceMetric.L1
-    )
+    w = WassersteinDistance(d1([0.0], [1.0]), d1([0.6], [1.0]), DistanceMetric.L1)
     assert w == pytest.approx(0.6, rel=1e-12)
 
 
@@ -89,9 +89,7 @@ def test_fractional_chain_matches_dense_and_reference():
             continue
         D1, D2 = d1(pos1, i1), d1(pos2, i2)
         w_chain = WassersteinDistance(D1, D2, DistanceMetric.L1)
-        w_dense = WassersteinDistance(
-            D1, D2, DistanceMetric.L1, force_dense_1d=True
-        )
+        w_dense = WassersteinDistance(D1, D2, DistanceMetric.L1, force_dense_1d=True)
         ref = w1_reference(pos1, i1, pos2, i2)
         assert w_chain == pytest.approx(w_dense, rel=1e-9)
         assert w_chain == pytest.approx(ref, rel=1e-9)
@@ -114,9 +112,7 @@ def test_integer_positions_stay_bit_exact_with_legacy():
             continue
         D1, D2 = d1(pos1, i1), d1(pos2, i2)
         w_chain = WassersteinDistance(D1, D2, DistanceMetric.L1)
-        w_dense = WassersteinDistance(
-            D1, D2, DistanceMetric.L1, force_dense_1d=True
-        )
+        w_dense = WassersteinDistance(D1, D2, DistanceMetric.L1, force_dense_1d=True)
         ref = w1_reference(pos1, i1, pos2, i2)
         assert w_chain == w_dense
         assert w_chain == ref

@@ -164,7 +164,7 @@ def TruncatedWassersteinDistance(
     if enable_cost_scaling:
         W.set_cost_scaling()
     # Trash cost is in W_p**p units, matching the d**p matching-edge costs.
-    W.add_simple_trash(max_distance ** p)
+    W.add_simple_trash(max_distance**p)
     W.build()
     W.solve()
     return W.total_cost() ** (1.0 / p)

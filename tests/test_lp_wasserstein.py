@@ -16,7 +16,6 @@ from wnet.wasserstein_network import WassersteinNetwork
 from wnet.wasserstein import TruncatedWassersteinDistance
 from wnet.wnet_cpp import CWassersteinNetworkFactory
 
-
 BIG = 10**12
 # solve() requires trash edges; this per-unit cost is far above any matching
 # cost in these tests, so trash is never used and total_cost is the pure
@@ -132,7 +131,7 @@ def _expected_position_grads(base_pos, theo_pos, flows, p):
         d = np.linalg.norm(delta)
         if d == 0:
             continue
-        g = delta / d                       # grad_x of L2
+        g = delta / d  # grad_x of L2
         factor = p * d ** (p - 1)
         contrib = fl * factor * g
         emp[e] += contrib
@@ -184,6 +183,7 @@ def test_signal_part_derivative_bruteforce():
 # back out.  p == 1 stays at scale 1 with truncation (bit-exact legacy).
 # ==========================================================================
 
+
 def test_scale_factor_is_one_for_p1():
     base = Distribution_1D(np.array([0.0, 10.0]), np.array([1, 1]))
     target = Distribution_1D(np.array([3.0, 12.0]), np.array([1, 1]))
@@ -211,8 +211,8 @@ def test_p1_float_equals_p1_int():
 @pytest.mark.parametrize(
     "p, g1, g2, expected",
     [
-        (1.5, 4.0, 9.0, 4.0**1.5 + 9.0**1.5),   # 8 + 27 = 35
-        (2.5, 4.0, 9.0, 4.0**2.5 + 9.0**2.5),   # 32 + 243 = 275
+        (1.5, 4.0, 9.0, 4.0**1.5 + 9.0**1.5),  # 8 + 27 = 35
+        (2.5, 4.0, 9.0, 4.0**2.5 + 9.0**2.5),  # 32 + 243 = 275
     ],
 )
 def test_half_integer_exact_oracle(p, g1, g2, expected):

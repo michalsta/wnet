@@ -1,4 +1,5 @@
 """InfeasibleError: trash-less quantization imbalance must throw, never requantize."""
+
 import numpy as np
 import pytest
 

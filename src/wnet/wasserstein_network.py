@@ -6,7 +6,6 @@ from collections.abc import Sequence
 
 import numpy as np
 
-
 _NODE_META_KEYS = {
     "peak_idx": ("peak_idx", int),
     "spectrum_id": ("spectrum_id", int),
@@ -28,6 +27,7 @@ def _parse_node_meta(node_str: str) -> dict:
         if m:
             meta[key] = cast(m.group(1))
     return meta
+
 
 from wnet.wnet_cpp import (
     CWassersteinNetwork,
@@ -99,25 +99,27 @@ class WassersteinNetwork:
     # C++ methods reachable directly on the wrapper once build() has run
     # (previously bound-method aliases assigned in __init__; delegated lazily
     # now that the C++ network is created in build()).
-    _CPP_DELEGATES = frozenset({
-        "solve",
-        "scale_factor",
-        "intensity_scale_factor",
-        "get_subgraph",
-        "no_subgraphs",
-        "flows_for_target",
-        "count_empirical_nodes",
-        "count_theoretical_nodes",
-        "matching_density",
-        "lemon_to_string",
-        "count_matching_edges",
-        "count_theoretical_to_sink_edges",
-        "count_src_to_empirical_edges",
-        "count_simple_trash_edges",
-        "count_chain_edges",
-        "no_theoretical_spectra",
-        "theoretical_spectra_sizes",
-    })
+    _CPP_DELEGATES = frozenset(
+        {
+            "solve",
+            "scale_factor",
+            "intensity_scale_factor",
+            "get_subgraph",
+            "no_subgraphs",
+            "flows_for_target",
+            "count_empirical_nodes",
+            "count_theoretical_nodes",
+            "matching_density",
+            "lemon_to_string",
+            "count_matching_edges",
+            "count_theoretical_to_sink_edges",
+            "count_src_to_empirical_edges",
+            "count_simple_trash_edges",
+            "count_chain_edges",
+            "no_theoretical_spectra",
+            "theoretical_spectra_sizes",
+        }
+    )
 
     def __init__(
         self,
@@ -360,8 +362,7 @@ class WassersteinNetwork:
                 )
             if self._p != 1.0 and not isinstance(solver, ConvexSweep):
                 problems.append(
-                    f"p={self._p} (chain with p != 1 needs the ConvexSweep "
-                    "solver)"
+                    f"p={self._p} (chain with p != 1 needs the ConvexSweep " "solver)"
                 )
             if self._force_dense_1d:
                 problems.append("force_dense_1d=True")

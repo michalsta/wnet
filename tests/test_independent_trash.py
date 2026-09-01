@@ -42,8 +42,9 @@ def make(emp, theos, independent=True, max_distance=1.0):
     return W
 
 
-def make_chain(emp, theos, split_distance=1.0, intensity_scale=1.0,
-               c_exp=C_EXP, c_theo=C_THEO):
+def make_chain(
+    emp, theos, split_distance=1.0, intensity_scale=1.0, c_exp=C_EXP, c_theo=C_THEO
+):
     """Chain factory + SlopeDP backend with independent trash."""
     W = WassersteinNetwork(
         emp,
@@ -130,8 +131,13 @@ def test_gradient_matches_finite_difference():
     # Fine intensity grid so the finite difference sees the slope rather than
     # the flat tread of the integer-supply staircase (trunc(w * t * scale)).
     W = WassersteinNetwork(
-        emp, theos, DistanceMetric.LINF, 1.0,
-        force_dense_1d=True, round_max_distance=False, intensity_scale=1e6,
+        emp,
+        theos,
+        DistanceMetric.LINF,
+        1.0,
+        force_dense_1d=True,
+        round_max_distance=False,
+        intensity_scale=1e6,
     )
     W.set_cost_scaling(0)
     W.add_independent_asymmetric_trash(C_EXP, C_THEO)
@@ -151,20 +157,32 @@ def test_gradient_matches_finite_difference():
         fd = (cost(up) - cost(base)) / eps
         # Tolerance bounded by the integer-supply staircase riding inside the
         # finite difference (~0.3% at this eps/scale), not by the gradient.
-        assert fd == pytest.approx(grads[k], rel=5e-3, abs=1e-6), (
-            f"component {k}: fd={fd} vs grad={grads[k]}"
-        )
+        assert fd == pytest.approx(
+            grads[k], rel=5e-3, abs=1e-6
+        ), f"component {k}: fd={fd} vs grad={grads[k]}"
 
 
 def test_exclusive_with_other_trash_models():
     emp, theos = toy()
-    W = WassersteinNetwork(emp, theos, DistanceMetric.LINF, 1.0,
-                           force_dense_1d=True, round_max_distance=False)
+    W = WassersteinNetwork(
+        emp,
+        theos,
+        DistanceMetric.LINF,
+        1.0,
+        force_dense_1d=True,
+        round_max_distance=False,
+    )
     W.add_experimental_trash(C_EXP)
     with pytest.raises(RuntimeError, match="exclusive"):
         W.add_independent_asymmetric_trash(C_EXP, C_THEO)
-    W2 = WassersteinNetwork(emp, theos, DistanceMetric.LINF, 1.0,
-                            force_dense_1d=True, round_max_distance=False)
+    W2 = WassersteinNetwork(
+        emp,
+        theos,
+        DistanceMetric.LINF,
+        1.0,
+        force_dense_1d=True,
+        round_max_distance=False,
+    )
     W2.add_independent_asymmetric_trash(C_EXP, C_THEO)
     with pytest.raises(RuntimeError, match="exclusive"):
         W2.add_simple_trash(C_EXP)
@@ -173,8 +191,14 @@ def test_exclusive_with_other_trash_models():
 def test_forces_dense_factory():
     # Without force_dense_1d the wrapper must still not pick the chain.
     emp, theos = toy()
-    W = WassersteinNetwork(emp, theos, DistanceMetric.LINF, 1.0,
-                           round_max_distance=False, intensity_scale=1.0)
+    W = WassersteinNetwork(
+        emp,
+        theos,
+        DistanceMetric.LINF,
+        1.0,
+        round_max_distance=False,
+        intensity_scale=1.0,
+    )
     W.set_cost_scaling(0)
     W.add_independent_asymmetric_trash(C_EXP, C_THEO)
     W.build()
@@ -223,8 +247,13 @@ def test_chain_gradient_matches_dense_and_fd():
     theos = [d1([100.0], [3.0]), d1([104.0], [1.0])]
     Wc = make_chain(emp, theos, split_distance=8.0, intensity_scale=1e6)
     Wd = WassersteinNetwork(
-        emp, theos, DistanceMetric.LINF, 8.0,
-        force_dense_1d=True, round_max_distance=False, intensity_scale=1e6,
+        emp,
+        theos,
+        DistanceMetric.LINF,
+        8.0,
+        force_dense_1d=True,
+        round_max_distance=False,
+        intensity_scale=1e6,
     )
     Wd.set_cost_scaling(0)
     Wd.add_independent_asymmetric_trash(C_EXP, C_THEO)
@@ -249,9 +278,9 @@ def test_chain_gradient_matches_dense_and_fd():
         fd = (cost(up) - cost(base)) / eps
         # Tolerance bounded by the integer-supply staircase inside the finite
         # difference, not by the gradient (see the dense FD test above).
-        assert fd == pytest.approx(gc[k], rel=5e-3, abs=1e-6), (
-            f"component {k}: fd={fd} vs grad={gc[k]}"
-        )
+        assert fd == pytest.approx(
+            gc[k], rel=5e-3, abs=1e-6
+        ), f"component {k}: fd={fd} vs grad={gc[k]}"
 
 
 def test_chain_fuzz_matches_dense():
@@ -282,11 +311,22 @@ def test_chain_fuzz_matches_dense():
                 )
             )
         split = float(rng.choice([1.5, 2.0, 5.0]))
-        Wc = make_chain(emp, theos, split_distance=split, intensity_scale=64.0,
-                        c_exp=c_exp, c_theo=c_theo)
+        Wc = make_chain(
+            emp,
+            theos,
+            split_distance=split,
+            intensity_scale=64.0,
+            c_exp=c_exp,
+            c_theo=c_theo,
+        )
         Wd = WassersteinNetwork(
-            emp, theos, DistanceMetric.LINF, split,
-            force_dense_1d=True, round_max_distance=False, intensity_scale=64.0,
+            emp,
+            theos,
+            DistanceMetric.LINF,
+            split,
+            force_dense_1d=True,
+            round_max_distance=False,
+            intensity_scale=64.0,
         )
         Wd.set_cost_scaling(0)
         Wd.add_independent_asymmetric_trash(c_exp, c_theo)
@@ -308,7 +348,10 @@ def test_chain_fuzz_matches_dense():
             gc = np.asarray(Wc.spectrum_proportion_derivatives())
             gd = np.asarray(Wd.spectrum_proportion_derivatives())
             np.testing.assert_allclose(
-                gc, gd, rtol=1e-9, atol=1e-9,
+                gc,
+                gd,
+                rtol=1e-9,
+                atol=1e-9,
                 err_msg=f"trial {trial}, point {point}",
             )
 
@@ -316,9 +359,13 @@ def test_chain_fuzz_matches_dense():
 def test_chain_non_slopedp_solver_rejected():
     emp, theos = toy()
     W = WassersteinNetwork(
-        emp, theos, DistanceMetric.LINF,
-        split_distance=1.0, solver=NetworkSimplex(),
-        round_max_distance=False, intensity_scale=1.0,
+        emp,
+        theos,
+        DistanceMetric.LINF,
+        split_distance=1.0,
+        solver=NetworkSimplex(),
+        round_max_distance=False,
+        intensity_scale=1.0,
     )
     with pytest.raises(ValueError, match="SlopeDP"):
         W.add_independent_asymmetric_trash(C_EXP, C_THEO)

@@ -45,7 +45,7 @@ def _build(seed, dim, n_targets, size, trash=7, mode=WarmMode.Dual):
 def _traj(n_targets):
     base = np.full(n_targets, 0.5)
     rng = np.random.default_rng(2024)
-    pts = [base.copy(), base.copy()]                       # identical re-solve
+    pts = [base.copy(), base.copy()]  # identical re-solve
     for _ in range(6):
         pts.append(np.clip(base + rng.normal(scale=1e-4, size=n_targets), 0, 1))
     for _ in range(6):
@@ -53,7 +53,7 @@ def _traj(n_targets):
     return pts
 
 
-@pytest.mark.parametrize("dim", [1, 3])          # 1 -> chain, 3 -> dense
+@pytest.mark.parametrize("dim", [1, 3])  # 1 -> chain, 3 -> dense
 @pytest.mark.parametrize("n_targets", [2, 3])
 def test_cache_is_value_exact_vs_fresh_oracle(dim, n_targets):
     """Cached exact gradient/derivs along a trajectory must equal an oracle
@@ -117,7 +117,7 @@ def test_cache_invalidated_by_resolve():
     tracks the new solution, equals a fresh oracle for that point)."""
     net = _build(42, 3, 3, 25, mode=WarmMode.NONE)
     net.solve(np.array([0.3, 0.5, 0.7]))
-    _ = net.spectrum_proportion_derivatives()          # populate cache slot
+    _ = net.spectrum_proportion_derivatives()  # populate cache slot
     net.solve(np.array([0.9, 0.1, 0.4]))
     g_b = net.spectrum_proportion_derivatives()
     oracle = _build(42, 3, 3, 25, mode=WarmMode.NONE)

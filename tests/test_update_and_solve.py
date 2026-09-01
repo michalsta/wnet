@@ -133,8 +133,11 @@ class TestUpdateAndSolveDense:
             ns = NetworkSimplex()
             ns.warm = warm
             W = WassersteinNetwork(
-                base, [make_nd(pos_theo, inten_t)], DistanceMetric.L2,
-                max_distance=8, solver=ns,
+                base,
+                [make_nd(pos_theo, inten_t)],
+                DistanceMetric.L2,
+                max_distance=8,
+                solver=ns,
             )
             W.add_simple_trash(8)
             W.build()
@@ -150,6 +153,7 @@ class TestUpdateAndSolveDense:
             W_warm.update_positions_and_solve(base, [theo2])
             W_cold.update_positions_and_solve(base, [theo2])
             assert W_warm.total_cost() == W_cold.total_cost()
+
     def test_1d_dense_parity(self):
         """Dense 1D: updated cost matches a fresh solve."""
         base = make_1d([0.0, 5.0], [100, 100])

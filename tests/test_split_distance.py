@@ -42,8 +42,13 @@ DENSE_COST = 1050.0
 CHAIN_COST = 150.0
 
 
-def _build(max_distance=None, split_distance=None, force_dense_1d=False, solver=None,
-           trash=TRASH):
+def _build(
+    max_distance=None,
+    split_distance=None,
+    force_dense_1d=False,
+    solver=None,
+    trash=TRASH,
+):
     kw = {}
     if solver is not None:
         kw["solver"] = solver

@@ -350,12 +350,18 @@ class TestGradient1DChain:
                 args_p = (pos_p, [tgt_pos])
                 args_m = (pos_m, [tgt_pos])
             cp = cost_at(
-                *args_p, base_int, [tgt_int],
-                DistanceMetric.L2, force_dense_1d=False,
+                *args_p,
+                base_int,
+                [tgt_int],
+                DistanceMetric.L2,
+                force_dense_1d=False,
             )
             cm = cost_at(
-                *args_m, base_int, [tgt_int],
-                DistanceMetric.L2, force_dense_1d=False,
+                *args_m,
+                base_int,
+                [tgt_int],
+                DistanceMetric.L2,
+                force_dense_1d=False,
             )
             fd = (cp - cm) / (2.0 * EPS)
             assert abs(grads[1, 0] - fd) < ATOL, (
@@ -505,6 +511,6 @@ class TestGradientFractionalIntensities:
                 W2, b2, t2 = self._build(base_pos, pos, p)
                 costs.append(W2.total_cost())
             fd = (costs[0] - costs[1]) / (2 * eps)
-            assert abs(theo_grads[0][i, 0] - fd) < 1e-3 * (1.0 + abs(fd)), (
-                f"p={p} peak {i}: grad={theo_grads[0][i, 0]:.6f}, fd={fd:.6f}"
-            )
+            assert abs(theo_grads[0][i, 0] - fd) < 1e-3 * (
+                1.0 + abs(fd)
+            ), f"p={p} peak {i}: grad={theo_grads[0][i, 0]:.6f}, fd={fd:.6f}"

@@ -59,10 +59,17 @@ def _trajectory(n_targets):
 
 @pytest.mark.parametrize("dim", [1, 3])  # 1 -> chain factory, 3 -> dense
 @pytest.mark.parametrize("n_targets", [2, 3])
-@pytest.mark.parametrize("warm_mode", [
-    WarmMode.Simple, WarmMode.Dual, WarmMode.Primal,
-    WarmMode.DualRatio, WarmMode.DualGreedy, WarmMode.LinkCut,
-])
+@pytest.mark.parametrize(
+    "warm_mode",
+    [
+        WarmMode.Simple,
+        WarmMode.Dual,
+        WarmMode.Primal,
+        WarmMode.DualRatio,
+        WarmMode.DualGreedy,
+        WarmMode.LinkCut,
+    ],
+)
 def test_warm_matches_cold_along_trajectory(dim, n_targets, warm_mode):
     size = 25
     seed = 1000 * dim + 7 * n_targets
@@ -181,18 +188,18 @@ def test_dual_not_worse_than_simple_on_cold_fallbacks():
     already covered above; this guards the performance intent."""
     dim, n_targets, size = 3, 3, 30
     pts = _trajectory(n_targets)
-    simple   = _build(11, dim, n_targets, size, WarmMode.Simple)
-    dual     = _build(11, dim, n_targets, size, WarmMode.Dual)
-    primal   = _build(11, dim, n_targets, size, WarmMode.Primal)
-    dualR    = _build(11, dim, n_targets, size, WarmMode.DualRatio)
-    dualG    = _build(11, dim, n_targets, size, WarmMode.DualGreedy)
+    simple = _build(11, dim, n_targets, size, WarmMode.Simple)
+    dual = _build(11, dim, n_targets, size, WarmMode.Dual)
+    primal = _build(11, dim, n_targets, size, WarmMode.Primal)
+    dualR = _build(11, dim, n_targets, size, WarmMode.DualRatio)
+    dualG = _build(11, dim, n_targets, size, WarmMode.DualGreedy)
     for p in pts:
         simple.solve(p)
         dual.solve(p)
         primal.solve(p)
         dualR.solve(p)
         dualG.solve(p)
-    assert dual.wnet.cold_start_count()   <= simple.wnet.cold_start_count()
+    assert dual.wnet.cold_start_count() <= simple.wnet.cold_start_count()
     assert primal.wnet.cold_start_count() <= simple.wnet.cold_start_count()
-    assert dualR.wnet.cold_start_count()  <= simple.wnet.cold_start_count()
-    assert dualG.wnet.cold_start_count()  <= simple.wnet.cold_start_count()
+    assert dualR.wnet.cold_start_count() <= simple.wnet.cold_start_count()
+    assert dualG.wnet.cold_start_count() <= simple.wnet.cold_start_count()
