@@ -435,3 +435,123 @@ def test_signal_part_derivatives_matches_simple_trash_excess_theoretical():
     W_sym.solve()
 
     assert W_asym.signal_part_derivatives() == W_sym.signal_part_derivatives()
+
+
+# ---------------------------------------------------------------------------
+# Marginals under a single asymmetric trash kind
+#
+# set_point() sizes the flow budget from the escape routes that exist:
+# experimental trash alone pins it to the empirical total, theoretical trash
+# alone to the theoretical total, and the annihilating models to max(E, T).
+# Whether one more theoretical unit costs anything depends on that rule, so the
+# marginal must be checked on both sides of E vs T -- reading the annihilating
+# comparison unconditionally used to take the wrong branch for the one-sided
+# models, silently reporting a marginal that a re-solve contradicts.
+# ---------------------------------------------------------------------------
+
+
+def _one_sided(emp_int, theo_int, mode, cost, dist=1, force_dense=True):
+    emp = _dist1d([0], [emp_int])
+    theo = _dist1d([dist], [theo_int])
+    W = WassersteinNetwork(
+        emp, [theo], DistanceMetric.L1, 100, force_dense_1d=force_dense
+    )
+    if mode == "experimental":
+        W.add_experimental_trash(cost)
+    else:
+        W.add_theoretical_trash(cost)
+    W.build()
+    W.solve()
+    return W
+
+
+def _finite_difference(emp_int, theo_int, mode, cost, dist=1):
+    """True marginal of one extra theoretical unit: re-solve and subtract."""
+    base = _one_sided(emp_int, theo_int, mode, cost, dist).total_cost()
+    bumped = _one_sided(emp_int, theo_int + 1, mode, cost, dist).total_cost()
+    return bumped - base
+
+
+def test_theoretical_trash_marginal_with_empirical_surplus():
+    # E = 3 > T = 2, theoretical trash only, so the budget is T and grows with
+    # every added unit: the new unit is matched from the empirical surplus at
+    # distance 1.  Reporting 0 here (the fixed-budget branch) contradicts a
+    # re-solve, which costs exactly 1 more.
+    W = _one_sided(3, 2, "theoretical", 5)
+    assert W.total_cost() == 2
+    assert W.signal_part_derivatives()[0][0] == 1
+    assert _finite_difference(3, 2, "theoretical", 5) == 1
+
+
+def test_experimental_trash_marginal_with_theoretical_surplus():
+    # T = 5 >= E = 3, experimental trash only, so the budget is E and does not
+    # move: an extra theoretical unit only widens already-slack capacity.
+    W = _one_sided(3, 5, "experimental", 5)
+    assert W.signal_part_derivatives()[0][0] == 0
+    assert _finite_difference(3, 5, "experimental", 5) == 0
+
+
+@pytest.mark.parametrize("mode", ["experimental", "theoretical"])
+@pytest.mark.parametrize("cost", [2, 10])
+@pytest.mark.parametrize(
+    "emp_int, theo_int",
+    [(1, 5), (2, 4), (3, 3), (4, 2), (5, 1), (7, 4), (4, 7), (6, 6)],
+)
+def test_one_sided_marginal_matches_resolve(mode, cost, emp_int, theo_int):
+    # Sweeps both sides of the E vs T boundary, and both trash costs above and
+    # below the matching distance, so neither branch can pass by coincidence.
+    W = _one_sided(emp_int, theo_int, mode, cost)
+    reported = W.signal_part_derivatives()[0][0]
+    assert reported == _finite_difference(emp_int, theo_int, mode, cost)
+
+
+@pytest.mark.parametrize("mode", ["experimental", "theoretical"])
+@pytest.mark.parametrize("emp_int, theo_int", [(3, 2), (2, 3), (6, 6)])
+def test_one_sided_proportion_derivative_matches_marginals(mode, emp_int, theo_int):
+    # The proportion derivative weights the same per-unit marginals by the real
+    # theoretical intensities, so the two must stay consistent.
+    W = _one_sided(emp_int, theo_int, mode, 5)
+    per_peak = W.signal_part_derivatives()[0][0]
+    assert W.spectrum_proportion_derivatives()[0] == per_peak * theo_int
+
+
+@pytest.mark.parametrize("mode", ["experimental", "theoretical"])
+@pytest.mark.parametrize("emp_int, theo_int", [(3, 2), (2, 3), (5, 5)])
+def test_one_sided_marginal_agrees_across_factories(mode, emp_int, theo_int):
+    # The chain and dense factories share the marginal dispatch; both must
+    # report the marginal a re-solve confirms.
+    dense = _one_sided(emp_int, theo_int, mode, 5, force_dense=True)
+    chain = _one_sided(emp_int, theo_int, mode, 5, force_dense=False)
+    truth = _finite_difference(emp_int, theo_int, mode, 5)
+    assert dense.signal_part_derivatives()[0][0] == truth
+    assert chain.signal_part_derivatives()[0][0] == truth
+
+
+def test_experimental_trash_marginal_can_be_negative():
+    # E = 2 at 0; theoretical 1 unit at distance 1 and 1 unit at distance 2;
+    # experimental trash 3.  The budget is E and does not move, so an extra
+    # theoretical unit cannot be routed in from the source.  What it buys is
+    # re-routing the empirical unit currently matched at distance 2 onto the
+    # nearer peak, which is worth -1.  The growing-budget branch looks for a
+    # source augmentation, finds none, and reports 0.
+    emp = _dist1d([0], [2])
+
+    def solved(theo_int):
+        W = WassersteinNetwork(
+            emp,
+            [_dist1d([1, 2], theo_int)],
+            DistanceMetric.L1,
+            100,
+            force_dense_1d=True,
+        )
+        W.add_experimental_trash(3)
+        W.build()
+        W.solve()
+        return W
+
+    W = solved([1, 1])
+    base = W.total_cost()
+    assert base == 3  # 1 unit at distance 1, 1 unit at distance 2
+    derivs = W.signal_part_derivatives()[0]
+    assert derivs[0] == solved([2, 1]).total_cost() - base == -1
+    assert derivs[1] == solved([1, 2]).total_cost() - base == 0

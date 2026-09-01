@@ -2496,6 +2496,23 @@ public:
     // approximation (only when the NetworkSimplex solver is in use; chain /
     // non-NS subgraphs have no potentials so they ignore want_pi and stay
     // exact).
+    // Does the total flow budget stay put when one theoretical supply unit is
+    // added?  set_point() sizes that budget from the escape routes that exist:
+    // experimental trash alone pins it to E, theoretical trash alone to T, and
+    // the annihilating models (simple, or both asymmetric kinds) to max(E, T).
+    // Only in the last case does the answer depend on the supplies — reading
+    // E > T unconditionally takes the wrong branch below for one-sided models,
+    // whose budget does not involve the comparison at all.  Independent trash
+    // installs both asymmetric arcs, so it reaches the last line as before.
+    // (Keep in sync with set_point() and _sweep_budget().)
+    bool _supply_fixed_under_theoretical_increment() const {
+        if (experimental_trash_added && !theoretical_trash_added)
+            return true;   // budget is E; theoretical supply never enters it
+        if (theoretical_trash_added && !experimental_trash_added)
+            return false;  // budget is T; every extra unit has to be routed
+        return lemon_empirical_intensity > lemon_theoretical_intensity;
+    }
+
     DerivContext _make_deriv_context(bool want_pi) const {
         if (_use_sweep())
             throw std::runtime_error(
@@ -2508,7 +2525,7 @@ public:
 
         DerivContext ctx;
         ctx.INF = std::numeric_limits<VALUE_TYPE>::max();
-        ctx.supply_fixed = (lemon_empirical_intensity > lemon_theoretical_intensity);
+        ctx.supply_fixed = _supply_fixed_under_theoretical_increment();
         ctx.asymmetric = experimental_trash_added || theoretical_trash_added;
         ctx.independent = independent_trash;
         const LEMON_INDEX sink_id = 1;
