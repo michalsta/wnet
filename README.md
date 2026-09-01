@@ -38,7 +38,7 @@ S1 = Distribution(positions1, intensities1)
 S2 = Distribution(positions2, intensities2)
 
 print(WassersteinDistance(S1, S2, DistanceMetric.L1))
-# 45
+# 45.0
 ```
 
 ### Order-p (Lp) Wasserstein
@@ -48,6 +48,8 @@ Wasserstein distance, where each unit of mass moved a ground distance `d` costs 
 and the returned value is the p-th root of the optimal transport cost:
 
 ```python
+from wnet import TruncatedWassersteinDistance
+
 # Quadratic (W2) Wasserstein distance with a Euclidean ground metric
 print(WassersteinDistance(S1, S2, DistanceMetric.L2, p=2))
 print(TruncatedWassersteinDistance(S1, S2, DistanceMetric.L2, max_distance=3.0, p=2))
@@ -57,8 +59,10 @@ print(WassersteinDistance(S1, S2, DistanceMetric.L2, p=1.5))
 ```
 
 `p` can be any real number ≥ 1. The ground metric (L1/L2/L∞) is chosen independently of `p`.
-For `p != 1` the dense transport network is always used — the fast 1D chain solver is only
-valid for `p == 1`, since exponentiated step costs are not additive along a chain.
+For `p != 1` the dense transport network is used by default: the chain solver's hop costs are
+additive along the chain, which exponentiated step costs are not. In 1D there is a chain-native
+alternative, `ConvexSweep`, which sweeps the sorted positions and prices pairs directly; select
+it with `split_distance=` and `solver=ConvexSweep()`.
 
 `p == 1` is bit-exact with the classic 1-Wasserstein distance. For `p != 1` the cost
 `d**p` is fractional, so the integer min-cost-flow solver works in automatically scaled
@@ -81,31 +85,46 @@ print(TruncatedWassersteinDistance(S1, S2, DistanceMetric.L2, max_distance=3.0))
 
 ### Derivatives w.r.t. peak intensities
 
-`signal_part_derivatives()` returns the marginal cost of increasing each theoretical peak's intensity by 1 — useful for scoring how well each peak is explained:
+`signal_part_derivatives()` returns the marginal cost of increasing each theoretical peak's intensity by 1 — useful for scoring how well each peak is explained. It needs an escape route, so add one of the trash edges before `build()`:
 
 ```python
 from wnet import WassersteinNetwork
 
 W = WassersteinNetwork(S1, [S2], DistanceMetric.L2, max_distance=10.0)
+W.add_simple_trash(10.0)
 W.build()
 W.solve()
 
-derivs = W.signal_part_derivatives()   # np.ndarray, one value per peak in S1
+derivs = W.signal_part_derivatives()   # {spectrum_id: {peak_index: derivative}}
+print(derivs[0])                       # marginals for the peaks of S2
+# {0: 10.0, 1: 10.0}
 ```
+
+The keys are the theoretical spectra in the order they were passed, so `derivs[k][i]` is the marginal for peak `i` of the k-th target. `spectrum_proportion_derivatives()` returns the gradient with respect to scaling each spectrum's proportion, as an `np.ndarray` indexed by spectrum.
+
+Both are in `W_p**p` units, like `total_cost()`.
 
 ### Optimising peak positions
 
-After an initial solve, positions can be updated and re-solved cheaply via a warm restart. `update_positions_and_get_gradient()` returns `∂cost/∂position` for all peaks so you can feed them directly into a gradient-based optimiser:
+After an initial solve, positions can be updated and re-solved cheaply via a warm restart. `update_positions_and_get_gradient(new_base, new_targets)` takes replacement `Distribution` objects with the same peak counts, re-solves, and returns `∂cost/∂position` for all peaks so you can feed them into a gradient-based optimiser:
 
 ```python
 W = WassersteinNetwork(S1, [S2], DistanceMetric.L2, max_distance=10.0)
+W.add_simple_trash(10.0)
 W.build()
 W.solve()
 
+positions = S1.positions.copy()          # [DIM, N]; the property is a read-only view
 for _ in range(100):
-    grad_empirical, grad_theoretical = W.update_positions_and_get_gradient(new_positions)
-    new_positions -= 0.01 * grad_empirical
+    moved = Distribution(positions, S1.intensities)
+    grad_empirical, grad_theoretical = W.update_positions_and_get_gradient(moved, [S2])
+    # gradients are [N, DIM], positions are [DIM, N]
+    positions -= 0.01 * grad_empirical.T
 ```
+
+`grad_theoretical` is a list holding one `[N_k, DIM]` array per target spectrum. Gradients are of `total_cost()`, i.e. the `W_p**p` objective; for the literal `W_p` multiply by `(1/p) * total_cost()**(1/p - 1)`.
+
+If you only want the re-solve and not the gradient, `update_positions_and_solve(new_base, new_targets)` is the cheaper call. Both keep the graph topology fixed, so the peak counts may not change; on 1D chain networks the peaks may also not cross one another.
 
 ## Licence
 MIT Licence
