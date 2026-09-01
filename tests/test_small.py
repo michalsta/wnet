@@ -23,6 +23,10 @@ def generate_parameters(n):
 
 
 parameter_set = generate_parameters(1000)
+# Golden total_cost() values. These instances use simple trash, whose bill is
+# annihilating and priced over the whole network: nine entries dropped when
+# dead-end nodes stopped being charged per component (their excess annihilates
+# against the excess inside the subgraph). See tests/test_decomposition_invariance.py.
 expected_results = [
     10612,
     50824,
@@ -58,7 +62,7 @@ expected_results = [
     13354219,
     35582931,
     25189159,
-    23259555,
+    23233095,
     9949348,
     20040556,
     22372881,
@@ -91,7 +95,7 @@ expected_results = [
     225319026,
     26411597,
     27428944,
-    95548035,
+    95547491,
     127238654,
     121341443,
     12608776,
@@ -321,7 +325,7 @@ expected_results = [
     1762208116,
     654271508,
     1950525980,
-    1324392847,
+    1324164579,
     1317967644,
     3334573914,
     785393021,
@@ -338,7 +342,7 @@ expected_results = [
     1339862709,
     3370861222,
     2030713481,
-    1986634699,
+    1986629029,
     752518566,
     1424785728,
     1610390943,
@@ -363,7 +367,7 @@ expected_results = [
     2514961197,
     1746572015,
     1707667382,
-    4151319548,
+    4151317508,
     1096431638,
     1266877340,
     1229953461,
@@ -431,7 +435,7 @@ expected_results = [
     5290988849,
     930150100,
     1067319937,
-    3358808887,
+    3358803175,
     7217079336,
     4036190337,
     419056502,
@@ -518,7 +522,7 @@ expected_results = [
     3338228198,
     4941640711,
     5257599634,
-    5141903813,
+    5136446438,
     1825153567,
     5802166341,
     3877309750,
@@ -907,7 +911,7 @@ expected_results = [
     10891838588,
     8117517854,
     8554089334,
-    21545425853,
+    21545412593,
     23707399697,
     4878067635,
     4821639908,
@@ -1022,7 +1026,7 @@ expected_results = [
     7878496132,
     14954692907,
     14917232095,
-    14669961736,
+    14669941756,
     35784756875,
 ]
 

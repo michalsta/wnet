@@ -153,9 +153,14 @@ def test_theo_trash_equals_simple_trash_excess_theoretical():
 def test_both_trash_equals_simple_trash_two_components():
     # Multi-component graph: component 1 has E > T, component 2 has T > E.
     # Points separated by 1000 → two independent subgraphs.
-    # Component 1: emp=7 @ 0, theo=4 @ 1 → 4*1 + 3*10 = 34
-    # Component 2: emp=3 @ 1000, theo=7 @ 1001 → 3*1 + 4*10 = 43
-    # Total: 77 for both formulations.
+    # Component 1: emp=7 @ 0, theo=4 @ 1 → 4 matched at distance 1
+    # Component 2: emp=3 @ 1000, theo=7 @ 1001 → 3 matched at distance 1
+    #
+    # Both models annihilate, and the excesses sit on opposite sides in the
+    # two components: 3 unmatched empirical units against 4 unmatched
+    # theoretical ones.  The bill is priced over the network as a whole —
+    # max(10, 11) - 7 = 4 escaping units at 10 — so the split must not charge
+    # each component's excess separately (which would give 77).
     emp = _dist1d([0, 1000], [7, 3])
     theo = _dist1d([1, 1001], [4, 7])
 
@@ -168,7 +173,7 @@ def test_both_trash_equals_simple_trash_two_components():
     W_sym.add_simple_trash(10)
     cost_sym = _solve(W_sym)
 
-    assert cost_asym == cost_sym == 77
+    assert cost_asym == cost_sym == 4 + 3 + 4 * 10
 
 
 # ---------------------------------------------------------------------------

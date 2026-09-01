@@ -82,8 +82,11 @@ def test_budget_widens_sizing_and_point_computes_correctly():
     unbudgeted_scale = make_network().scale_factor()
     assert W.scale_factor() < unbudgeted_scale
     W.solve([196.0, 0.44])
-    # t1 surplus 10*196-50=1910, emp surplus 150-15*0.44=143.4, all at cost 100.
-    assert W.total_cost() == pytest.approx(205340.0, rel=1e-6)
+    # Nothing is transported (both pairs are coincident): 50 units match at
+    # t1 and 6.6 at t2.  Simple trash is annihilating and priced network-wide,
+    # so the bill is max(emp 200, theo 1966.6) - 56.6 matched = 1910 escaping
+    # units at cost 100.
+    assert W.total_cost() == pytest.approx(191000.0, rel=1e-6)
     W.solve([5.0, 10.0])
     assert W.total_cost() == pytest.approx(0.0, abs=1e-6)
 

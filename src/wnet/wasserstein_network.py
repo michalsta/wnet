@@ -222,6 +222,12 @@ class WassersteinNetwork:
             raise RuntimeError(f"{what}() must be called before build(), not after.")
 
     def add_simple_trash(self, cost: float) -> None:
+        """Symmetric escape route: unmatched mass is discarded at `cost` per
+        unit. The model is annihilating — an unmatched empirical unit and an
+        unmatched theoretical unit are discarded together for a single payment,
+        so the bill is `cost * (max(E, T) - matched)` over the whole network,
+        never per connected component. Exclusive with the experimental,
+        theoretical and independent models. Must be called before build()."""
         self._check_not_built("add_simple_trash")
         if self._simple_trash_cost is not None:
             raise RuntimeError("Simple trash edge already added.")
@@ -236,6 +242,12 @@ class WassersteinNetwork:
         self._simple_trash_cost = float(cost)
 
     def add_experimental_trash(self, cost: float) -> None:
+        """Discard empirical excess at `cost` per unit. May be combined with
+        add_theoretical_trash(), in which case the pair is annihilating (an
+        empirical and a theoretical excess unit escape together at the cheaper
+        of the two costs, priced over the whole network); use
+        add_independent_asymmetric_trash() to charge both sides in full.
+        Exclusive with simple and independent trash. Call before build()."""
         self._check_not_built("add_experimental_trash")
         if self._simple_trash_cost is not None:
             raise RuntimeError(
@@ -250,6 +262,10 @@ class WassersteinNetwork:
         self._exp_trash_cost = float(cost)
 
     def add_theoretical_trash(self, cost: float) -> None:
+        """Fill theoretical excess at `cost` per unit. May be combined with
+        add_experimental_trash(); see that method for the annihilating pricing
+        of the combination. Exclusive with simple and independent trash. Call
+        before build()."""
         self._check_not_built("add_theoretical_trash")
         if self._simple_trash_cost is not None:
             raise RuntimeError(

@@ -914,7 +914,11 @@ def _dist1d_int(positions, intensities):
 def test_zero_max_distance_network_1d_int_with_trash():
     # emp: pos [0, 1] ints [2, 3]; theo: pos [0, 2] ints [2, 5].
     # Only the coincident pair (pos 0) may match: 2 units at cost 0.
-    # Leftover emp 3 -> exp trash @7 = 21; leftover theo 5 -> theo trash @10 = 50.
+    # Experimental + theoretical trash annihilate, and the bill is priced over
+    # the whole network: budget max(emp 5, theo 7) less the 2 matched units
+    # leaves 5 to escape, filled cheapest-first — 3 by exp trash @7 = 21, then
+    # 2 by theo trash @10 = 20.  (Charging each side in full would give 71;
+    # that is what add_independent_asymmetric_trash is for.)
     emp = _dist1d_int([0.0, 1.0], [2.0, 3.0])
     theo = _dist1d_int([0.0, 2.0], [2.0, 5.0])
     W = WassersteinNetwork(emp, [theo], DistanceMetric.L1, max_distance=0)
@@ -922,7 +926,7 @@ def test_zero_max_distance_network_1d_int_with_trash():
     W.add_theoretical_trash(10)
     W.build()
     W.solve([1.0])
-    assert W.total_cost() == pytest.approx(71.0, rel=1e-9)
+    assert W.total_cost() == pytest.approx(41.0, rel=1e-9)
     # Only exact-position pairs get a matching edge.
     assert W.count_matching_edges() == 1
 
@@ -956,9 +960,11 @@ def test_zero_max_distance_network_1d_fractional_with_trash():
 
 def test_zero_max_distance_network_2d_fractional_with_trash():
     # 2-D, fractional: emp {(0,0): 0.5, (1,1): 0.25};
-    # theo {(0,0): 0.5, (2,2): 0.75}.  Exact pair at (0,0) matches 0.5 free;
-    # emp leftover 0.25 -> exp trash @2.0 = 0.5;
-    # theo leftover 0.75 -> theo trash @3.0 = 2.25.  Total 2.75.
+    # theo {(0,0): 0.5, (2,2): 0.75}.  Exact pair at (0,0) matches 0.5 free.
+    # The two trash kinds annihilate, priced network-wide: budget
+    # max(emp 0.75, theo 1.25) less 0.5 matched leaves 0.75 to escape, filled
+    # cheapest-first — 0.25 by exp trash @2.0 = 0.5, then 0.5 by theo trash
+    # @3.0 = 1.5.  Total 2.0.
     emp = dN([[0.0, 1.0], [0.0, 1.0]], [0.5, 0.25])
     theo = dN([[0.0, 2.0], [0.0, 2.0]], [0.5, 0.75])
     W = WassersteinNetwork(emp, [theo], DistanceMetric.L2, max_distance=0)
@@ -966,7 +972,7 @@ def test_zero_max_distance_network_2d_fractional_with_trash():
     W.add_theoretical_trash(3.0)
     W.build()
     W.solve([1.0])
-    assert W.total_cost() == pytest.approx(2.75, rel=1e-6)
+    assert W.total_cost() == pytest.approx(2.0, rel=1e-6)
     assert W.count_matching_edges() == 1
 
 

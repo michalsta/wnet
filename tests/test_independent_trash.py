@@ -77,15 +77,15 @@ def test_toy_excess_charged_in_full():
 
 
 def test_toy_annihilating_reference():
-    # Same network, annihilating model. In this toy both excesses sit on
-    # dead-end nodes (N and T2 have no matching arc within max_distance), and
-    # isolated nodes are charged in full at the network level in BOTH models
-    # — the annihilating pair discount only operates inside a subgraph (see
-    # test_match_vs_dump_threshold_is_sum for the in-subgraph contrast).  So
-    # the annihilating total here equals the independent one.
+    # Same network, annihilating model — the contrast that motivates the
+    # independent one.  Both excesses sit on dead-end nodes (N and T2 have no
+    # matching arc within max_distance), but the annihilating pair discount is
+    # priced over the whole network, not per component: emp 5, theo 4, matched
+    # 3, so max(5, 4) - 3 = 2 units escape by the cheaper route (C_EXP).
+    # The independent model charges both sides in full and costs more.
     W = make(*toy(), independent=False)
     W.solve([1.0, 1.0])
-    assert W.total_cost() == pytest.approx(0.4 + 2 * C_EXP + 1 * C_THEO, rel=1e-9)
+    assert W.total_cost() == pytest.approx(0.4 + 2 * C_EXP, rel=1e-9)
 
 
 def test_match_vs_dump_threshold_is_sum():

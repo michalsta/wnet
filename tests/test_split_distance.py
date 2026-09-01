@@ -33,9 +33,11 @@ EMP_POS, EMP_INT = [0.0, 5.0], [10.0, 10.0]
 THEO_POS, THEO_INT = [10.0], [20.0]
 TRASH = 100.0
 # Dense, cap 6: emp@5 matches theo (10 units at distance 5 = 50); emp@0 has no
-# pair within the cap, becomes an isolated dead-end and is trashed (1000); the
-# unfilled half of theo's supply is trashed inside the subgraph (1000).
-DENSE_COST = 2050.0
+# pair within the cap and becomes an isolated dead-end.  Simple trash is
+# annihilating and priced network-wide, so the dead-end empirical mass and
+# theo's unfilled half escape together: max(emp 20, theo 20) less 10 matched
+# leaves 10 units at 100.
+DENSE_COST = 1050.0
 # Chain: 10 units at distance 5 + 10 units riding to distance 10 = 150.
 CHAIN_COST = 150.0
 
@@ -229,18 +231,20 @@ def test_finite_cap_dense_regardless_of_trash_cost():
 
 
 def test_finite_cap_always_dense_ladder():
-    # Regression for the refuted 1.3.0 cap >= 2t gate (2026-08 fuzz, 600
-    # trials x 16 caps): the trash-domination argument only covers pricing
-    # inside a shared partition.  Here emp 0/90/180 (mass 1 each) is
+    # Historic counterexample to the refuted 1.3.0 cap >= 2t gate (2026-08
+    # fuzz, 600 trials x 16 caps).  emp 0/90/180 (mass 1 each) is
     # chain-connected by same-side gaps <= cap, but every emp peak except
-    # emp@180 is dense-ISOLATED (nearest theo@270 beyond cap 100): dense
-    # charges the isolated dead-ends t per unit while the chain LP absorbs
-    # them against theo's excess for free (per-subgraph supply = max(E, T)),
-    # 250 vs the correct 350 — at cap == 2t, and at every tested multiple up
-    # to 3.9t.  Hence: a finite max_distance now ALWAYS builds dense.  (In
-    # the fuzz, equality held in all 5085 pairs whose chain runs coincided
-    # with the dense components, where cap >= t already suffices — so a
-    # future partition-parity gate could soundly win the chain back.)
+    # emp@180 is dense-ISOLATED (nearest theo@270 is beyond cap 100), so the
+    # two factories partition the network differently: 250 for the chain
+    # against the dense factory's 350.
+    #
+    # That gap was an artefact of pricing the annihilating trash bill per
+    # component — the dead-end empirical units were charged in full instead
+    # of annihilating against theo's excess.  With the bill priced
+    # network-wide both factories now report 250, so this instance no longer
+    # divides them.  The always-dense policy is retained regardless: it is
+    # what `max_distance` promises by name, and whether a partition-parity
+    # gate could soundly win the chain back is a separate question.
     def build(force_dense):
         net = WassersteinNetwork(
             d1([0.0, 90.0, 180.0], [1.0, 1.0, 1.0]),
@@ -256,5 +260,7 @@ def test_finite_cap_always_dense_ladder():
 
     gated, forced = build(False), build(True)
     assert gated.count_chain_edges() == 0  # finite cap -> dense factory
-    assert forced.total_cost() == 350.0
-    assert gated.total_cost() == 350.0
+    # max(emp 3, theo 5) units escape at 50; matching emp@180 to theo@270
+    # would cost 90 to save 50, so nothing is transported.
+    assert forced.total_cost() == 250.0
+    assert gated.total_cost() == 250.0

@@ -1651,6 +1651,21 @@ public:
         return cost;
     };
 
+    // Quantised supplies this subgraph carries for the current set_point().
+    // The owning network needs them to re-base the annihilating trash models,
+    // whose bill depends on max(E, T) over the whole network rather than on
+    // any single component (see WassersteinNetwork::_decomposition_rebase()).
+    VALUE_TYPE quantised_empirical_intensity() const { return lemon_empirical_intensity; }
+    VALUE_TYPE quantised_theoretical_intensity() const { return lemon_theoretical_intensity; }
+
+    // Real (unscaled, un-weighted by the point) theoretical intensity per
+    // spectrum.  The proportion derivatives are per-unit prices weighted by
+    // exactly this quantity, so the re-basing term must use it too.
+    void accumulate_real_theoretical_intensity(std::vector<double>& out) const {
+        for (const auto& e : _theo_sink_edge_cache)
+            out[e.spectrum_id] += static_cast<double>(e.theo_intensity);
+    }
+
     int warm_start_count() const {
         if (_use_lct())
             return ns_lct_solver.has_value() ? ns_lct_solver->warmStartCount() : 0;
@@ -2674,6 +2689,12 @@ class WassersteinNetwork {
 
     // See add_independent_asymmetric_trash().
     bool _independent_trash_added = false;
+    // Which escape routes were opened.  Mirrored from the per-subgraph flags so
+    // the network can price the zero-match trash bill without owning a subgraph
+    // (a network whose peaks are all dead-ends has none).
+    bool _simple_trash_added = false;
+    bool _experimental_trash_added = false;
+    bool _theoretical_trash_added = false;
 
 public:
     WassersteinNetwork(std::vector<FlowNode<intensity_type>>&& nodes_,
@@ -2778,7 +2799,10 @@ public:
         _flow_budget(other._flow_budget),
         _emp_flow_total(other._emp_flow_total),
         _theo_flow_totals(std::move(other._theo_flow_totals)),
-        _independent_trash_added(other._independent_trash_added)
+        _independent_trash_added(other._independent_trash_added),
+        _simple_trash_added(other._simple_trash_added),
+        _experimental_trash_added(other._experimental_trash_added),
+        _theoretical_trash_added(other._theoretical_trash_added)
     {
         other.built = false;
     }
@@ -2932,6 +2956,7 @@ public:
         _max_real_cost = std::max(_max_real_cost, cost);
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_simple_trash(cost);
+        _simple_trash_added = true;
     };
 
     void add_experimental_trash(double cost) {
@@ -2941,6 +2966,7 @@ public:
         _max_real_cost = std::max(_max_real_cost, cost);
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_experimental_trash(cost);
+        _experimental_trash_added = true;
     };
 
     void add_theoretical_trash(double cost) {
@@ -2950,6 +2976,7 @@ public:
         _max_real_cost = std::max(_max_real_cost, cost);
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->add_theoretical_trash(cost);
+        _theoretical_trash_added = true;
     };
 
     // Independent asymmetric trash (dualdeconv4 semantics): every discarded
@@ -3048,6 +3075,123 @@ public:
         return quantize_cost<VALUE_TYPE>(_isolated_theo_trash_cost, _scale, _costs_truncated());
     }
 
+    // ---- Decomposition re-basing for the annihilating trash models -------- //
+    //
+    // Every trash model this class implements prices a component's escape bill
+    // as an affine function of the mass it matches:
+    //
+    //     bill(M) = A(E, T) - tau * M
+    //
+    // where (E, T) are the component's quantised supplies, A() is the bill when
+    // nothing is matched, and tau is the cheapest per-unit escape price.  tau
+    // depends only on the trash costs, never on E or T, so it is the same for a
+    // component and for the whole network; each component therefore already
+    // solves for the matching the undecomposed network would choose, and the
+    // subgraph flows need no adjustment.
+    //
+    // A(), however, is additive over components only for the one-sided
+    // asymmetric models and for independent trash.  The annihilating models
+    // (simple trash, or experimental and theoretical trash combined) budget
+    // max(E, T) units, and
+    //
+    //     sum_c max(E_c, T_c)  >  max(sum_c E_c, sum_c T_c)
+    //
+    // as soon as two components hold their excess on opposite sides: splitting
+    // the network then charges for excess that would have annihilated against
+    // excess elsewhere.  Decomposition is an efficiency device and must not
+    // change the answer, so total_cost() and the derivatives subtract each
+    // component's local A() and add the network-wide one.
+
+    // Trash bill for supplies (E, T) with nothing matched, in scaled cost units.
+    // Mirrors the escape routes set_point() opens and the cheapest-channel-first
+    // order the solvers price them in (keep in sync with WassersteinNetworkSubgraph
+    // ::_sweep_trash_cost() and the set_point() flow-budget branch).
+    VALUE_TYPE _trash_at_zero_match(VALUE_TYPE E, VALUE_TYPE T) const {
+        const VALUE_TYPE c_exp = _isolated_exp_trash_cost_scaled();
+        const VALUE_TYPE c_theo = _isolated_theo_trash_cost_scaled();
+        if (_independent_trash_added)
+            return c_exp * E + c_theo * T;
+        if (_annihilating_trash()) {
+            // Budget max(E, T); fill it from the cheaper channel first.  Simple
+            // trash has c_exp == c_theo, for which either branch yields
+            // c * max(E, T).
+            const VALUE_TYPE zero = 0;
+            return (c_exp <= c_theo)
+                ? c_exp * E + c_theo * std::max(zero, T - E)
+                : c_theo * T + c_exp * std::max(zero, E - T);
+        }
+        if (_experimental_trash_added) return c_exp * E;
+        if (_theoretical_trash_added) return c_theo * T;
+        return 0;  // no trash: supplies are balanced and nothing escapes
+    }
+
+    bool _annihilating_trash() const {
+        return !_independent_trash_added
+               && (_simple_trash_added
+                   || (_experimental_trash_added && _theoretical_trash_added));
+    }
+
+    // Quantised dead-end supplies.  A dead-end node has no matching edge at all,
+    // so it is a component that can only ever pay A(its own supply, 0) — which
+    // is what the isolated-trash terms below charge.
+    VALUE_TYPE _isolated_empirical_intensity_scaled() const {
+        return static_cast<VALUE_TYPE>(_isolated_empirical_intensity * _intensity_scale);
+    }
+    VALUE_TYPE _isolated_theoretical_intensity_scaled(size_t spectrum) const {
+        // Weighted by the current point, so this is only meaningful once one is
+        // set.  A network whose peaks are all dead-ends owns no subgraph to
+        // object on its own behalf.
+        if (_last_point.size() != _no_theoretical_spectra)
+            throw std::runtime_error(
+                "You must call solve() before querying costs or derivatives.");
+        return static_cast<VALUE_TYPE>(_isolated_theoretical_intensity[spectrum]
+                                       * _last_point[spectrum] * _intensity_scale);
+    }
+
+    // sum_c A(E_c, T_c) over every component (subgraphs and dead-end nodes),
+    // and the network-wide totals feeding A(E, T).  Returns the amount to add
+    // to a per-component cost sum: A(E, T) - sum_c A(E_c, T_c), which is
+    // identically zero whenever A() is additive.
+    VALUE_TYPE _decomposition_rebase() const {
+        if (!_annihilating_trash()) return 0;
+        VALUE_TYPE E_total = 0, T_total = 0, local_sum = 0;
+        for (const auto& sg : flow_subgraphs) {
+            const VALUE_TYPE E = sg->quantised_empirical_intensity();
+            const VALUE_TYPE T = sg->quantised_theoretical_intensity();
+            local_sum += _trash_at_zero_match(E, T);
+            E_total += E;
+            T_total += T;
+        }
+        const VALUE_TYPE E_dead = _isolated_empirical_intensity_scaled();
+        local_sum += _trash_at_zero_match(E_dead, 0);
+        E_total += E_dead;
+        for (size_t s = 0; s < _no_theoretical_spectra; ++s) {
+            const VALUE_TYPE T_dead = _isolated_theoretical_intensity_scaled(s);
+            local_sum += _trash_at_zero_match(0, T_dead);
+            T_total += T_dead;
+        }
+        return _trash_at_zero_match(E_total, T_total) - local_sum;
+    }
+
+    // Per-unit price of one more theoretical supply unit under A(), i.e. the
+    // right difference A(E, T + 1) - A(E, T).  The derivatives are re-based by
+    // the difference between the network-wide price and the component's own.
+    VALUE_TYPE _theoretical_trash_price(VALUE_TYPE E, VALUE_TYPE T) const {
+        return _trash_at_zero_match(E, T + 1) - _trash_at_zero_match(E, T);
+    }
+
+    VALUE_TYPE _global_theoretical_trash_price() const {
+        VALUE_TYPE E_total = _isolated_empirical_intensity_scaled();
+        VALUE_TYPE T_total = 0;
+        for (const auto& sg : flow_subgraphs) {
+            E_total += sg->quantised_empirical_intensity();
+            T_total += sg->quantised_theoretical_intensity();
+        }
+        for (size_t s = 0; s < _no_theoretical_spectra; ++s)
+            T_total += _isolated_theoretical_intensity_scaled(s);
+        return _theoretical_trash_price(E_total, T_total);
+    }
+
     void solve()
     {
         std::vector<double> point(_no_theoretical_spectra, 1.0);
@@ -3115,11 +3259,17 @@ public:
         VALUE_TYPE cost = 0;
         for (const auto& flow_subgraph : flow_subgraphs)
             cost += flow_subgraph->total_cost();
-        cost += _isolated_exp_trash_cost_scaled() * _isolated_empirical_intensity * _intensity_scale;
-        const VALUE_TYPE theo_trash_scaled = _isolated_theo_trash_cost_scaled();
+        // Dead-end nodes are components that can never match: each pays the
+        // zero-match bill for its own supply.  Quantise the supply first, then
+        // multiply by the integer cost, exactly as a live peak is priced.
+        cost += _trash_at_zero_match(_isolated_empirical_intensity_scaled(), 0);
         for (size_t s = 0; s < _no_theoretical_spectra; ++s)
-            cost += static_cast<VALUE_TYPE>(theo_trash_scaled * _isolated_theoretical_intensity[s] * _last_point[s] * _intensity_scale);
-        // Nonnegative edge costs cannot sum to a negative total: a negative
+            cost += _trash_at_zero_match(0, _isolated_theoretical_intensity_scaled(s));
+        // Re-base the annihilating models onto network-wide supplies; exactly
+        // zero for every model whose bill is additive over components.
+        cost += _decomposition_rebase();
+        // The re-basing term is negative, but never by more than the local
+        // bills it replaces, so a true total is still nonnegative: a negative
         // value here means the integer accumulator overflowed somewhere the
         // solve()-time guard did not anticipate.
         if (cost < 0)
@@ -3230,15 +3380,31 @@ public:
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
     _signal_part_derivatives(bool fast) const {
         std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
+        // Each subgraph reports the marginal for its own supplies; re-base it
+        // onto the network-wide ones (zero when the trash bill is additive).
+        const VALUE_TYPE global_price =
+            _annihilating_trash() ? _global_theoretical_trash_price() : 0;
         for (const auto& sg : flow_subgraphs) {
             auto sg_derivs = fast ? sg->signal_part_derivatives_fast_approx()
                                   : sg->signal_part_derivatives();
-            result.insert(result.end(), sg_derivs.begin(), sg_derivs.end());
+            const VALUE_TYPE adjust =
+                _annihilating_trash()
+                    ? global_price - _theoretical_trash_price(
+                                         sg->quantised_empirical_intensity(),
+                                         sg->quantised_theoretical_intensity())
+                    : 0;
+            for (auto& [spec_id, peak_idx, deriv] : sg_derivs)
+                result.emplace_back(spec_id, peak_idx, deriv + adjust);
         }
         const VALUE_TYPE theo_trash_scaled = _isolated_theo_trash_cost_scaled();
+        // A dead-end theoretical node is a component with no empirical supply,
+        // whose own price for one more unit is exactly theo_trash_scaled.
+        const VALUE_TYPE dead_adjust =
+            _annihilating_trash() ? global_price - theo_trash_scaled : 0;
         for (LEMON_INDEX dead_end_id : dead_end_node_ids) {
             if (auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&nodes[dead_end_id].get_type()))
-                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(), theo_trash_scaled);
+                result.emplace_back(theo->get_spectrum_id(), theo->get_peak_index(),
+                                    theo_trash_scaled + dead_adjust);
         }
         return result;
     }
@@ -3246,16 +3412,35 @@ public:
     std::vector<std::pair<size_t, double>>
     _spectrum_proportion_derivatives(bool fast) const {
         std::vector<double> accum(_no_theoretical_spectra, 0.0);
+        // These derivatives are per-unit prices weighted by the real (unscaled,
+        // un-weighted) theoretical intensity, so the re-basing price difference
+        // is weighted the same way.
+        const VALUE_TYPE global_price =
+            _annihilating_trash() ? _global_theoretical_trash_price() : 0;
+        std::vector<double> sg_real_theo(_no_theoretical_spectra, 0.0);
         for (const auto& sg : flow_subgraphs) {
             auto sg_derivs = fast ? sg->spectrum_proportion_derivatives_fast_approx()
                                   : sg->spectrum_proportion_derivatives();
             for (auto& [spec_id, deriv] : sg_derivs)
                 accum[spec_id] += deriv;
+            if (!_annihilating_trash()) continue;
+            const VALUE_TYPE adjust =
+                global_price - _theoretical_trash_price(
+                                   sg->quantised_empirical_intensity(),
+                                   sg->quantised_theoretical_intensity());
+            if (adjust == 0) continue;
+            std::fill(sg_real_theo.begin(), sg_real_theo.end(), 0.0);
+            sg->accumulate_real_theoretical_intensity(sg_real_theo);
+            for (size_t s = 0; s < _no_theoretical_spectra; ++s)
+                accum[s] += static_cast<double>(adjust) * sg_real_theo[s];
         }
         const VALUE_TYPE theo_trash_scaled = _isolated_theo_trash_cost_scaled();
+        const VALUE_TYPE dead_adjust =
+            _annihilating_trash() ? global_price - theo_trash_scaled : 0;
         for (size_t s = 0; s < _no_theoretical_spectra; ++s) {
             if (_isolated_theoretical_intensity[s] != 0)
-                accum[s] += static_cast<double>(theo_trash_scaled) * static_cast<double>(_isolated_theoretical_intensity[s]);
+                accum[s] += static_cast<double>(theo_trash_scaled + dead_adjust)
+                            * static_cast<double>(_isolated_theoretical_intensity[s]);
         }
         std::vector<std::pair<size_t, double>> result;
         result.reserve(_no_theoretical_spectra);
