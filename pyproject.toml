@@ -1,14 +1,14 @@
 [build-system]
-requires = ["scikit-build-core", "nanobind", "pylmcf>=1.1.0"]
+requires = ["scikit-build-core", "nanobind>=3.0.1", "pylmcf>=1.2.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "wnet"
-version = "1.4.0"
+version = "1.5.0"
 description = "Tools for calculation of Wasserstein metric between distributions based on Network Flow algorithm"
 authors = [{ name="Michał Startek", email="michal.startek@mimuw.edu.pl" }]
 maintainers = [{ name="Michał Startek", email="michal.startek@mimuw.edu.pl" }]
-dependencies = ["pylmcf>=1.1.0", "numpy"]
+dependencies = ["pylmcf>=1.2.0", "numpy", "nanobind-backend>=1.0; implementation_name == 'cpython'"]
 license = "MIT"
 license-files = ["LICENCE"]
 readme = "README.md"
@@ -20,7 +20,7 @@ classifiers = [
 
 ]
 keywords = ["Wasserstein", "Optimal Transport", "Network Flow", "Earth Mover's Distance"]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 [project.urls]
 "Homepage" = "https://github.com/michalsta/wnet"
@@ -30,6 +30,15 @@ requires-python = ">=3.9"
 extras = ["networkx", "matplotlib"]
 viz = ["networkx", "pyvis>=0.3", "ipython"]
 pytest = ["pytest"]
+
+[tool.scikit-build]
+# Split-mode extensions are stable-ABI builds. Declaring the target here gets the
+# wheel an `abi3` tag, and nanobind reads it back as SKBUILD_SABI_VERSION to set
+# the stable ABI floor, so the two can never drift apart. One wheel per platform
+# then covers every Python from 3.10 up. Ignored automatically on PyPy and on
+# free-threaded interpreters, which is exactly when CMake falls back to a linked
+# build.
+wheel.py-api = "cp310"
 
 [tool.scikit-build.sdist]
 exclude = [
@@ -46,8 +55,6 @@ exclude = [
     "reinstall.sh",
     ".coverage",
 ]
-# [tool.scikit-build]
-# cmake.build-type = "Debug"
 
 [tool.pytest.ini_options]
 markers = [

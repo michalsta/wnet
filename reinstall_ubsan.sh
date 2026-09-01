@@ -12,9 +12,14 @@ cd "$(dirname "$0")"
 #   in memory and ASan can intercept __cxa_throw correctly.
 SAN_FLAGS="-fsanitize=address,undefined -fno-sanitize=vptr -fno-sanitize-recover=all -fno-omit-frame-pointer -Og -g"
 
+# WNET_NB_LINKED=ON: force the classic linked nanobind build. The published
+# split-mode backend is an uninstrumented libstdc++ binary, and split mode
+# requires the frontend and backend to agree on compiler, C++ runtime and debug
+# mode -- neither holds under ASan/UBSan.
 pip uninstall -y wnet || true
 VERBOSE=1 pip install -v -e . \
     --config-settings="cmake.build-type=Debug" \
+    --config-settings="cmake.define.WNET_NB_LINKED=ON" \
     --config-settings="cmake.define.CMAKE_CXX_FLAGS=${SAN_FLAGS}"
 
 echo ""
