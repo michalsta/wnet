@@ -30,15 +30,16 @@
 #include <stdexcept>
 #include <vector>
 
+#include "wide_int.hpp"
+
 namespace convex_sweep {
 
 using i64 = int64_t;
 
-#if defined(__SIZEOF_INT128__)
-using i128 = __int128;
-#else
-#error "convex_sweep requires __int128"
-#endif
+// Interpolation and collinearity tests need the exact 128-bit product of two
+// i64s; wide_int supplies it natively or in software (MSVC has no __int128).
+using wide_int::mul_div_trunc;
+using wide_int::products_equal;
 
 constexpr i64 NEG_INF = std::numeric_limits<i64>::min() / 4;
 
@@ -68,8 +69,7 @@ struct PLF {
         }
         const V& a = vs[lo];
         const V& b = vs[hi];
-        i128 num = (i128)(b.v - a.v) * (k - a.k);
-        return a.v + (i64)(num / (b.k - a.k));
+        return a.v + mul_div_trunc(b.v - a.v, k - a.k, b.k - a.k);
     }
 
     void normalize() {
@@ -83,9 +83,10 @@ struct PLF {
             while (out.size() >= 2) {
                 const V& a = out[out.size() - 2];
                 const V& b = out.back();
-                i128 lhs = (i128)(b.v - a.v) * (x.k - b.k);
-                i128 rhs = (i128)(x.v - b.v) * (b.k - a.k);
-                if (lhs == rhs) out.pop_back(); else break;
+                if (products_equal(b.v - a.v, x.k - b.k, x.v - b.v, b.k - a.k))
+                    out.pop_back();
+                else
+                    break;
             }
             out.push_back(x);
         }
@@ -106,14 +107,13 @@ struct PLF {
                     i64 lo = b.k, hi = a.k;
                     while (hi - lo > 1) {
                         i64 mid = lo + (hi - lo) / 2;
-                        i128 num = (i128)(a.v - b.v) * (mid - b.k);
-                        i64 lv = b.v + (i64)(num / (a.k - b.k));
+                        i64 lv = b.v + mul_div_trunc(a.v - b.v, mid - b.k, a.k - b.k);
                         if (lv > run) lo = mid; else hi = mid;
                     }
                     out.push_back({hi, run});
                     if (lo != b.k) {
-                        i128 num = (i128)(a.v - b.v) * (lo - b.k);
-                        out.push_back({lo, b.v + (i64)(num / (a.k - b.k))});
+                        out.push_back({lo,
+                            b.v + mul_div_trunc(a.v - b.v, lo - b.k, a.k - b.k)});
                     }
                 }
             }
@@ -212,8 +212,7 @@ struct Walker {
         const PLF::V& a = vs[seg];
         const PLF::V& b = vs[seg + 1];
         if (k == a.k) return a.v;
-        i128 num = (i128)(b.v - a.v) * (k - a.k);
-        return a.v + (i64)(num / (b.k - a.k));
+        return a.v + mul_div_trunc(b.v - a.v, k - a.k, b.k - a.k);
     }
 };
 
