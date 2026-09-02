@@ -165,11 +165,6 @@ jobs:
           cd "$(mktemp -d)"
           python -c "import wnet; from wnet.wnet_cpp import NetworkSimplex; print('wnet OK', NetworkSimplex)"
           python -c "import wnet; assert wnet.is_nanobind_split(), 'a published wheel must be a split build'"
-      - name: Check it reports a linked build
-        run: |
-          cd "$(mktemp -d)"
-          python -c "import wnet; assert not wnet.is_nanobind_split(), 'PyPy must fall back to a linked build'"
-
       - name: Run the test suite
         run: |
           python -m pip install pytest
@@ -211,11 +206,7 @@ jobs:
         run: |
           cd "$(mktemp -d)"
           python -c "import wnet; from wnet.wnet_cpp import NetworkSimplex; print('wnet OK', NetworkSimplex); import sys; assert not sys._is_gil_enabled(), 'importing wnet re-enabled the GIL'"
-      - name: Check it reports a linked build
-        run: |
-          cd "$(mktemp -d)"
-          python -c "import wnet; assert not wnet.is_nanobind_split(), 'PyPy must fall back to a linked build'"
-
+          python -c "import wnet; assert wnet.is_nanobind_split(), 'an abi3t wheel is a split build by construction -- abi3t exists only in split mode'"
       - name: Run the test suite
         run: |
           python -m pip install pytest
@@ -309,11 +300,6 @@ jobs:
           cd "$(mktemp -d)"
           python -c "import wnet; from wnet.wnet_cpp import NetworkSimplex; print('wnet OK', NetworkSimplex)"
           python -c "import wnet; assert not wnet.is_nanobind_split(), 'free-threaded 3.14 must fall back to a linked build'"
-      - name: Check it reports a linked build
-        run: |
-          cd "$(mktemp -d)"
-          python -c "import wnet; assert not wnet.is_nanobind_split(), 'PyPy must fall back to a linked build'"
-
       - name: Run the test suite
         run: |
           python -m pip install pytest
