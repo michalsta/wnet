@@ -6,8 +6,10 @@ on:
             - ci_test
             - testing
             - main
-        tags:
-            - 'v*'
+    # Called by publish.yml on a v* tag. On a tag github.ref is refs/tags/v*,
+    # so run_pytest (the full matrix) runs and run_pytest_main stays skipped --
+    # a release is gated on more than main's reduced matrix, which is the point.
+    workflow_call:
 
 env:
   # Never read or write pip's HTTP/wheel cache: on the self-hosted runners
