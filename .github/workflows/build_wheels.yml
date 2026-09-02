@@ -72,7 +72,18 @@ jobs:
           # auditwheel bundles a private libstdc++ and split mode needs the C++
           # runtime shared for exceptions to propagate. Alpine installs from sdist,
           # where CMake falls back to a linked build.
-          CIBW_SKIP: "*-musllinux_*"
+          #
+          # No win32 either, for the same reason one step further along:
+          # nanobind-backend publishes win_amd64 and win_arm64 wheels but no
+          # 32-bit ones, at any Python version. A split-mode win32 wheel builds
+          # fine and is then uninstallable -- it declares a dependency that does
+          # not exist for its own platform. That is not hypothetical: pylmcf
+          # 1.2.0 shipped exactly such a wheel, and pip pulling it into this
+          # job's build environment is what killed the windows-latest leg
+          # ("No matching distribution found for nanobind-backend>=1.0 (from
+          # pylmcf)"). 32-bit Windows needs a linked build to work at all;
+          # until the whole stack offers one, it gets no wheel from here.
+          CIBW_SKIP: "*-musllinux_* *-win32"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -245,7 +256,7 @@ jobs:
       - name: Smoke-test the compiled extension, and check it reports linked
         run: |
           cd "$(mktemp -d)"
-          /venv/bin/python -c 'import wnet; from wnet.wnet_cpp import NetworkSimplex; print('wnet OK', NetworkSimplex)'
+          /venv/bin/python -c 'import wnet; from wnet.wnet_cpp import NetworkSimplex; print("wnet OK", NetworkSimplex)'
           /venv/bin/python -c 'import wnet; assert not wnet.is_nanobind_split(), "musl must fall back to a linked build"'
       - name: Run the test suite
         run: |
