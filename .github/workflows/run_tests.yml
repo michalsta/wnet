@@ -6,10 +6,28 @@ on:
             - ci_test
             - testing
             - main
-    # Called by publish.yml on a v* tag. On a tag github.ref is refs/tags/v*,
-    # so run_pytest (the full matrix) runs and run_pytest_main stays skipped --
-    # a release is gated on more than main's reduced matrix, which is the point.
+    # Nightly tier-B run, staggered across the four repositories so they do not
+    # all land on wloczykij's runners at once. Delete these two lines to drop it.
+    schedule:
+        - cron: "0 3 * * *"
+    # Run any tier by hand, without having to tag something to get the wide one.
+    workflow_dispatch:
+        inputs:
+            tier:
+                description: "CI tier: auto, A (fast), B (covering), C (full)"
+                type: choice
+                default: auto
+                options: [auto, A, B, C]
+    # Called by publish.yml on a v* tag. github.ref is refs/tags/v* there, which
+    # selects RELEASE_TIER -- see .github/scripts/ci_matrix.py.
     workflow_call:
+
+concurrency:
+  # Superseded runs on a branch get cancelled; a release run never does. Before
+  # this, cancelling by hand was the routine -- nine of the last twelve runs on
+  # this repo ended `cancelled`.
+  group: run-tests-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   # Never read or write pip's HTTP/wheel cache: on the self-hosted runners
@@ -18,156 +36,36 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
-  run_pytest:
-    name: ${{ matrix.compiler == 'clang' && format('[clang] {0} / py{1}', matrix.os, matrix.python-version) || format('{0} / py{1}', matrix.os, matrix.python-version) }}
-    if: github.repository_owner == 'michalsta' && github.ref != 'refs/heads/main'
-    runs-on: ${{ matrix.runner }}
-    container: ${{ matrix.container }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [linux-amd64, linux-arm64, windows-latest, macos-15-intel, macos-latest, windows-11-arm]
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
-        compiler: [default, clang]
-        include:
-        - os: linux-amd64
-          runner: [self-hosted, wloczykij-amd64]
-          container: localhost:5000/ubuntu-ci:24.04
-        - os: linux-arm64
-          runner: [self-hosted, wloczykij-arm64]
-          container: localhost:5000/ubuntu-ci:24.04
-        - os: windows-latest
-          runner: windows-latest
-        - os: macos-15-intel
-          runner: macos-15-intel
-        - os: macos-latest
-          runner: macos-latest
-        - os: windows-11-arm
-          runner: windows-11-arm
-        exclude:
-        - os: windows-11-arm
-          python-version: "3.10"
-        # clang only on Linux
-        - os: windows-latest
-          compiler: clang
-        - os: windows-11-arm
-          compiler: clang
-        - os: macos-latest
-          compiler: clang
-        - os: macos-15-intel
-          compiler: clang
-        # mac: only newest Python
-        - os: macos-latest
-          python-version: "3.10"
-        - os: macos-latest
-          python-version: "3.11"
-        - os: macos-latest
-          python-version: "3.12"
-        - os: macos-latest
-          python-version: "3.13"
-        - os: macos-15-intel
-          python-version: "3.10"
-        - os: macos-15-intel
-          python-version: "3.11"
-        - os: macos-15-intel
-          python-version: "3.12"
-        - os: macos-15-intel
-          python-version: "3.13"
-
-
+  # Which combinations run is decided in one place, in Python, where the
+  # coverage argument is a readable table and is asserted rather than implied.
+  # This job replaced a 6 x 6 x 2 cross-product with two dozen `exclude:` rules
+  # duplicated across two near-identical jobs.
+  select:
+    name: Select CI tier
+    if: github.repository_owner == 'michalsta'
+    runs-on: ubuntu-latest
+    outputs:
+      tier: ${{ steps.pick.outputs.tier }}
+      tests: ${{ steps.pick.outputs.tests }}
+      sanitize: ${{ steps.pick.outputs.sanitize }}
     steps:
       - uses: actions/checkout@v5
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v7
-        with:
-          python-version: ${{ matrix.python-version }}
-          # 3.15 has no GA release yet; without this it cannot be resolved.
-          allow-prereleases: true
-      - name: Create isolated venv (POSIX)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          # Ephemeral, per-job venv. Inside the self-hosted container it lives in
-          # the throwaway container layer (/opt); on hosted runners in RUNNER_TEMP.
-          # Never on the shared /__t toolcache, so a contaminated base interpreter
-          # (e.g. a same-version build left behind by another job/repo) can't leak in.
-          if [ -f /.dockerenv ]; then VENV=/opt/ci-venv; else VENV="$RUNNER_TEMP/ci-venv"; fi
-          rm -rf "$VENV"
-          python -m venv "$VENV"
-          echo "$VENV/bin" >> "$GITHUB_PATH"
-          echo "VIRTUAL_ENV=$VENV" >> "$GITHUB_ENV"
-      - name: Create isolated venv (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $venv = Join-Path $env:RUNNER_TEMP 'ci-venv'
-          if (Test-Path $venv) { Remove-Item -Recurse -Force $venv }
-          python -m venv $venv
-          Add-Content -Path $env:GITHUB_PATH -Value "$venv\Scripts"
-          Add-Content -Path $env:GITHUB_ENV -Value "VIRTUAL_ENV=$venv"
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
-      - name: "Non-default compiler: set up Clang"
-        if: matrix.compiler == 'clang'
-        run: |
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
-          echo "CMAKE_ARGS=-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++" >> $GITHUB_ENV
-      - name: Install package
+      - id: pick
         env:
-          VERBOSE: '1'
-        run: |
-          python -m pip install -v .[pytest]
-      - name: Test with pytest
-        working-directory: ./tests
-        run: |
-          python -m pytest . -v -m "long or not long"
+          # Empty (or "auto") for every trigger but workflow_dispatch.
+          CI_TIER: ${{ github.event.inputs.tier }}
+        run: python3 .github/scripts/ci_matrix.py
 
-  run_pytest_main:
-    name: ${{ matrix.compiler == 'clang' && format('[clang] {0} / py{1}', matrix.os, matrix.python-version) || format('{0} / py{1}', matrix.os, matrix.python-version) }}
-    if: github.repository_owner == 'michalsta' && github.ref == 'refs/heads/main'
+  run_pytest:
+    name: ${{ matrix.lane }}
+    needs: select
     runs-on: ${{ matrix.runner }}
+    # Empty string means "run directly on the runner"; the hosted legs have
+    # always relied on that, they just used to say it by omitting the key.
     container: ${{ matrix.container }}
     strategy:
       fail-fast: false
-      matrix:
-        os: [linux-amd64, linux-arm64, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
-        compiler: [default, clang]
-        include:
-        - os: linux-amd64
-          runner: [self-hosted, wloczykij-amd64]
-          container: localhost:5000/ubuntu-ci:24.04
-        - os: linux-arm64
-          runner: [self-hosted, wloczykij-arm64]
-          container: localhost:5000/ubuntu-ci:24.04
-        - os: windows-latest
-          runner: windows-latest
-        - os: macos-latest
-          runner: macos-latest
-        exclude:
-        # On main, only run 3.14 for Windows/macOS
-        - os: windows-latest
-          python-version: "3.10"
-        - os: windows-latest
-          python-version: "3.11"
-        - os: windows-latest
-          python-version: "3.12"
-        - os: windows-latest
-          python-version: "3.13"
-        - os: macos-latest
-          python-version: "3.10"
-        - os: macos-latest
-          python-version: "3.11"
-        - os: macos-latest
-          python-version: "3.12"
-        - os: macos-latest
-          python-version: "3.13"
-        # No clang on Windows/macOS
-        - os: windows-latest
-          compiler: clang
-        - os: macos-latest
-          compiler: clang
+      matrix: ${{ fromJson(needs.select.outputs.tests) }}
 
     steps:
       - uses: actions/checkout@v5
@@ -175,7 +73,9 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-          # 3.15 has no GA release yet; without this it cannot be resolved.
+          # 3.15 has no GA release yet; without this it cannot be resolved. The
+          # flag only matters while a version is prerelease -- for every other
+          # entry a GA release exists and still wins.
           allow-prereleases: true
       - name: Create isolated venv (POSIX)
         if: runner.os != 'Windows'
@@ -219,165 +119,15 @@ jobs:
 
   sanitize:
     name: "[sanitize] ${{ matrix.label }}"
-    if: github.repository_owner == 'michalsta'
+    needs: select
     runs-on: [self-hosted, wloczykij-amd64]
     container: localhost:5000/ubuntu-ci:24.04
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # ── GCC ──────────────────────────────────────────────────────────
-          - label: "gcc asan+ubsan"
-            cc: gcc
-            cxx: g++
-            apt_extra: ""
-            build_type: Debug
-            # Debug build type activates WNET_DO_ASSERTS + -Og -g in CMakeLists.
-            # _GLIBCXX_SANITIZE_VECTOR poisons vector storage for ASan;
-            # _GLIBCXX_DEBUG is intentionally omitted here: it conflicts with ASan
-            # (different allocator hooks, false positives).
-            cxx_flags: >-
-              -fsanitize=address,undefined
-              -fno-sanitize=vptr
-              -fno-sanitize-recover=all
-              -fno-omit-frame-pointer
-              -D_GLIBCXX_ASSERTIONS
-              -D_GLIBCXX_SANITIZE_VECTOR
-            link_flags: ""
-            # GCC's driver does not add libasan to DT_NEEDED for `-shared
-            # -fsanitize=address` on this container, so the extension imports
-            # with unresolved __asan_* symbols. Preload libasan instead.
-            # Safe here because the extension itself is built with libstdc++,
-            # so the libstdc++ EH hooks libasan pulls in match the ABI.
-            preload_asan: true
-            pythonmalloc: malloc
-            asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
-            ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
-            dump_logs: true
-
-          - label: "gcc hardened"
-            cc: gcc
-            cxx: g++
-            apt_extra: ""
-            # RelWithDebInfo = -O2 -g -DNDEBUG; pass internal macros explicitly
-            # since the CMakeLists Debug block does not fire.
-            # _GLIBCXX_DEBUG: full iterator-validity checking (safe here: whole .so
-            # compiled consistently; no STL objects cross the Python C-API boundary).
-            # _FORTIFY_SOURCE=3 requires -O2 (unavailable at -Og used in Debug mode).
-            build_type: RelWithDebInfo
-            cxx_flags: >-
-              -DWNET_DO_ASSERTS
-              -DDEBUG_MODE
-              -D_GLIBCXX_ASSERTIONS
-              -D_GLIBCXX_DEBUG
-              -D_FORTIFY_SOURCE=3
-              -fstack-protector-strong
-              -fstack-clash-protection
-              -fcf-protection=full
-            link_flags: ""
-            preload_asan: false
-            pythonmalloc: ""
-            asan_opts: ""
-            ubsan_opts: ""
-            dump_logs: false
-
-          # ── Clang + libstdc++ ─────────────────────────────────────────────
-          - label: "clang libstdc++ asan+ubsan"
-            cc: clang
-            cxx: clang++
-            apt_extra: clang
-            install_clang_rt: true
-            build_type: Debug
-            cxx_flags: >-
-              -fsanitize=address,undefined
-              -fno-sanitize=vptr
-              -fno-sanitize-recover=all
-              -fno-omit-frame-pointer
-              -D_GLIBCXX_ASSERTIONS
-              -D_GLIBCXX_SANITIZE_VECTOR
-            link_flags: ""
-            preload_asan: true
-            pythonmalloc: malloc
-            asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
-            ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
-            dump_logs: true
-
-          - label: "clang libstdc++ hardened"
-            cc: clang
-            cxx: clang++
-            apt_extra: clang
-            build_type: RelWithDebInfo
-            cxx_flags: >-
-              -DWNET_DO_ASSERTS
-              -DDEBUG_MODE
-              -D_GLIBCXX_ASSERTIONS
-              -D_GLIBCXX_DEBUG
-              -D_FORTIFY_SOURCE=3
-              -fstack-protector-strong
-              -fstack-clash-protection
-              -fcf-protection=full
-            link_flags: ""
-            preload_asan: false
-            pythonmalloc: ""
-            asan_opts: ""
-            ubsan_opts: ""
-            dump_logs: false
-
-          # ── Clang + libc++ ────────────────────────────────────────────────
-          # libc++ 18+ supports _LIBCPP_HARDENING_MODE.
-          # _LIBCPP_ENABLE_ASSERTIONS is intentionally absent: since LLVM 18 it is
-          # deprecated and hard-errors when combined with _LIBCPP_HARDENING_MODE.
-          - label: "clang libc++ asan+ubsan"
-            cc: clang-22
-            cxx: clang++-22
-            apt_extra: clang-22 libclang-rt-22-dev libc++-22-dev libc++abi-22-dev
-            # Use LLVM 22 from apt.llvm.org (see use_llvm_apt step). Ubuntu 24.04
-            # doesn't ship LLVM 22, so there's no epoch-version conflict.
-            use_llvm_apt: true
-            build_type: Debug
-            cxx_flags: >-
-              -fsanitize=address,undefined
-              -fno-sanitize=vptr
-              -fno-sanitize-recover=all
-              -fno-omit-frame-pointer
-              -stdlib=libc++
-              -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE
-            # Force dynamic ASan runtime linkage for Python extension modules.
-            # Without -shared-libasan the module may import with unresolved
-            # __asan_* symbols when no preload is used.
-            link_flags: "-stdlib=libc++ -shared-libasan"
-            # preload_asan must be false for libc++ builds. LD_PRELOAD injects ASan
-            # before libc++abi.so.1 is loaded, so ASan's dlsym(RTLD_NEXT,
-            # "__cxa_rethrow_primary_exception") returns NULL and the interceptor
-            # CHECK-fails the first time std::rethrow_exception is called. With
-            # static ASan (no preload), the extension loads libc++abi.so.1 as a
-            # dependency before ASan initializes, so dlsym succeeds.
-            preload_asan: false
-            pythonmalloc: malloc
-            asan_opts: "detect_leaks=0:abort_on_error=1:print_stacktrace=1:log_path=/tmp/asan:verify_asan_link_order=0"
-            ubsan_opts: "print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan"
-            dump_logs: true
-
-          - label: "clang libc++ hardened"
-            cc: clang
-            cxx: clang++
-            apt_extra: clang libc++-dev libc++abi-18-dev
-            build_type: RelWithDebInfo
-            cxx_flags: >-
-              -stdlib=libc++
-              -DWNET_DO_ASSERTS
-              -DDEBUG_MODE
-              -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG
-              -D_FORTIFY_SOURCE=3
-              -fstack-protector-strong
-              -fstack-clash-protection
-              -fcf-protection=full
-            link_flags: "-stdlib=libc++"
-            preload_asan: false
-            pythonmalloc: ""
-            asan_opts: ""
-            ubsan_opts: ""
-            dump_logs: false
+      # Three lanes on a work branch (1-coverage over {gcc, clang+libstdc++,
+      # clang+libc++} x {asan+ubsan, hardened}), all six on main and on a tag.
+      # The flag sets and the reasoning behind each live in ci_matrix.py.
+      matrix: ${{ fromJson(needs.select.outputs.sanitize) }}
 
     steps:
       - uses: actions/checkout@v5
@@ -387,7 +137,7 @@ jobs:
           python-version: "3.14"
       - name: Create isolated venv
         run: |
-          # Ephemeral venv in the throwaway container layer (/opt) — never on the
+          # Ephemeral venv in the throwaway container layer (/opt) -- never on the
           # shared /__t toolcache. Critical here: this job installs an
           # ASan-instrumented, same-version build, which must NOT leak into the
           # shared interpreter where downstream jobs/repos would import it
@@ -405,7 +155,7 @@ jobs:
         # Also used to get libclang-rt-XX-dev for versions not in Ubuntu main repos.
         if: matrix.use_llvm_apt
         run: |
-          LLVM_VERSION="${{ matrix.llvm_apt_version || '22' }}"
+          LLVM_VERSION="${{ matrix.llvm_apt_version }}"
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
             | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
           echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-${LLVM_VERSION} main" \
@@ -503,7 +253,7 @@ jobs:
         # Python's allocations from startup. If not found, skip preloading and
         # let the static runtime in the extension handle things.
         # IMPORTANT: never preload GCC's libasan for a libc++-compiled extension
-        # — it brings libstdc++ exception hooks into the process, which crash
+        # -- it brings libstdc++ exception hooks into the process, which crash
         # libc++ extensions when they throw C++ exceptions (ABI mismatch between
         # libstdc++ and libc++ EH tables). Only enable preload_asan for matrix
         # entries whose extension is built against the matching libstdc++/libc++.

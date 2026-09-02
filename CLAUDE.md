@@ -48,6 +48,62 @@ UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan \
 python -m pytest tests/ -v
 ```
 
+## CI
+
+`run_tests.yml` no longer contains a matrix. Which combinations run is decided by
+`.github/scripts/ci_matrix.py`, which emits an `{"include": [...]}` object that a
+`select` job hands to `strategy: matrix: ${{ fromJson(...) }}`. That replaced a
+`6 os x 6 python x 2 compiler` cross-product plus ~24 `exclude:` rules duplicated
+across two near-identical jobs — a shape in which coverage was an emergent
+property of two dozen subtraction rules, and in which the four sibling repos had
+silently drifted to different exclude lists.
+
+The design is a **covering array, not a cross-product**: every level of every
+factor runs, but pairs are only covered where the pair actually interacts.
+`compiler x platform` interacts on Linux only (gcc/clang is the one free choice;
+MSVC and AppleClang are 1:1 with their OS). `python x platform` interacts at the
+edges only — 3.10 is the abi3 floor, 3.15 the prerelease/free-threading frontier
+— so 3.11–3.13 rotate one platform each. `python x compiler` does not interact:
+codegen does not know which interpreter will `dlopen` it.
+
+Three tiers, each a superset of the last (asserted in the script):
+
+| tier | when | size |
+|---|---|---|
+| A | push to a work branch | 4 lanes, all self-hosted `linux-amd64`, ~20 min wall, plus 3 sanitizer lanes |
+| B | `main`, the nightly cron, leaf-package tags | 14 lanes: all 6 platforms, all 6 Pythons, all 4 toolchains, both arches, plus all 6 sanitizer lanes |
+| C | `v*` tags on pylmcf and wnet | 35 lanes, the wide matrix |
+
+`workflow_dispatch` carries a `tier` input, so any tier can be run by hand
+without tagging something.
+
+**The number that drove all of it**: `linux-arm64` is a self-hosted runner on
+wloczykij, which is an *Opteron 6380*. There is no ARM in that machine — the lane
+is qemu, and it measures 65–85 min against 8–16 min for every other platform.
+Twelve arm64 legs were 900 of the 1166 job-minutes in a full run: 77% of CI spent
+asking one emulated architecture the same question twelve times. Tier B asks it
+twice (both ends of the supported range, one compiler each); Tier C six times
+(each Python once, alternating compiler). Do not add arm64 lanes without a reason
+that names a specific arch-dependent failure.
+
+`ci_matrix.py` ends in a coverage audit that fails the `select` job if a deleted
+lane breaks 1-coverage of any platform, Python, toolchain or architecture, if the
+A ⊆ B ⊆ C nesting stops holding, or if some Python ends up covered only under
+MSVC. The four copies are meant to stay byte-identical except for two constants
+at the top: `RELEASE_TIER` (`C` for pylmcf and wnet, `B` for the leaves — a leaf
+release rides on its dependencies having passed their own Tier C) and
+`HAS_SANITIZE`. Diff them when in doubt.
+
+The six sanitizer lanes are `{gcc, clang+libstdc++, clang+libc++} x {asan+ubsan,
+hardened}`. Pairwise on a 3x2 *is* the full six, so there is no honest pairwise
+cut; Tier A instead takes 1-coverage — three lanes that between them exercise all
+three toolchains and both modes. Tiers B and C run all six. Every flag set, and
+the reasoning behind it, now lives in `ci_matrix.py` rather than in YAML.
+
+`run_tests.yml` and `build_wheels.yml` each declare a `concurrency:` group that
+cancels superseded branch runs but never a tag run, under *distinct* group names
+— `publish.yml` calls both, and a shared group would serialise them.
+
 ## Architecture
 
 ### Layers
