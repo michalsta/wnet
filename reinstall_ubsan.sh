@@ -16,12 +16,34 @@ SAN_FLAGS="-fsanitize=address,undefined -fno-sanitize=vptr -fno-sanitize-recover
 # split-mode backend is an uninstrumented libstdc++ binary, and split mode
 # requires the frontend and backend to agree on compiler, C++ runtime and debug
 # mode -- neither holds under ASan/UBSan.
-pip uninstall -y wnet || true
+
+# pylmcf has to come along. wnet compiles its headers in and the two share
+# nanobind type registrations at runtime, so a stock split-mode pylmcf wheel
+# next to a linked wnet fails at import ("nanobind build modes disagree"), and
+# an uninstrumented pylmcf would be a blind spot in the middle of the run.
+# Rebuild it here with the same flags and the same mode. Point
+# PYLMCF_SRC at a checkout to build that instead of the PyPI sdist.
+PYLMCF_SRC="${PYLMCF_SRC:-}"
+pip uninstall -y pylmcf wnet || true
+if [ -n "$PYLMCF_SRC" ]; then
+    PYLMCF_TARGET=("$PYLMCF_SRC")
+else
+    PYLMCF_TARGET=(--no-binary pylmcf pylmcf)
+fi
+VERBOSE=1 pip install -v "${PYLMCF_TARGET[@]}" \
+    --config-settings="cmake.build-type=Debug" \
+    --config-settings="cmake.define.WNET_NB_LINKED=ON" \
+    --config-settings="cmake.define.CMAKE_CXX_FLAGS=${SAN_FLAGS}"
+
 VERBOSE=1 pip install -v -e . \
     --config-settings="cmake.build-type=Debug" \
     --config-settings="cmake.define.WNET_NB_LINKED=ON" \
     --config-settings="cmake.define.CMAKE_CXX_FLAGS=${SAN_FLAGS}"
 
+echo ""
+echo "This venv now holds instrumented, linked-mode pylmcf and wnet builds."
+echo "Restore the normal split-mode stack with ../reinstall_all.sh (or"
+echo "pylmcf/reinstall.sh followed by ./reinstall.sh)."
 echo ""
 echo "Run tests with:"
 echo "  PYTHONMALLOC=malloc \\"

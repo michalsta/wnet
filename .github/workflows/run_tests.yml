@@ -425,10 +425,11 @@ jobs:
           echo "CC=${{ matrix.cc }}" >> $GITHUB_ENV
           echo "CXX=${{ matrix.cxx }}" >> $GITHUB_ENV
           echo "CMAKE_ARGS=-DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}" >> $GITHUB_ENV
-      - name: Install package
+      - name: Resolve linker flags
+        # Shared by the pylmcf and wnet builds below: both extensions have to be
+        # linked the same way, so the rpath fix-up lives in one place and lands
+        # in the environment rather than in one step's local shell.
         env:
-          VERBOSE: '1'
-          CXX_FLAGS: ${{ matrix.cxx_flags }}
           LINK_FLAGS: ${{ matrix.link_flags }}
         run: |
           if [[ "$LINK_FLAGS" == *"-shared-libasan"* ]]; then
@@ -437,11 +438,45 @@ jobs:
               LINK_FLAGS="$LINK_FLAGS -Wl,-rpath,${CLANG_RT_DIR}"
             fi
           fi
+          echo "WNET_LINK_FLAGS=${LINK_FLAGS}" >> $GITHUB_ENV
+      - name: Build pylmcf from source with this lane's toolchain
+        # wnet compiles pylmcf's headers in and the two extensions share
+        # nanobind type registrations at runtime, so they must be built the same
+        # way. A pylmcf wheel off PyPI is none of the things this lane needs: it
+        # is split mode (wnet's import-time check rejects the mismatch outright),
+        # it is uninstrumented, and in the hardened lanes it disagrees with wnet
+        # about the layout of every std:: container that crosses between them --
+        # _GLIBCXX_DEBUG and _LIBCPP_HARDENING_MODE change the ABI, silently.
+        # So build pylmcf from the sdist with this lane's exact compiler, build
+        # type, flags and nanobind mode. Same version the wheel would have been;
+        # the later `pip install .[pytest]` finds the requirement satisfied and
+        # leaves this build in place.
+        env:
+          VERBOSE: '1'
+          CXX_FLAGS: ${{ matrix.cxx_flags }}
+        run: |
           LINK_ARGS=()
-          if [ -n "$LINK_FLAGS" ]; then
+          if [ -n "$WNET_LINK_FLAGS" ]; then
             LINK_ARGS=(
-              --config-settings="cmake.define.CMAKE_SHARED_LINKER_FLAGS=${LINK_FLAGS}"
-              --config-settings="cmake.define.CMAKE_MODULE_LINKER_FLAGS=${LINK_FLAGS}"
+              --config-settings="cmake.define.CMAKE_SHARED_LINKER_FLAGS=${WNET_LINK_FLAGS}"
+              --config-settings="cmake.define.CMAKE_MODULE_LINKER_FLAGS=${WNET_LINK_FLAGS}"
+            )
+          fi
+          python -m pip install -v --no-binary pylmcf pylmcf \
+            --config-settings="cmake.build-type=${{ matrix.build_type }}" \
+            --config-settings="cmake.define.WNET_NB_LINKED=ON" \
+            --config-settings="cmake.define.CMAKE_CXX_FLAGS=${CXX_FLAGS}" \
+            "${LINK_ARGS[@]}"
+      - name: Install package
+        env:
+          VERBOSE: '1'
+          CXX_FLAGS: ${{ matrix.cxx_flags }}
+        run: |
+          LINK_ARGS=()
+          if [ -n "$WNET_LINK_FLAGS" ]; then
+            LINK_ARGS=(
+              --config-settings="cmake.define.CMAKE_SHARED_LINKER_FLAGS=${WNET_LINK_FLAGS}"
+              --config-settings="cmake.define.CMAKE_MODULE_LINKER_FLAGS=${WNET_LINK_FLAGS}"
             )
           fi
           # WNET_NB_LINKED=ON forces the classic linked nanobind build. Split
