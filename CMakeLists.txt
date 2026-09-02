@@ -20,26 +20,29 @@ find_package(nanobind REQUIRED CONFIG)
 # frontend/backend pair must agree on compiler, C++ runtime and debug mode.
 option(WNET_NB_LINKED "Force a linked (NB_STATIC) nanobind build instead of split mode" OFF)
 
-# Is this a musl target? Ask _wnet_metadata.is_musl() -- the very predicate the
-# metadata provider uses to decide whether to declare nanobind-backend -- rather
-# than reimplementing the test here, so the build mode and the declared
-# dependency can never disagree about the platform. A failure is fatal on
-# purpose: guessing would mean silently building a mode that cannot be
-# installed, and the module ships in the sdist right beside this file, so it
-# being unimportable means the build is already broken.
+# Which platforms have no backend to reach? Ask _wnet_metadata -- the very
+# predicates the metadata provider uses to decide whether to declare
+# nanobind-backend -- rather than reimplementing the tests here, so the build
+# mode and the declared dependency can never disagree about the platform. A
+# failure is fatal on purpose: guessing would mean silently building a mode that
+# cannot be installed, and the module ships in the sdist right beside this file,
+# so it being unimportable means the build is already broken.
 execute_process(
     COMMAND "${Python_EXECUTABLE}" -c
-            "import sys;sys.path.insert(0,sys.argv[1]);import _wnet_metadata as m;print(int(m.is_musl()))"
+            "import sys;sys.path.insert(0,sys.argv[1]);import _wnet_metadata as m;print(int(m.is_musl()),int(m.is_win32()))"
             "${CMAKE_CURRENT_SOURCE_DIR}"
-    RESULT_VARIABLE WNET_MUSL_RESULT
-    OUTPUT_VARIABLE WNET_IS_MUSL
+    RESULT_VARIABLE WNET_PLATFORM_RESULT
+    OUTPUT_VARIABLE WNET_PLATFORM_PROBE
     OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_VARIABLE WNET_MUSL_ERROR)
-if (NOT WNET_MUSL_RESULT EQUAL 0)
+    ERROR_VARIABLE WNET_PLATFORM_ERROR)
+if (NOT WNET_PLATFORM_RESULT EQUAL 0)
     message(FATAL_ERROR
-        "wnet: could not determine the target C library via "
-        "_wnet_metadata.is_musl(): ${WNET_MUSL_ERROR}")
+        "wnet: could not determine the target platform via _wnet_metadata "
+        "(is_musl / is_win32): ${WNET_PLATFORM_ERROR}")
 endif()
+separate_arguments(WNET_PLATFORM_PROBE)
+list(GET WNET_PLATFORM_PROBE 0 WNET_IS_MUSL)
+list(GET WNET_PLATFORM_PROBE 1 WNET_IS_WIN32)
 
 if (WNET_NB_LINKED)
     set(NB_MODE NB_STATIC)
@@ -59,6 +62,17 @@ elseif (WNET_IS_MUSL)
     set(NB_MODE NB_STATIC)
     set(NB_LINKED TRUE)
     set(NB_MODE_DESC "linked (musl libc: nanobind-backend publishes no musllinux wheel)")
+elseif (WNET_IS_WIN32)
+    # Same hole, different platform: nanobind-backend ships win_amd64 and
+    # win_arm64 and nothing 32-bit, at any Python version. Split mode here
+    # produces a wheel that builds cleanly and then cannot be installed on the
+    # platform it was built for, because it depends on a distribution that does
+    # not exist there -- pylmcf 1.2.0 shipped exactly that. 32-bit Windows gets
+    # no wheel from build_wheels.yml (CIBW_SKIP), so this branch is what makes
+    # the sdist install path work there.
+    set(NB_MODE NB_STATIC)
+    set(NB_LINKED TRUE)
+    set(NB_MODE_DESC "linked (32-bit Windows: nanobind-backend publishes no win32 wheel)")
 elseif (NB_ABI MATCHES "[0-9]t" AND Python_VERSION VERSION_LESS 3.15)
     set(NB_MODE NB_STATIC)
     set(NB_LINKED TRUE)
