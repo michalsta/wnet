@@ -83,7 +83,14 @@ jobs:
           # ("No matching distribution found for nanobind-backend>=1.0 (from
           # pylmcf)"). 32-bit Windows needs a linked build to work at all;
           # until the whole stack offers one, it gets no wheel from here.
-          CIBW_SKIP: "*-musllinux_* *-win32"
+          #
+          # No cp310-win_arm64: CIBW_BUILD lists cp311-win_arm64 precisely
+          # because that platform has to be built from 3.11, but cp310-* matches
+          # it too and nothing was excluding it -- the skip that used to do so
+          # was dropped in the split-mode migration. The 3.10 ARM64 leg has no
+          # numpy wheel to install, so it tries to compile numpy from source and
+          # dies in arraytypes.c: "Did not find correct pointer sized integer".
+          CIBW_SKIP: "*-musllinux_* *-win32 cp310-win_arm64"
 
       - uses: actions/upload-artifact@v4
         with:
