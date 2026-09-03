@@ -5,14 +5,6 @@ on:
     tags:
       - v*
 
-# A called workflow may only be granted permissions the calling job already
-# holds, and build_wheels.yml requests 'actions: read'. The repository default
-# token does not include it, so grant it here or the call fails validation
-# before any job starts.
-permissions:
-  actions: read
-  contents: read
-
 jobs:
   build_wheels:
     if: github.repository_owner == 'michalsta'
