@@ -215,10 +215,15 @@ jobs:
           cd "$(mktemp -d)"
           python -c "import wnet; from wnet.wnet_cpp import NetworkSimplex; print('wnet OK', NetworkSimplex); import sys; assert not sys._is_gil_enabled(), 'importing wnet re-enabled the GIL'"
           python -c "import wnet; assert wnet.is_nanobind_split(), 'an abi3t wheel is a split build by construction -- abi3t exists only in split mode'"
-      - name: Run the test suite
+      - name: Run the test suite, and prove the free-threading tests ran
         run: |
           python -m pip install pytest
           python -m pytest tests/ -q
+          python -m pytest tests/test_free_threading.py -q --no-header -rN \
+            | tee /tmp/ft.log
+          grep -qE '[0-9]+ passed' /tmp/ft.log || { echo "free-threading tests did not run"; exit 1; }
+          grep -q 'skipped' /tmp/ft.log && { echo "free-threading tests skipped -- GIL was on"; exit 1; }
+          echo "free-threading tests ran with the GIL off"
 
   # musl gets no wheel (CIBW_SKIP above), and nanobind-backend publishes neither
   # a musllinux wheel nor an sdist, so Alpine has exactly one install path: build
