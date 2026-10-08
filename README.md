@@ -2,6 +2,10 @@
 
 Wasserstein Network (wnet) is a Python/C++ library for working with Wasserstein distances. It uses the Min Cost Flow algorithm as implemented by the [LEMON library](https://lemon.cs.elte.hu/trac/lemon), exposed to Python via the [pylmcf module](https://github.com/michalsta/pylmcf), enabling efficient computation and manipulation of Wasserstein distances between multidimensional distributions.
 
+NetworkSimplex variants expose raw dual certificates and continuous-supply
+supporting cuts through the existing integer transport solves. See
+[Dual cuts with integer network simplex](docs/dual_cuts.md).
+
 ## Features
 - Wasserstein and Truncated Wasserstein distance between multidimensional distributions (dimensions 1–20)
 - Three distance metrics: L1, L2, L∞

@@ -496,6 +496,41 @@ class WassersteinNetwork:
         """Returns a string representation of the Wasserstein network."""
         return self.wnet.__str__()
 
+    def refine_intensity_precision(self, factor: float = 10.0) -> None:
+        """Rebuild at finer supply precision, retaining topology and backend.
+
+        The cost scale is selected again to fit the int64 accumulator budget.
+        This invalidates the old solution, warm basis and any existing cuts.
+        A failed rebuild leaves the original network and settings intact.
+        """
+        if not np.isfinite(factor) or factor <= 1:
+            raise ValueError("Precision factor must be finite and greater than one")
+        scale = self.intensity_scale_factor() * factor
+        budget = self._flow_budget_arg
+        if budget is None:
+            budget = 4 * (float(self._base_distribution.sum_intensities)
+                          + sum(float(t.sum_intensities) for t in self._target_distributions))
+        if not np.isfinite(scale) or scale * budget >= np.iinfo(np.int64).max / 4:
+            raise OverflowError("Refined supplies exceed the integer flow budget")
+        previous = self._intensity_scale_arg, self._cost_scaling_arg, self._wnet_obj
+        self._intensity_scale_arg = scale
+        self._cost_scaling_arg = 0 if self._cost_scaling_arg is not None else None
+        try:
+            self.build()
+        except Exception:
+            self._intensity_scale_arg, self._cost_scaling_arg, self._wnet_obj = previous
+            raise
+
+    def dual_cut(self) -> dict:
+        """Supporting cut and upper bound for continuous supplies.
+
+        Costs are the fixed quantized costs of this network. ``intercept`` and
+        ``gradient`` define a global affine lower bound; ``upper_bound``
+        includes the supply-rounding uncertainty at the last evaluated point.
+        Requires NetworkSimplex (including LinkCut). No residual search.
+        """
+        return self.wnet.dual_cut()
+
     def total_cost(self) -> float:
         """Total transport cost in real ``W_p**p`` units (= sum of d**p * flow).
 

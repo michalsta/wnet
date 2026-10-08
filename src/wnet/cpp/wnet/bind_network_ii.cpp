@@ -17,6 +17,14 @@ nb::class_<WNetII> bind_network_ii(nb::module_& m) {
              [](WassersteinNetwork<int64_t, int64_t>& self, const std::vector<double>& point) { self.solve(point); },
              nb::arg("point"))
         .def("total_cost", &WassersteinNetwork<int64_t, int64_t>::total_cost)
+        .def("dual_cut", [](const WassersteinNetwork<int64_t, int64_t>& self) {
+            auto [intercept, slopes, upper, error, rounded_cost] = self.dual_cut();
+            nb::dict out; out["intercept"] = intercept;
+            out["gradient"] = vector_to_numpy<double>(slopes);
+            out["upper_bound"] = upper; out["rounding_error"] = error;
+            out["rounded_cost"] = rounded_cost;
+            return out;
+        })
         .def("scale_factor", &WassersteinNetwork<int64_t, int64_t>::scale_factor)
         .def("intensity_scale_factor", &WassersteinNetwork<int64_t, int64_t>::intensity_scale_factor)
         .def("set_intensity_scale", &WassersteinNetwork<int64_t, int64_t>::set_intensity_scale, nb::arg("scale"))

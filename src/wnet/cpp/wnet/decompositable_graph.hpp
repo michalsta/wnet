@@ -344,6 +344,11 @@ class WassersteinNetworkSubgraph {
     VALUE_TYPE lemon_theoretical_intensity;
     const size_t no_target_distributions;
     bool built = false;
+    bool _dual_valid = false;
+    // Reused cut scratch: no per-component allocations after the first query.
+    mutable std::vector<VALUE_TYPE> _dual_pi, _dual_caps;
+    mutable std::vector<long double> _dual_matched, _dual_alpha, _dual_beta;
+    std::vector<LEMON_INDEX> _dual_anchor_arc, _dual_trash_arc;
     int _cold_starts_via_run = 0;
 
     // Warm-sequence capture (WNET_DUMP_WARMSEQ): when the env var holds a
@@ -580,6 +585,7 @@ class WassersteinNetworkSubgraph {
     // after update_positions); for NetworkSimplex the cost map must be
     // re-pushed before warmRun so that the dual variables are consistent.
     void _run_solver(bool costs_changed = false) {
+        _dual_valid = false;
         // LEMON solvers report INFEASIBLE/UNBOUNDED via their return value
         // and leave whatever flow state they last had; discarding the status
         // (the old behaviour) served that state as if it were a valid
@@ -692,6 +698,7 @@ class WassersteinNetworkSubgraph {
         }, _config);
         // Any solve may have changed potentials/flow -> invalidate the
         // cached derivative context.
+        _dual_valid = true;
         ++_solution_version;
     }
 
@@ -926,7 +933,13 @@ public:
         {
             capacities_map[lemon_graph.arcFromId(ii)] = std::visit([&](const auto& arg) {
                     using T = std::decay_t<decltype(arg)>;
-                    if constexpr (std::is_same_v<T, MatchingEdge>) return (VALUE_TYPE) 0;
+                    if constexpr (std::is_same_v<T, MatchingEdge>) {
+                        // Anchor caps already bound matching flow. Redundant
+                        // per-pair caps create arbitrary matching multipliers
+                        // at saturation and unnecessary warm-cap updates.
+                        return std::holds_alternative<NetworkSimplexConfig>(_config)
+                            ? std::numeric_limits<VALUE_TYPE>::max() : VALUE_TYPE(0);
+                    }
                     else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) {
                         VALUE_TYPE lemon_intensity = static_cast<VALUE_TYPE>(
                             std::get<EmpiricalNode<intensity_type>>(edges[ii].get_end_node().get_type()).get_intensity() * _intensity_scale);
@@ -957,6 +970,7 @@ public:
                     else { throw std::runtime_error("Invalid FlowEdgeType"); };
                 }, edges[ii].get_type());
         }
+        _dual_valid = false;
         ns_solver.reset();
         ns_lct_solver.reset();
         cc_solver.reset();
@@ -983,6 +997,21 @@ public:
                     _theo_sink_edge_cache.push_back({lemon_graph.arcFromId(ii), theo.get_intensity(), theo.get_spectrum_id()});
                 }
             }, edges[ii].get_type());
+        }
+        _dual_anchor_arc.assign(nodes.size(), -1);
+        _dual_trash_arc.assign(nodes.size(), -1);
+        for (size_t e = 0; e < edges.size(); ++e) {
+            std::visit([&](const auto& type) {
+                using T = std::decay_t<decltype(type)>;
+                if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>)
+                    _dual_anchor_arc[edges[e].get_end_node_id()] = e;
+                else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>)
+                    _dual_anchor_arc[edges[e].get_start_node_id()] = e;
+                else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>)
+                    _dual_trash_arc[edges[e].get_start_node_id()] = e;
+                else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>)
+                    _dual_trash_arc[edges[e].get_end_node_id()] = e;
+            }, edges[e].get_type());
         }
         _costs_buf.assign(edges.size(), VALUE_TYPE(0));
         if (_chain_topo.has_value()) {
@@ -1018,14 +1047,16 @@ public:
     }
 
     void set_point(const std::vector<double>& point) {
+        _dual_valid = false;
         if(point.size() != no_target_distributions)
             throw std::runtime_error("Point dimension: " + std::to_string(point.size()) + " does not match number of target distributions: " + std::to_string(no_target_distributions));
         lemon_theoretical_intensity = 0;
-        for (const auto& e : _matching_edge_cache) {
-            capacities_map[e.arc] = (VALUE_TYPE) std::min<double>(
-                e.theo_intensity * point[e.spectrum_id] * _intensity_scale,
-                e.emp_intensity * _intensity_scale);
-        }
+        if (!std::holds_alternative<NetworkSimplexConfig>(_config))
+            for (const auto& e : _matching_edge_cache) {
+                capacities_map[e.arc] = (VALUE_TYPE) std::min<double>(
+                    e.theo_intensity * point[e.spectrum_id] * _intensity_scale,
+                    e.emp_intensity * _intensity_scale);
+            }
         for (const auto& e : _theo_sink_edge_cache) {
             VALUE_TYPE lemon_intensity = (VALUE_TYPE) (e.theo_intensity * point[e.spectrum_id] * _intensity_scale);
             capacities_map[e.arc] = lemon_intensity;
@@ -2481,6 +2512,78 @@ public:
         return dist;
     }
 
+    // Fast raw certificate, in this subgraph's public node/arc order.
+    auto dual_values() const {
+        if (!std::holds_alternative<NetworkSimplexConfig>(_config) || !_dual_valid)
+            throw std::runtime_error("Dual certificates require a solved NetworkSimplex backend");
+        std::vector<VALUE_TYPE> pi(nodes.size()), rc(edges.size()), lo(edges.size()), up(edges.size());
+        if (_use_lct()) ns_lct_solver->dualValues(pi, rc, lo, up);
+        else ns_solver->dualValues(pi, rc, lo, up);
+        return std::make_tuple(std::move(pi), std::move(rc), std::move(lo), std::move(up));
+    }
+
+    // The matching problem has costs d-tau, nonnegative flows, and upper
+    // bounds E_i/T_j. Its dual is alpha_i,beta_j <= 0 with
+    // alpha_i + beta_j <= d_ij-tau. Build one common feasible dual from the
+    // simplex state, not separate per-peak directional derivatives. Clipping
+    // to [-tau,0] preserves feasibility because d_ij >= 0.
+    void accumulate_dual_cut(VALUE_TYPE tau, VALUE_TYPE shift,
+                             long double& intercept, std::vector<long double>& gradient) const {
+        if (!std::holds_alternative<NetworkSimplexConfig>(_config) || !_dual_valid)
+            throw std::runtime_error("Dual cuts require a solved NetworkSimplex backend");
+        const auto src_pi = _solver_potential(lemon_graph.nodeFromId(0));
+        auto& pi = _dual_pi; auto& anchor_cap = _dual_caps;
+        auto& matched = _dual_matched; auto& alpha = _dual_alpha; auto& beta = _dual_beta;
+        pi.resize(nodes.size()); anchor_cap.assign(nodes.size(), 0);
+        matched.assign(nodes.size(), 0); alpha.assign(nodes.size(), 0); beta.assign(nodes.size(), 0);
+        for (size_t v = 0; v < nodes.size(); ++v) {
+            pi[v] = pylmcf::reducedCost(VALUE_TYPE(0), _solver_potential(lemon_graph.nodeFromId(v)), src_pi);
+            if (_dual_anchor_arc[v] >= 0) {
+                const auto a = lemon_graph.arcFromId(_dual_anchor_arc[v]);
+                anchor_cap[v] = capacities_map[a];
+                matched[v] = _solver_flow(a);
+                if (_dual_trash_arc[v] >= 0)
+                    matched[v] -= _solver_flow(lemon_graph.arcFromId(_dual_trash_arc[v]));
+            }
+        }
+        long double lower = -std::numeric_limits<long double>::infinity();
+        long double upper = std::numeric_limits<long double>::infinity();
+        for (const auto& node : nodes) {
+            const auto v = node.get_id();
+            if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&node.get_type())) {
+                const VALUE_TYPE cap = static_cast<VALUE_TYPE>(emp->get_intensity() * _intensity_scale);
+                if (matched[v] > 0) upper = std::min(upper, (long double)pi[v]);
+                if (matched[v] < cap) lower = std::max(lower, (long double)pi[v]);
+            } else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type())) {
+                // The current anchor capacity already includes the weight.
+                const VALUE_TYPE cap = anchor_cap[v];
+                const long double value = (long double)pi[v] - shift;
+                if (matched[v] > 0) lower = std::max(lower, value);
+                if (matched[v] < cap) upper = std::min(upper, value);
+            }
+        }
+        // At degeneracy any theta in the interval gives an optimal matching
+        // dual. Outside that case clipping/repair still yields a valid bound.
+        const long double theta = lower <= upper ? std::clamp((long double)0, lower, upper) : 0;
+        for (const auto& node : nodes) {
+            const auto v = node.get_id();
+            if (std::holds_alternative<EmpiricalNode<intensity_type>>(node.get_type()))
+                alpha[v] = std::clamp(theta - pi[v], -(long double)tau, (long double)0);
+            else if (std::holds_alternative<TheoreticalNode<intensity_type>>(node.get_type()))
+                beta[v] = std::clamp((long double)pi[v] - theta - shift, -(long double)tau, (long double)0);
+        }
+        // Matching arcs are uncapacitated in simplex backends. Their forward
+        // reduced costs are nonnegative, so the clipped common potentials
+        // already satisfy every matching constraint: no O(edges) repair pass.
+        for (const auto& node : nodes) {
+            const auto v = node.get_id();
+            if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&node.get_type()))
+                intercept += alpha[v] * emp->get_intensity();
+            else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type()))
+                gradient[theo->get_spectrum_id()] += beta[v] * theo->get_intensity();
+        }
+    }
+
     // Per-peak marginal cost of increasing each theoretical signal by 1.
     // Returns vector of (spectrum_id, peak_index, derivative).
     //
@@ -3126,6 +3229,22 @@ public:
             _scale = _explicit_cost_scale;
         else
             _scale = pick_cost_scale(_max_real_cost, total_flow * _intensity_scale, _truncate);
+        if (std::holds_alternative<NetworkSimplexConfig>(config)
+            && std::get<NetworkSimplexConfig>(config).warm == NSWarmMode::LinkCut
+            && _max_real_cost > 0) {
+            // LCT's artificial cost is max_cost*(n+2)*(m+2)+1. Reserve
+            // headroom for its potential/path arithmetic as well as the
+            // real-flow accumulator. A large edge cost scale otherwise wraps
+            // Big-M even though the final real transport bill fits int64.
+            long double limit = (long double)_scale;
+            for (const auto& sg : flow_subgraphs)
+                limit = std::min(limit, std::floor(std::ldexp((long double)1, 58)
+                    / (_max_real_cost * (sg->no_nodes() + (long double)2)
+                                      * (sg->no_edges() + (long double)2))));
+            if (limit < 1 || (_explicit_cost_scale > 0 && limit < _scale))
+                throw std::overflow_error("Cost scale exceeds LinkCut artificial-cost budget; use automatic cost scaling");
+            _scale = static_cast<int64_t>(limit);
+        }
         for (auto& flow_subgraph : flow_subgraphs) {
             flow_subgraph->set_cost_scaling(_scale, _truncate, _intensity_scale,
                                             _p_order);
@@ -3308,9 +3427,10 @@ public:
                     "and >= 0.");
         check_accumulator_budget(point);
 
-        _last_point = point;
+        _last_point.clear();
         for (auto& flow_subgraph : flow_subgraphs)
             flow_subgraph->set_point(point);
+        _last_point = point;
     };
 
     // Total cost in SCALED units (sum of scaled per-subgraph costs plus scaled
@@ -3537,6 +3657,58 @@ public:
     std::vector<std::pair<size_t, double>>
     spectrum_proportion_derivatives_fast_approx() const {
         return _spectrum_proportion_derivatives(/*fast=*/true);
+    }
+
+    // Supporting cut for continuous supplies with the network's fixed,
+    // quantized costs. Every transport solve remains integer network simplex.
+    // Returns intercept, slopes, continuous upper bound, rounding bound and rounded cost.
+    auto dual_cut() const {
+        if (_last_point.size() != _no_theoretical_spectra)
+            throw std::runtime_error("solve() must be called before dual_cut()");
+        if (!_independent_trash_added && !_simple_trash_added && !_experimental_trash_added && !_theoretical_trash_added)
+            throw std::runtime_error("Dual cuts require trash escape routes");
+        const VALUE_TYPE ce = _isolated_exp_trash_cost_scaled();
+        const VALUE_TYPE ct = _isolated_theo_trash_cost_scaled();
+        const VALUE_TYPE tau = _independent_trash_added ? ce + ct
+            : _annihilating_trash() ? std::min(ce, ct) : _experimental_trash_added ? ce : ct;
+        const VALUE_TYPE shift = _independent_trash_added ? 0 : tau;
+        long double intercept = 0;
+        std::vector<long double> gradient(_no_theoretical_spectra, 0);
+        for (const auto& sg : flow_subgraphs) sg->accumulate_dual_cut(tau, shift, intercept, gradient);
+        const long double E = _emp_flow_total;
+        long double T = 0;
+        for (size_t k = 0; k < gradient.size(); ++k) T += _theo_flow_totals[k] * _last_point[k];
+        long double trash_slope = 0;
+        if (_independent_trash_added) { intercept += ce * E; trash_slope = ct; }
+        else if (_annihilating_trash()) {
+            if (ce <= ct) {
+                intercept += ce * E;
+                if (T > E) { intercept -= ct * E; trash_slope = ct; }
+            } else {
+                trash_slope = ct;
+                if (T < E) { intercept += ce * E; trash_slope -= ce; }
+            }
+        } else if (_experimental_trash_added) intercept += ce * E;
+        else trash_slope = ct;
+        for (size_t k = 0; k < gradient.size(); ++k) gradient[k] += trash_slope * _theo_flow_totals[k];
+        long double Eq = _isolated_empirical_intensity_scaled(), Tq = 0;
+        for (const auto& sg : flow_subgraphs) {
+            Eq += sg->quantised_empirical_intensity(); Tq += sg->quantised_theoretical_intensity();
+        }
+        for (size_t k = 0; k < gradient.size(); ++k) Tq += _isolated_theoretical_intensity_scaled(k);
+        const long double loss_e = std::max((long double)0, E - Eq / _intensity_scale);
+        const long double loss_t = std::max((long double)0, T - Tq / _intensity_scale);
+        long double error = ((ce + (long double)tau) * loss_e + (ct + (long double)tau) * loss_t) / _scale;
+        intercept /= _scale;
+        std::vector<double> slopes(gradient.size());
+        for (size_t k = 0; k < slopes.size(); ++k) slopes[k] = gradient[k] / _scale;
+        const double f = (double)total_cost() / ((long double)_scale * _intensity_scale);
+        // Numerical cushion covers the final real-unit accumulation and casts.
+        const long double cushion = 128 * std::numeric_limits<double>::epsilon()
+            * std::max((long double)1, (ce + (long double)ct + tau) * (E + T) / _scale);
+        error += cushion;
+        return std::make_tuple((double)(intercept - cushion), std::move(slopes),
+                               (double)(f + error), (double)error, f);
     }
 
     static constexpr size_t value_type_size() {

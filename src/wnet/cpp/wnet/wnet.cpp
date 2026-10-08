@@ -151,6 +151,14 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_edges", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_edges)
         .def("get_flow_map", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_flow_map)
         .def("is_solved", &WassersteinNetworkSubgraph<int64_t, int64_t>::is_solved)
+        .def("dual_values", [](const WassersteinNetworkSubgraph<int64_t, int64_t>& self) {
+            auto [pi, rc, lo, up] = self.dual_values(); nb::dict out;
+            out["potentials"] = vector_to_numpy<int64_t>(pi);
+            out["reduced_costs"] = vector_to_numpy<int64_t>(rc);
+            out["lower_bound_multipliers"] = vector_to_numpy<int64_t>(lo);
+            out["upper_bound_multipliers"] = vector_to_numpy<int64_t>(up);
+            return out;
+        })
         .def("signal_part_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::signal_part_derivatives)
         .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, int64_t>::spectrum_proportion_derivatives)
         .def("signal_part_derivatives_fast_approx", &WassersteinNetworkSubgraph<int64_t, int64_t>::signal_part_derivatives_fast_approx)
@@ -186,6 +194,14 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_edges", &WassersteinNetworkSubgraph<int64_t, double>::get_edges)
         .def("get_flow_map", &WassersteinNetworkSubgraph<int64_t, double>::get_flow_map)
         .def("is_solved", &WassersteinNetworkSubgraph<int64_t, double>::is_solved)
+        .def("dual_values", [](const WassersteinNetworkSubgraph<int64_t, double>& self) {
+            auto [pi, rc, lo, up] = self.dual_values(); nb::dict out;
+            out["potentials"] = vector_to_numpy<int64_t>(pi);
+            out["reduced_costs"] = vector_to_numpy<int64_t>(rc);
+            out["lower_bound_multipliers"] = vector_to_numpy<int64_t>(lo);
+            out["upper_bound_multipliers"] = vector_to_numpy<int64_t>(up);
+            return out;
+        })
         .def("signal_part_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::signal_part_derivatives)
         .def("spectrum_proportion_derivatives", &WassersteinNetworkSubgraph<int64_t, double>::spectrum_proportion_derivatives)
         .def("signal_part_derivatives_fast_approx", &WassersteinNetworkSubgraph<int64_t, double>::signal_part_derivatives_fast_approx)
