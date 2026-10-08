@@ -861,21 +861,23 @@ public:
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(nodes.size()); ++ii)
             node_supply_map[lemon_graph.nodeFromId(ii)] = 0;
 
-        // Independent trash: quantize the analytic per-unit costs with the
-        // network-wide scale, and shift matching costs by their (real) sum
-        // below — shifting before quantization costs one rounding, not two.
+        // Independent trash: shift matching costs by the same quantized
+        // prices added back in total_cost(). Shifting in real units before
+        // rounding breaks cancellation and can make a zero-cost match negative.
         if (independent_trash) {
             _ind_c_exp_q = quantize_cost<VALUE_TYPE>(_ind_c_exp, _scale, _p_is_one);
             _ind_c_theo_q = quantize_cost<VALUE_TYPE>(_ind_c_theo, _scale, _p_is_one);
         }
-        const double _ind_shift = independent_trash ? (_ind_c_exp + _ind_c_theo) : 0.0;
 
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
             costs_map[lemon_graph.arcFromId(ii)] = std::visit([&](const auto& arg) -> VALUE_TYPE {
                     using T = std::decay_t<decltype(arg)>;
                     // Cost-bearing edges hold a real (double) cost; quantise it to
                     // the integer solver cost here using the network-wide scale.
-                    if constexpr (std::is_same_v<T, MatchingEdge>) return quantize_cost<VALUE_TYPE>(arg.get_cost() - _ind_shift, _scale, _p_is_one);
+                    if constexpr (std::is_same_v<T, MatchingEdge>) {
+                        const VALUE_TYPE cost = quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one);
+                        return independent_trash ? cost - _ind_c_exp_q - _ind_c_theo_q : cost;
+                    }
                     else if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) return (VALUE_TYPE) 0;
                     else if constexpr (std::is_same_v<T, SimpleTrashEdge>) { simple_trash_idx = ii; return quantize_cost<VALUE_TYPE>(arg.get_cost(), _scale, _p_is_one); }
