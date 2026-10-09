@@ -359,6 +359,13 @@ jobs:
           cd "$(mktemp -d)"
           python -c "import wnet; assert not wnet.is_nanobind_split(), 'PyPy must fall back to a linked build'"
 
+      - name: Install SciPy source-build dependencies
+        # SciPy has no wheel for this PyPy lane. The pytest extra therefore
+        # builds it from source, which needs a Fortran compiler and BLAS/LAPACK.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y gfortran libopenblas-dev pkg-config
+
       - name: Run the test suite
         run: |
           python -m pip install "wnet[pytest]"
