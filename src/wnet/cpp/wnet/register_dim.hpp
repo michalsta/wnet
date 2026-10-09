@@ -229,6 +229,7 @@ using WNetFactory = WassersteinNetworkFactory<int64_t>;
             const VectorDistribution<DIM, double, INTENSITY_TYPE>* new_emp, \
             const std::vector<VectorDistribution<DIM, double, INTENSITY_TYPE>*>& new_theo, \
             DistanceMetric metric) { \
+             self.validate_position_update_inputs(new_emp, new_theo); \
              const size_t n_emp = new_emp->size(); \
              std::unique_ptr<double[]> emp_buf(new double[n_emp * DIM]()); \
              std::span<double> emp_span(emp_buf.get(), n_emp * DIM); \

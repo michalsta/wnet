@@ -306,6 +306,13 @@ inline VALUE_TYPE quantize_cost(double real_cost, int64_t scale, bool p_is_one) 
 }
 
 
+inline constexpr const char* POSITION_UPDATE_INVALID_MESSAGE =
+    "Position update failed; network state may be partially updated. Rebuild before reuse.";
+
+inline void require_valid_position_update(bool invalid) {
+    if (invalid) throw std::runtime_error(POSITION_UPDATE_INVALID_MESSAGE);
+}
+
 template <typename VALUE_TYPE, typename intensity_type>
 class WassersteinNetworkSubgraph {
     std::vector<FlowNode<intensity_type>> nodes;
@@ -345,6 +352,7 @@ class WassersteinNetworkSubgraph {
     const size_t no_target_distributions;
     bool built = false;
     bool _dual_valid = false;
+    bool _position_update_invalid = false;
     // Reused cut scratch: no per-component allocations after the first query.
     mutable std::vector<VALUE_TYPE> _dual_pi, _dual_caps;
     mutable std::vector<long double> _dual_matched, _dual_alpha, _dual_beta;
@@ -473,6 +481,7 @@ class WassersteinNetworkSubgraph {
                           : ns_solver->potential(nd);
     }
     bool _solver_has_value() const {
+        require_valid_position_update(_position_update_invalid);
         if (_use_slopedp() || _use_sweep()) return _slope_solved;
         if (std::holds_alternative<NetworkSimplexConfig>(_config))
             return _use_lct() ? ns_lct_solver.has_value() : ns_solver.has_value();
@@ -1042,11 +1051,13 @@ public:
     }
 
     void build(SolverConfig config = NetworkSimplexConfig{}) {
+        require_valid_position_update(_position_update_invalid);
         _config = config;
         build_impl();
     }
 
     void set_point(const std::vector<double>& point) {
+        require_valid_position_update(_position_update_invalid);
         _dual_valid = false;
         if(point.size() != no_target_distributions)
             throw std::runtime_error("Point dimension: " + std::to_string(point.size()) + " does not match number of target distributions: " + std::to_string(no_target_distributions));
@@ -1672,6 +1683,13 @@ public:
 
   public:
 
+    void invalidate_position_update() noexcept {
+        _position_update_invalid = true;
+        _dual_valid = false;
+        _slope_solved = false;
+        _deriv_ctx_version[0] = _deriv_ctx_version[1] = -1;
+    }
+
     VALUE_TYPE total_cost() const {
         if(!_solver_has_value()) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
         VALUE_TYPE cost = _solver_total_cost();
@@ -1904,6 +1922,7 @@ public:
     };
 
     std::unordered_map<LEMON_INDEX, VALUE_TYPE> get_flow_map() const {
+        require_valid_position_update(_position_update_invalid);
         std::unordered_map<LEMON_INDEX, VALUE_TYPE> result;
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
         {
@@ -1959,7 +1978,7 @@ public:
     }
 
     bool is_solved() const {
-        return _solver_has_value();
+        return !_position_update_invalid && _solver_has_value();
     }
 
     // Chain-specialized residual shortest distances. Linear sweep variant of
@@ -2521,6 +2540,7 @@ public:
 
     // Fast raw certificate, in this subgraph's public node/arc order.
     auto dual_values() const {
+        require_valid_position_update(_position_update_invalid);
         if (!std::holds_alternative<NetworkSimplexConfig>(_config) || !_dual_valid)
             throw std::runtime_error("Dual certificates require a solved NetworkSimplex backend");
         std::vector<VALUE_TYPE> pi(nodes.size()), rc(edges.size()), lo(edges.size()), up(edges.size());
@@ -2686,6 +2706,7 @@ public:
     // _make_deriv_context() because the context is a pure function of the
     // post-solve solver state.
     const DerivContext& _get_deriv_context(bool use_pi) const {
+        require_valid_position_update(_position_update_invalid);
         const int k = use_pi ? 1 : 0;
         if (_deriv_ctx_version[k] != _solution_version) {
             _deriv_ctx_cache[k] = _make_deriv_context(use_pi);
@@ -2805,6 +2826,8 @@ class WassersteinNetwork {
 
     const size_t _no_theoretical_spectra;
     const std::vector<size_t> _theoretical_spectra_sizes;
+    const size_t _dimension;
+    size_t _empirical_size;
 
     std::vector<LEMON_INDEX> dead_end_node_ids;
     std::vector<std::unique_ptr<WassersteinNetworkSubgraph<VALUE_TYPE, intensity_type>>> flow_subgraphs;
@@ -2817,6 +2840,7 @@ class WassersteinNetwork {
     std::vector<double> _last_point;
 
     bool built = false;
+    bool _position_update_invalid = false;
     SolverConfig _built_config = NetworkSimplexConfig{};
 
     // Wasserstein transport order p.  Edge cost = ground_distance^p, so the
@@ -2878,6 +2902,12 @@ class WassersteinNetwork {
     bool _experimental_trash_added = false;
     bool _theoretical_trash_added = false;
 
+    void _invalidate_position_update() noexcept {
+        _position_update_invalid = true;
+        _last_point.clear();
+        for (auto& sg : flow_subgraphs) sg->invalidate_position_update();
+    }
+
 public:
     WassersteinNetwork(std::vector<FlowNode<intensity_type>>&& nodes_,
                        std::vector<FlowEdge<intensity_type>>&& edges_,
@@ -2885,16 +2915,20 @@ public:
                        std::vector<size_t>&& theoretical_spectra_sizes_,
                        std::vector<LEMON_INDEX>&& dead_end_node_ids_,
                        double p_order = 1.0,
-                       double max_real_cost = 0.0
+                       double max_real_cost = 0.0,
+                       size_t dimension = 0
     ) :
     nodes(std::move(nodes_)),
     edges(std::move(edges_)),
     _no_theoretical_spectra(no_theoretical_spectra_),
     _theoretical_spectra_sizes(std::move(theoretical_spectra_sizes_)),
+    _dimension(dimension),
+    _empirical_size(nodes.size() - 2),
     dead_end_node_ids(std::move(dead_end_node_ids_)),
     _p_order(p_order),
     _max_real_cost(max_real_cost)
     {
+        for (size_t size : _theoretical_spectra_sizes) _empirical_size -= size;
         _current_edge_costs.reserve(edges.size());
         for (const auto& edge : edges) _current_edge_costs.push_back(edge.get_cost());
         build_subgraphs();
@@ -2967,6 +3001,8 @@ public:
         _current_edge_costs(std::move(other._current_edge_costs)),
         _no_theoretical_spectra(other._no_theoretical_spectra),
         _theoretical_spectra_sizes(std::move(other._theoretical_spectra_sizes)),
+        _dimension(other._dimension),
+        _empirical_size(other._empirical_size),
         dead_end_node_ids(std::move(other.dead_end_node_ids)),
         flow_subgraphs(std::move(other.flow_subgraphs)),
         _isolated_empirical_intensity(other._isolated_empirical_intensity),
@@ -2975,6 +3011,7 @@ public:
         _isolated_theo_trash_cost(other._isolated_theo_trash_cost),
         _last_point(std::move(other._last_point)),
         built(other.built),
+        _position_update_invalid(other._position_update_invalid),
         _built_config(other._built_config),
         _p_order(other._p_order),
         _scale(other._scale),
@@ -3197,6 +3234,7 @@ public:
     };
 
     void build(SolverConfig config = NetworkSimplexConfig{}) {
+        require_valid_position_update(_position_update_invalid);
         // Total flow upper bound for the cost-scale accumulator ceiling: the
         // per-subgraph flow is max(emp, theo) intensity, so summing all node
         // intensities over-estimates the network-wide flow (safe — it only
@@ -3274,6 +3312,7 @@ public:
     // existing edges preserves the fixed topology, even after position moves
     // cross a matching/splitting threshold. Failures leave this object intact.
     WassersteinNetwork refined_copy(double intensity_scale) const {
+        require_valid_position_update(_position_update_invalid);
         if (!built)
             throw std::runtime_error("refined_copy() requires a built network");
         auto new_nodes = nodes;
@@ -3300,7 +3339,7 @@ public:
         WassersteinNetwork result(std::move(new_nodes), std::move(new_edges),
             _no_theoretical_spectra, std::vector<size_t>(_theoretical_spectra_sizes),
             std::vector<LEMON_INDEX>(dead_end_node_ids), _p_order,
-            std::max(max_cost, chain_bound));
+            std::max(max_cost, chain_bound), _dimension);
         result.set_intensity_scale(intensity_scale);
         if (_cost_scaling_requested) result.set_cost_scaling(0);
         result.set_flow_budget(_flow_budget);
@@ -3472,6 +3511,7 @@ public:
     }
 
     void solve(const std::vector<double>& point) {
+        require_valid_position_update(_position_update_invalid);
         if(!built)
             throw std::runtime_error("You must call build() before calling solve().");
         // A negative proportion produces negative arc capacities (an
@@ -3497,6 +3537,7 @@ public:
     // isolated-trash contributions).  The Python wrapper divides by scale_factor()
     // to recover the real W_p**p value.
     VALUE_TYPE total_cost() const {
+        require_valid_position_update(_position_update_invalid);
         // Normally a subgraph throws first when queried before solve(), but a
         // network whose peaks are all dead-ends has no subgraph to object and
         // would read _last_point out of bounds below.
@@ -3558,6 +3599,7 @@ public:
     };
 
     const WassersteinNetworkSubgraph<VALUE_TYPE, intensity_type>& get_subgraph(size_t idx) const {
+        require_valid_position_update(_position_update_invalid);
         if (idx >= flow_subgraphs.size())
             throw std::out_of_range("Subgraph index out of range");
         return *flow_subgraphs[idx];
@@ -3578,6 +3620,7 @@ public:
     };
 
     std::tuple<std::vector<LEMON_INDEX>, std::vector<LEMON_INDEX>, std::vector<VALUE_TYPE>> flows_for_target(size_t target_id) const {
+        require_valid_position_update(_position_update_invalid);
         std::vector<LEMON_INDEX> empirical_peak_indices;
         std::vector<LEMON_INDEX> theoretical_peak_indices;
         std::vector<VALUE_TYPE> flows;
@@ -3626,6 +3669,7 @@ public:
 
     std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>>
     _signal_part_derivatives(bool fast) const {
+        require_valid_position_update(_position_update_invalid);
         std::vector<std::tuple<size_t, LEMON_INDEX, VALUE_TYPE>> result;
         // Each subgraph reports the marginal for its own supplies; re-base it
         // onto the network-wide ones (zero when the trash bill is additive).
@@ -3658,6 +3702,7 @@ public:
 
     std::vector<std::pair<size_t, double>>
     _spectrum_proportion_derivatives(bool fast) const {
+        require_valid_position_update(_position_update_invalid);
         std::vector<double> accum(_no_theoretical_spectra, 0.0);
         // These derivatives are per-unit prices weighted by the real (unscaled,
         // un-weighted) theoretical intensity, so the re-basing price difference
@@ -3723,6 +3768,7 @@ public:
     // quantized costs. Every transport solve remains integer network simplex.
     // Returns intercept, slopes, continuous upper bound, rounding bound and rounded cost.
     auto dual_cut() const {
+        require_valid_position_update(_position_update_invalid);
         if (_last_point.size() != _no_theoretical_spectra)
             throw std::runtime_error("solve() must be called before dual_cut()");
         if (!_independent_trash_added && !_simple_trash_added && !_experimental_trash_added && !_theoretical_trash_added)
@@ -3797,103 +3843,138 @@ public:
     // For chain subgraphs (1D) the sorted position order of peaks in the
     // chain must be preserved; otherwise an exception is thrown.  If peaks
     // have genuinely crossed, rebuild the network from scratch instead.
+    template<typename Distribution_t>
+    void validate_position_update_inputs(
+        const Distribution_t* new_empirical,
+        const std::vector<Distribution_t*>& new_theoretical
+    ) const {
+        require_valid_position_update(_position_update_invalid);
+        constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
+        if (_dimension != 0 && DIM != _dimension)
+            throw std::invalid_argument("Position update dimension must match the original network");
+        if (new_theoretical.size() != _no_theoretical_spectra)
+            throw std::invalid_argument("Position update target count must match the original network");
+        if (!new_empirical || new_empirical->size() != _empirical_size)
+            throw std::invalid_argument("Position update empirical peak count must match the original network");
+        for (size_t k = 0; k < _no_theoretical_spectra; ++k)
+            if (!new_theoretical[k] || new_theoretical[k]->size() != _theoretical_spectra_sizes[k])
+                throw std::invalid_argument("Position update target peak count must match the original network (target "
+                                            + std::to_string(k) + ")");
+    }
+
     template<typename Distribution_t, typename DistMetric>
     void update_positions_and_solve(
         const Distribution_t* new_empirical,
         const std::vector<Distribution_t*>& new_theoretical
     ) {
+        require_valid_position_update(_position_update_invalid);
         if (!built)
             throw std::runtime_error("update_positions_and_solve() must be called after build().");
+        validate_position_update_inputs(new_empirical, new_theoretical);
+        if (_last_point.size() != _no_theoretical_spectra)
+            throw std::runtime_error("solve() must be called before updating positions");
 
-        for (auto& sg_ptr : flow_subgraphs) {
-            auto& sg = *sg_ptr;
-            const auto& sg_nodes = sg.get_nodes();
-            const auto& sg_edges = sg.get_edges();
+        bool mutation_started = false;
+        try {
+            for (auto& sg_ptr : flow_subgraphs) {
+                auto& sg = *sg_ptr;
+                const auto& sg_nodes = sg.get_nodes();
+                const auto& sg_edges = sg.get_edges();
 
-            // Option B: reject position updates that would reorder chain nodes.
-            // _build_chain_topology() walks from the lowest-ID endpoint, so the
-            // chain order is deterministic.  Valid updates keep the sequence
-            // monotone; a non-monotone result means peaks have genuinely crossed
-            // and the topology is no longer valid.
-            // nodes[i].get_id() == i by construction, so sg_nodes[nid] is a direct lookup.
-            // Kept for apply_new_costs(): the ConvexSweep backend prices pairs
-            // from real positions and cannot recover them from the edge costs.
-            const std::vector<double>* chain_positions = nullptr;
-            const auto& chain_order = sg.get_chain_order();
-            if (chain_order.size() >= 2) {
-                auto& chain_pos = sg.chain_pos_scratch();
-                chain_pos.clear();
-                for (LEMON_INDEX nid : chain_order) {
-                    const auto& ntype = sg_nodes[nid].get_type();
-                    if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&ntype))
-                        chain_pos.push_back(new_empirical->get_point(emp->get_peak_index())[0]);
-                    else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&ntype))
-                        chain_pos.push_back(new_theoretical[theo->get_spectrum_id()]->get_point(theo->get_peak_index())[0]);
-                    // source/sink never appear in chain_order; skip anything else
+                // Option B: reject position updates that would reorder chain nodes.
+                // _build_chain_topology() walks from the lowest-ID endpoint, so the
+                // chain order is deterministic.  Valid updates keep the sequence
+                // monotone; a non-monotone result means peaks have genuinely crossed
+                // and the topology is no longer valid.
+                // nodes[i].get_id() == i by construction, so sg_nodes[nid] is a direct lookup.
+                // Kept for apply_new_costs(): the ConvexSweep backend prices pairs
+                // from real positions and cannot recover them from the edge costs.
+                const std::vector<double>* chain_positions = nullptr;
+                const auto& chain_order = sg.get_chain_order();
+                if (chain_order.size() >= 2) {
+                    auto& chain_pos = sg.chain_pos_scratch();
+                    chain_pos.clear();
+                    for (LEMON_INDEX nid : chain_order) {
+                        const auto& ntype = sg_nodes[nid].get_type();
+                        if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&ntype))
+                            chain_pos.push_back(new_empirical->get_point(emp->get_peak_index())[0]);
+                        else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&ntype))
+                            chain_pos.push_back(new_theoretical[theo->get_spectrum_id()]->get_point(theo->get_peak_index())[0]);
+                        // source/sink never appear in chain_order; skip anything else
+                    }
+                    bool all_nondec = true, all_noninc = true;
+                    for (size_t k = 1; k < chain_pos.size(); ++k) {
+                        if (chain_pos[k] < chain_pos[k - 1]) all_nondec = false;
+                        if (chain_pos[k] > chain_pos[k - 1]) all_noninc = false;
+                    }
+                    if (!all_nondec && !all_noninc)
+                        throw std::invalid_argument(
+                            "update_positions_and_solve(): new positions violate the chain's sorted "
+                            "order (peaks have crossed). Rebuild the network for the new positions.");
+                    chain_positions = &chain_pos;
                 }
-                bool all_nondec = true, all_noninc = true;
-                for (size_t k = 1; k < chain_pos.size(); ++k) {
-                    if (chain_pos[k] < chain_pos[k - 1]) all_nondec = false;
-                    if (chain_pos[k] > chain_pos[k - 1]) all_noninc = false;
-                }
-                if (!all_nondec && !all_noninc)
-                    throw std::invalid_argument(
-                        "update_positions_and_solve(): new positions violate the chain's sorted "
-                        "order (peaks have crossed). Rebuild the network for the new positions.");
-                chain_positions = &chain_pos;
-            }
 
-            // Compute new edge costs using the pre-allocated scratch buffer.
-            auto& new_costs = sg.costs_scratch();
-            std::fill(new_costs.begin(), new_costs.end(), VALUE_TYPE(0));
-            for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(sg_edges.size()); ++ii) {
-                const auto& edge = sg_edges[ii];
-                if (std::holds_alternative<MatchingEdge>(edge.get_type())) {
-                    const auto& emp_t  = std::get<EmpiricalNode<intensity_type>>(edge.get_start_node().get_type());
-                    const auto& theo_t = std::get<TheoreticalNode<intensity_type>>(edge.get_end_node().get_type());
-                    const double d = DistMetric::dist(
-                        new_empirical->get_point(emp_t.get_peak_index()),
-                        new_theoretical[theo_t.get_spectrum_id()]->get_point(theo_t.get_peak_index()));
-                    const double real_cost = (_p_order == 1.0) ? d : std::pow(d, _p_order);
-                    // Reuse the fixed build-time scale so the warm-restarted basis
-                    // stays in the same cost units.
-                    new_costs[ii] = quantize_cost<VALUE_TYPE>(real_cost, _scale, _costs_truncated());
-                } else if (std::holds_alternative<ChainEdge>(edge.get_type())) {
-                    auto get_pos_1d = [&](const FlowNode<intensity_type>& n) -> double {
-                        const auto& nt = n.get_type();
-                        if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&nt))
-                            return new_empirical->get_point(emp->get_peak_index())[0];
-                        if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&nt))
-                            return new_theoretical[theo->get_spectrum_id()]->get_point(theo->get_peak_index())[0];
-                        throw std::runtime_error("update_positions_and_solve(): chain edge connects non-peak node.");
-                    };
-                    const double gap = std::abs(get_pos_1d(edge.get_start_node()) - get_pos_1d(edge.get_end_node()));
-                    // Match the build-time quantisation (truncate only for legacy
-                    // p == 1 without cost scaling; scaled+rounded otherwise).
-                    new_costs[ii] = quantize_cost<VALUE_TYPE>(gap, _scale, _costs_truncated());
+                // Compute new edge costs using the pre-allocated scratch buffer.
+                auto& new_costs = sg.costs_scratch();
+                std::fill(new_costs.begin(), new_costs.end(), VALUE_TYPE(0));
+                for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(sg_edges.size()); ++ii) {
+                    const auto& edge = sg_edges[ii];
+                    if (std::holds_alternative<MatchingEdge>(edge.get_type())) {
+                        const auto& emp_t  = std::get<EmpiricalNode<intensity_type>>(edge.get_start_node().get_type());
+                        const auto& theo_t = std::get<TheoreticalNode<intensity_type>>(edge.get_end_node().get_type());
+                        const double d = DistMetric::dist(
+                            new_empirical->get_point(emp_t.get_peak_index()),
+                            new_theoretical[theo_t.get_spectrum_id()]->get_point(theo_t.get_peak_index()));
+                        const double real_cost = (_p_order == 1.0) ? d : std::pow(d, _p_order);
+                        // Reuse the fixed build-time scale so the warm-restarted basis
+                        // stays in the same cost units.
+                        new_costs[ii] = quantize_cost<VALUE_TYPE>(real_cost, _scale, _costs_truncated());
+                    } else if (std::holds_alternative<ChainEdge>(edge.get_type())) {
+                        auto get_pos_1d = [&](const FlowNode<intensity_type>& n) -> double {
+                            const auto& nt = n.get_type();
+                            if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&nt))
+                                return new_empirical->get_point(emp->get_peak_index())[0];
+                            if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&nt))
+                                return new_theoretical[theo->get_spectrum_id()]->get_point(theo->get_peak_index())[0];
+                            throw std::runtime_error("update_positions_and_solve(): chain edge connects non-peak node.");
+                        };
+                        const double gap = std::abs(get_pos_1d(edge.get_start_node()) - get_pos_1d(edge.get_end_node()));
+                        // Match the build-time quantisation (truncate only for legacy
+                        // p == 1 without cost scaling; scaled+rounded otherwise).
+                        new_costs[ii] = quantize_cost<VALUE_TYPE>(gap, _scale, _costs_truncated());
+                    }
+                    // All other edge types (SrcToEmpirical, TheoreticalToSink, trash, …)
+                    // have position-independent costs; apply_new_costs ignores them (new_costs[ii] = 0).
                 }
-                // All other edge types (SrcToEmpirical, TheoreticalToSink, trash, …)
-                // have position-independent costs; apply_new_costs ignores them (new_costs[ii] = 0).
-            }
 
-            sg.apply_new_costs(new_costs, chain_positions);
-        }
-        // _last_point (spectrum proportions) is unchanged — intensities are fixed.
-        for (size_t i = 0; i < edges.size(); ++i) {
-            const auto& edge = edges[i];
-            auto point_for = [&](const FlowNode<intensity_type>& node) {
-                const auto& type = node.get_type();
-                if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&type))
-                    return new_empirical->get_point(emp->get_peak_index());
-                const auto& theo = std::get<TheoreticalNode<intensity_type>>(type);
-                return new_theoretical[theo.get_spectrum_id()]->get_point(theo.get_peak_index());
-            };
-            if (std::holds_alternative<MatchingEdge>(edge.get_type())
-                || std::holds_alternative<ChainEdge>(edge.get_type())) {
-                const double d = DistMetric::dist(point_for(edge.get_start_node()), point_for(edge.get_end_node()));
-                _current_edge_costs[i] = std::holds_alternative<ChainEdge>(edge.get_type()) || _p_order == 1.0
-                    ? d : std::pow(d, _p_order);
+                mutation_started = true;
+                sg.apply_new_costs(new_costs, chain_positions);
             }
+            // _last_point (spectrum proportions) is unchanged — intensities are fixed.
+            for (size_t i = 0; i < edges.size(); ++i) {
+                const auto& edge = edges[i];
+                auto point_for = [&](const FlowNode<intensity_type>& node) {
+                    const auto& type = node.get_type();
+                    if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&type))
+                        return new_empirical->get_point(emp->get_peak_index());
+                    const auto& theo = std::get<TheoreticalNode<intensity_type>>(type);
+                    return new_theoretical[theo.get_spectrum_id()]->get_point(theo.get_peak_index());
+                };
+                if (std::holds_alternative<MatchingEdge>(edge.get_type())
+                    || std::holds_alternative<ChainEdge>(edge.get_type())) {
+                    const double d = DistMetric::dist(point_for(edge.get_start_node()), point_for(edge.get_end_node()));
+                    _current_edge_costs[i] = std::holds_alternative<ChainEdge>(edge.get_type()) || _p_order == 1.0
+                        ? d : std::pow(d, _p_order);
+                }
+            }
+        } catch (const std::exception& exc) {
+            if (!mutation_started) throw;
+            _invalidate_position_update();
+            throw std::runtime_error(std::string(exc.what()) + " " + POSITION_UPDATE_INVALID_MESSAGE);
+        } catch (...) {
+            if (!mutation_started) throw;
+            _invalidate_position_update();
+            throw std::runtime_error(POSITION_UPDATE_INVALID_MESSAGE);
         }
     }
 
@@ -3925,6 +4006,7 @@ public:
         std::span<double> emp_grad,
         std::vector<std::span<double>> theo_grads
     ) {
+        validate_position_update_inputs(new_empirical, new_theoretical);
         static constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
         // Refuse before mutating anything, so a rejected call is a no-op.
         // accumulate_position_gradients_chain() reads the per-gap fluxes, which
@@ -3943,18 +4025,26 @@ public:
                     "update_positions_and_solve() for warm re-solving, or the SlopeDP "
                     "backend (p == 1) / the dense factory for position gradients.");
         update_positions_and_solve<Distribution_t, DistMetric>(new_empirical, new_theoretical);
-        for (auto& sg_ptr : flow_subgraphs) {
-            if (sg_ptr->has_chain_edges()) {
-                if constexpr (DIM == 1)
-                    sg_ptr->template accumulate_position_gradients_chain<Distribution_t, DistMetric>(
-                        new_empirical, new_theoretical, emp_grad, theo_grads);
-                else
-                    throw std::logic_error(
-                        "update_positions_and_get_gradient: chain edges require DIM == 1");
-            } else {
-                sg_ptr->template accumulate_position_gradients<Distribution_t, DistMetric>(
-                    new_empirical, new_theoretical, emp_grad, theo_grads, _p_order);
+        try {
+            for (auto& sg_ptr : flow_subgraphs) {
+                if (sg_ptr->has_chain_edges()) {
+                    if constexpr (DIM == 1)
+                        sg_ptr->template accumulate_position_gradients_chain<Distribution_t, DistMetric>(
+                            new_empirical, new_theoretical, emp_grad, theo_grads);
+                    else
+                        throw std::logic_error(
+                            "update_positions_and_get_gradient: chain edges require DIM == 1");
+                } else {
+                    sg_ptr->template accumulate_position_gradients<Distribution_t, DistMetric>(
+                        new_empirical, new_theoretical, emp_grad, theo_grads, _p_order);
+                }
             }
+        } catch (const std::exception& exc) {
+            _invalidate_position_update();
+            throw std::runtime_error(std::string(exc.what()) + " " + POSITION_UPDATE_INVALID_MESSAGE);
+        } catch (...) {
+            _invalidate_position_update();
+            throw std::runtime_error(POSITION_UPDATE_INVALID_MESSAGE);
         }
     }
 
@@ -3989,6 +4079,7 @@ public:
         const std::vector<Distribution_t*>& new_theoretical
     ) {
         static constexpr size_t DIM = std::tuple_size_v<typename Distribution_t::Point_t>;
+        validate_position_update_inputs(new_empirical, new_theoretical);
         std::vector<double> emp_grad(new_empirical->size() * DIM, 0.0);
         std::vector<std::vector<double>> theo_grads;
         theo_grads.reserve(new_theoretical.size());
@@ -4121,7 +4212,8 @@ public:
             std::move(theoretical_spectra_sizes),
             std::move(dead_end_node_ids),
             p,
-            max_real_cost
+            max_real_cost,
+            std::tuple_size_v<typename Distribution_t::Point_t>
         );
     };
 
@@ -4336,7 +4428,8 @@ public:
             std::move(theoretical_spectra_sizes),
             std::move(dead_end_node_ids),
             p,
-            max_real_cost
+            max_real_cost,
+            1
         );
     };
 };
