@@ -60,7 +60,9 @@ try:
     import pytest
 
     @pytest.mark.long
-    @pytest.mark.parametrize("params, expected", zip(parameter_set, expected_results))
+    @pytest.mark.parametrize(
+        "params, expected", list(zip(parameter_set, expected_results))
+    )
     def test_large_wsdflow_instances(params, expected):
         wsd_instance = create_large_wsdflow_instance(**params)
         cost = solve_large_wsdflow_instance(wsd_instance)

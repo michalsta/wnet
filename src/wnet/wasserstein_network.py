@@ -61,15 +61,14 @@ class WassersteinNetwork:
 
     * ``max_distance`` (dense semantics, the default): a **per-pair matching threshold**.  Mass is never transported
       between an empirical and a theoretical peak farther apart than ``max_distance``, guaranteed.  Internally the O(m+n)
-      1D chain factory may still be used, but only when provably equivalent to the dense factory: when the cap is
-      None/infinite, or when both-side trash exists (simple, or experimental+theoretical) and ``max_distance`` is at
-      least the sum of the two per-unit trash costs (simple trash ``t`` counts as ``2t``; asymmetric as ``t_exp +
-      t_theo``) — beyond that distance transport is dominated by trashing both sides, so the cap is provably inactive.
-      Otherwise the dense factory is used.
+      1D chain factory may still be used when the cap is None/infinite and the solver and trash model support it.
+      A finite ``max_distance`` always uses the dense factory, even when transport beyond the cap would cost
+      more than trashing. Use ``split_distance`` to request chain semantics explicitly.
     * ``split_distance``: **explicit chain semantics**.  The merged 1D peak sequence is split into independent components
       wherever the gap between *consecutive* peaks exceeds ``split_distance``; within a component mass may legally ride
       the chain arbitrarily far (multi-hop), i.e. this is a component-splitting radius, not a per-pair cap.  Requires 1D
-      data, ``p == 1``, ``force_dense_1d=False`` and a chain-compatible solver (NetworkSimplex, CycleCanceling, SlopeDP);
+      data, ``force_dense_1d=False`` and a chain-compatible solver (NetworkSimplex, CycleCanceling, SlopeDP, ConvexSweep);
+      ``p != 1`` requires ConvexSweep, and independent asymmetric trash requires SlopeDP or ConvexSweep;
       anything else raises ValueError — there is no silent dense fallback, since chain semantics were requested by name.
 
     Passing both ``max_distance`` and ``split_distance`` raises ValueError.
@@ -77,11 +76,11 @@ class WassersteinNetwork:
     Args:
         base_distribution (Distribution): The base distribution from which the Wasserstein distance is computed.
         target_distributions (Sequence[Distribution]): A sequence of target distributions to which the Wasserstein distance is computed.
-        distance (DistanceFunction): A callable that computes the distance between points in the distributions.
+        distance (DistanceMetric): Ground metric: L1, L2, or LINF.
         max_distance (float | None): Per-pair matching threshold (dense semantics, see above). If None or infinity, no cap.
         force_dense_1d (bool): In 1D, force the O(m*n) dense factory instead of the O(m+n) chain factory; the chain factory is never used. Incompatible with split_distance.
-        p (float): Wasserstein transport order, any real number >= 1. Each matching edge costs ground_distance**p, so total_cost() and all derivatives are in W_p**p units; take the p-th root for the literal W_p distance (the high-level WassersteinDistance() does this). For p != 1 the cost is fractional, so the integer solver works in auto-scaled units (round(scale_factor() * d**p)); the public total_cost()/derivatives divide that back out. p == 1 is bit-exact with the legacy 1-Wasserstein (scale_factor() == 1, truncation). p != 1 always uses the dense factory (the 1D chain factory is invalid for p != 1, since exponentiated gap costs are not additive).
-        solver: Solver configuration object. One of NetworkSimplex(), CostScaling(), CycleCanceling(), CapacityScaling(), or SlopeDP(). Defaults to NetworkSimplex() (warm restarts, BLOCK_SEARCH pivot). SlopeDP is chain-native: it requires either split_distance or a max_distance for which the chain factory is provably equivalent (see above).
+        p (float): Wasserstein transport order, any real number >= 1. Each matching edge costs ground_distance**p, so total_cost() and all derivatives are in W_p**p units; take the p-th root for the literal W_p distance (the high-level WassersteinDistance() does this). For p != 1 the cost is fractional, so the integer solver works in auto-scaled units (round(scale_factor() * d**p)); the public total_cost()/derivatives divide that back out. p == 1 uses legacy cost truncation unless set_cost_scaling() is requested. For p != 1 the dense factory is used, except with ConvexSweep, which prices pairs directly on the 1D chain.
+        solver: Solver configuration object. One of NetworkSimplex(), CostScaling(), CycleCanceling(), CapacityScaling(), SlopeDP(), or ConvexSweep(). Defaults to NetworkSimplex() (warm restarts, BLOCK_SEARCH pivot). SlopeDP and ConvexSweep are chain-native: they require split_distance or an absent/infinite max_distance, together with 1D data and force_dense_1d=False. SlopeDP requires p == 1.
         intensity_scale (float | None): None => auto (FineGridScaler, chosen at build() time so it sees the declared trash costs); an explicit value is used verbatim.
         round_max_distance (bool): Round a fractional cap up to an integer (legacy p == 1 truncation behaviour) with a warning. Applied to whichever of max_distance/split_distance was given.
         split_distance (float | None): Explicit chain-semantics split radius (see above).
@@ -421,9 +420,9 @@ class WassersteinNetwork:
         if isinstance(self._solver, (SlopeDP, ConvexSweep)) and not chain_possible:
             raise ValueError(
                 f"{type(self._solver).__name__} is chain-native, but the requested configuration "
-                "cannot use the 1D chain factory (it needs 1D data, p == 1, "
+                "cannot use the 1D chain factory (it needs 1D data, "
                 "force_dense_1d=False, and no max_distance — a finite "
-                "max_distance means per-pair dense semantics). "
+                "max_distance means per-pair dense semantics; SlopeDP also needs p == 1). "
                 "Pass split_distance=... for explicit chain semantics, or "
                 "drop max_distance."
             )
