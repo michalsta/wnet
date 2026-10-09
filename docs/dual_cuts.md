@@ -71,8 +71,10 @@ supplies, all trash models, sparse/disconnected graphs and chain semantics.
 
 For floating-intensity inputs, `network.refine_intensity_precision(factor)`
 rebuilds the same graph/backend
-at finer supply resolution and selects a safe cost scale again. It invalidates
-the old solution and warm basis. Existing cuts must also be discarded because
+at finer supply resolution and selects a safe cost scale again. It preserves
+current edge costs after position updates, along with the existing edges,
+components and isolated peaks, even if moves crossed a distance threshold.
+It invalidates the old solution and warm basis. Existing cuts must also be discarded because
 their cost coefficients can change. Failed rebuilds preserve the old network.
 LinkCut cost scaling additionally reserves headroom for its artificial-cost
 and path-potential arithmetic, rather than checking only the final bill.

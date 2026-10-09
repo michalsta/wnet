@@ -2798,6 +2798,10 @@ template <typename VALUE_TYPE, typename intensity_type>
 class WassersteinNetwork {
     std::vector<FlowNode<intensity_type>> nodes;
     std::vector<FlowEdge<intensity_type>> edges;
+    // Unquantized costs of the current geometry, in global edge order. The
+    // immutable graph edges retain their construction-time costs; refinement
+    // needs the moved costs before selecting a new integer scale.
+    std::vector<double> _current_edge_costs;
 
     const size_t _no_theoretical_spectra;
     const std::vector<size_t> _theoretical_spectra_sizes;
@@ -2813,6 +2817,7 @@ class WassersteinNetwork {
     std::vector<double> _last_point;
 
     bool built = false;
+    SolverConfig _built_config = NetworkSimplexConfig{};
 
     // Wasserstein transport order p.  Edge cost = ground_distance^p, so the
     // network optimises/reports the W_p^p objective; the ^(1/p) root is applied
@@ -2890,6 +2895,8 @@ public:
     _p_order(p_order),
     _max_real_cost(max_real_cost)
     {
+        _current_edge_costs.reserve(edges.size());
+        for (const auto& edge : edges) _current_edge_costs.push_back(edge.get_cost());
         build_subgraphs();
     };
 
@@ -2957,6 +2964,7 @@ public:
     WassersteinNetwork(WassersteinNetwork&& other) :
         nodes(std::move(other.nodes)),
         edges(std::move(other.edges)),
+        _current_edge_costs(std::move(other._current_edge_costs)),
         _no_theoretical_spectra(other._no_theoretical_spectra),
         _theoretical_spectra_sizes(std::move(other._theoretical_spectra_sizes)),
         dead_end_node_ids(std::move(other.dead_end_node_ids)),
@@ -2967,6 +2975,7 @@ public:
         _isolated_theo_trash_cost(other._isolated_theo_trash_cost),
         _last_point(std::move(other._last_point)),
         built(other.built),
+        _built_config(other._built_config),
         _p_order(other._p_order),
         _scale(other._scale),
         _max_real_cost(other._max_real_cost),
@@ -3258,7 +3267,51 @@ public:
             flow_subgraph->build(config);
         }
         built = true;
+        _built_config = config;
     };
+
+    // Rebuild supplies and cost scales on a separate network. Copying the
+    // existing edges preserves the fixed topology, even after position moves
+    // cross a matching/splitting threshold. Failures leave this object intact.
+    WassersteinNetwork refined_copy(double intensity_scale) const {
+        if (!built)
+            throw std::runtime_error("refined_copy() requires a built network");
+        auto new_nodes = nodes;
+        std::vector<FlowEdge<intensity_type>> new_edges;
+        new_edges.reserve(edges.size());
+        double max_cost = 0, chain_cost = 0;
+        for (size_t i = 0; i < edges.size(); ++i) {
+            const auto& edge = edges[i];
+            FlowEdgeType type = std::visit([&](const auto& value) -> FlowEdgeType {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, MatchingEdge> || std::is_same_v<T, ChainEdge>)
+                    return T(_current_edge_costs[i]);
+                else return value;
+            }, edge.get_type());
+            new_edges.emplace_back(edge.get_id(), new_nodes[edge.get_start_node_id()],
+                                   new_nodes[edge.get_end_node_id()], type);
+            max_cost = std::max(max_cost, _current_edge_costs[i]);
+            if (std::holds_alternative<ChainEdge>(type)) chain_cost += _current_edge_costs[i];
+        }
+        // Each chain gap has two directed arcs. The total span across all
+        // components conservatively bounds any single component's path cost.
+        const double chain_span = chain_cost / 2;
+        const double chain_bound = _p_order == 1.0 ? chain_span : std::pow(chain_span, _p_order);
+        WassersteinNetwork result(std::move(new_nodes), std::move(new_edges),
+            _no_theoretical_spectra, std::vector<size_t>(_theoretical_spectra_sizes),
+            std::vector<LEMON_INDEX>(dead_end_node_ids), _p_order,
+            std::max(max_cost, chain_bound));
+        result.set_intensity_scale(intensity_scale);
+        if (_cost_scaling_requested) result.set_cost_scaling(0);
+        result.set_flow_budget(_flow_budget);
+        if (_simple_trash_added) result.add_simple_trash(_isolated_exp_trash_cost);
+        if (_experimental_trash_added) result.add_experimental_trash(_isolated_exp_trash_cost);
+        if (_theoretical_trash_added) result.add_theoretical_trash(_isolated_theo_trash_cost);
+        if (_independent_trash_added)
+            result.add_independent_asymmetric_trash(_isolated_exp_trash_cost, _isolated_theo_trash_cost);
+        result.build(_built_config);
+        return result;
+    }
 
     // Quantised (scaled) isolated trash costs, matching the subgraph cost map.
     VALUE_TYPE _isolated_exp_trash_cost_scaled() const {
@@ -3826,6 +3879,22 @@ public:
             sg.apply_new_costs(new_costs, chain_positions);
         }
         // _last_point (spectrum proportions) is unchanged — intensities are fixed.
+        for (size_t i = 0; i < edges.size(); ++i) {
+            const auto& edge = edges[i];
+            auto point_for = [&](const FlowNode<intensity_type>& node) {
+                const auto& type = node.get_type();
+                if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&type))
+                    return new_empirical->get_point(emp->get_peak_index());
+                const auto& theo = std::get<TheoreticalNode<intensity_type>>(type);
+                return new_theoretical[theo.get_spectrum_id()]->get_point(theo.get_peak_index());
+            };
+            if (std::holds_alternative<MatchingEdge>(edge.get_type())
+                || std::holds_alternative<ChainEdge>(edge.get_type())) {
+                const double d = DistMetric::dist(point_for(edge.get_start_node()), point_for(edge.get_end_node()));
+                _current_edge_costs[i] = std::holds_alternative<ChainEdge>(edge.get_type()) || _p_order == 1.0
+                    ? d : std::pow(d, _p_order);
+            }
+        }
     }
 
     // Runtime-dispatch variant: selects the metric policy at run time.

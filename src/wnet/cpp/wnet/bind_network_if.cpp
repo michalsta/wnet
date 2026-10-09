@@ -27,6 +27,7 @@ nb::class_<WNetIF> bind_network_if(nb::module_& m) {
         })
         .def("scale_factor", &WassersteinNetwork<int64_t, double>::scale_factor)
         .def("intensity_scale_factor", &WassersteinNetwork<int64_t, double>::intensity_scale_factor)
+        .def("refined_copy", &WassersteinNetwork<int64_t, double>::refined_copy, nb::arg("intensity_scale"))
         .def("set_intensity_scale", &WassersteinNetwork<int64_t, double>::set_intensity_scale, nb::arg("scale"))
         .def("set_cost_scaling", &WassersteinNetwork<int64_t, double>::set_cost_scaling, nb::arg("scale") = 0)
         .def("set_flow_budget", &WassersteinNetwork<int64_t, double>::set_flow_budget, nb::arg("flow"))

@@ -497,7 +497,7 @@ class WassersteinNetwork:
         return self.wnet.__str__()
 
     def refine_intensity_precision(self, factor: float = 10.0) -> None:
-        """Rebuild at finer supply precision, retaining topology and backend.
+        """Rebuild at finer supply precision, retaining current costs, topology and backend.
 
         The cost scale is selected again to fit the int64 accumulator budget.
         This invalidates the old solution, warm basis and any existing cuts.
@@ -508,18 +508,16 @@ class WassersteinNetwork:
         scale = self.intensity_scale_factor() * factor
         budget = self._flow_budget_arg
         if budget is None:
-            budget = 4 * (float(self._base_distribution.sum_intensities)
-                          + sum(float(t.sum_intensities) for t in self._target_distributions))
+            budget = 4 * (
+                float(self._base_distribution.sum_intensities)
+                + sum(float(t.sum_intensities) for t in self._target_distributions)
+            )
         if not np.isfinite(scale) or scale * budget >= np.iinfo(np.int64).max / 4:
             raise OverflowError("Refined supplies exceed the integer flow budget")
-        previous = self._intensity_scale_arg, self._cost_scaling_arg, self._wnet_obj
+        refined = self.wnet.refined_copy(scale)
         self._intensity_scale_arg = scale
         self._cost_scaling_arg = 0 if self._cost_scaling_arg is not None else None
-        try:
-            self.build()
-        except Exception:
-            self._intensity_scale_arg, self._cost_scaling_arg, self._wnet_obj = previous
-            raise
+        self._wnet_obj = refined
 
     def dual_cut(self) -> dict:
         """Supporting cut and upper bound for continuous supplies.
