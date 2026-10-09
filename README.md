@@ -6,6 +6,8 @@ NetworkSimplex variants expose raw dual certificates and continuous-supply
 supporting cuts through the existing integer transport solves. See
 [Dual cuts with integer network simplex](docs/dual_cuts.md).
 
+See the [release notes](CHANGELOG.md) for changes in each release.
+
 ## Features
 - Wasserstein and Truncated Wasserstein distance between multidimensional distributions (dimensions 1–20)
 - Three distance metrics: L1, L2, L∞
