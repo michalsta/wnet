@@ -36,7 +36,7 @@ requires-python = ">=3.10"
 [project.optional-dependencies]
 extras = ["networkx", "matplotlib"]
 viz = ["networkx", "pyvis>=0.3", "ipython"]
-pytest = ["pytest"]
+pytest = ["pytest", "scipy"]
 
 [tool.scikit-build]
 # Split-mode extensions are stable-ABI builds. Declaring the target here gets the
