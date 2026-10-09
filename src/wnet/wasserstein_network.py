@@ -430,7 +430,12 @@ class WassersteinNetwork:
 
     def build(self) -> None:
         """Create the C++ network (factory chosen from the recorded settings),
-        replay trash edges and pre-build settings onto it, and build it."""
+        replay trash edges and pre-build settings onto it, and build it.
+
+        Recreates the network from the original distributions, including after
+        a failed position update. To recover at other accepted positions,
+        construct a new network with those distributions instead.
+        """
         use_chain = self._decide_chain()
         vec_base = self._base_distribution.vecdist
         vec_targets = [t.vecdist for t in self._target_distributions]
@@ -611,8 +616,22 @@ class WassersteinNetwork:
         Works with the dense factory and with the 1D chain factory under
         NetworkSimplex, CycleCanceling or SlopeDP.
 
+        Target count, dimensions and peak counts must match the original
+        distributions. Shape errors are rejected before mutation. If an error
+        occurs after costs or solver state start changing, the network becomes
+        invalid and raises RuntimeError with a rebuild instruction. Solves,
+        solution queries and further updates then require rebuilding; updates
+        are not rolled back. In a gradient descent loop, retain the last
+        accepted distributions so you can recreate the network and retry.
+
         Raises
         ------
+        ValueError
+            If counts or dimensions do not match, or chain peaks cross before
+            any component is updated. The previous solution remains usable.
+        RuntimeError
+            If the update fails after mutation starts. The network is invalid
+            and must be rebuilt before further use.
         NotImplementedError
             If the network uses the ConvexSweep backend. That solver reports no
             per-arc flows, and the chain position gradient is derived from
@@ -655,10 +674,18 @@ class WassersteinNetwork:
         """Update peak positions and immediately re-solve (warm-restarting if possible).
 
         Keeps graph topology and intensities fixed; only edge costs change.
-        The new distributions must have the same number of peaks as the originals.
+        Target count, dimensions and peak counts must match the originals.
+        Shape errors are rejected before mutation and leave the network usable.
 
-        For 1D (chain) networks, peak sorted order must be preserved — raises
-        ValueError if any peak has crossed another since construction.
+        For 1D (chain) networks, peak sorted order must be preserved. Crossing
+        peaks raises ValueError if detected before mutation; otherwise the
+        network is invalidated as described below.
+
+        If an error occurs after any component starts updating, raises
+        RuntimeError explaining that the network is invalid. Solves, solution
+        queries and further updates require rebuilding; there is no rollback.
+        build() recreates the original geometry. To retry from the last
+        accepted positions, construct a new network using those distributions.
         """
         new_vec_base = new_base.vecdist
         new_vec_targets = [t.vecdist for t in new_targets]

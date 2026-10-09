@@ -79,6 +79,17 @@ their cost coefficients can change. Failed rebuilds preserve the old network.
 LinkCut cost scaling additionally reserves headroom for its artificial-cost
 and path-potential arithmetic, rather than checking only the final bill.
 
+Position updates validate target counts, dimensions and peak counts before
+changing costs. A shape rejection leaves the old solution usable. Other
+update failures, such as crossing peaks in a later chain component or cost
+overflow after an earlier component has been updated, can leave partial
+changes. The network is then marked invalid and raises an exception with a
+rebuild instruction. Further solves, costs, derivatives, flows, cuts and
+precision refinement are rejected, including through retained subgraphs.
+Updates are not rolled back. `build()` recreates the original distributions;
+an optimizer should retain its last accepted distributions and construct a
+new network from them before retrying a rejected step.
+
 The production cutting-plane integration in wnetdeconv uses these bounds,
 refines supply precision when rounding limits progress, and rebuilds its model
 after refinement. Backends without this certificate retain a clearly marked
