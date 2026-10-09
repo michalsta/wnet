@@ -2313,7 +2313,14 @@ public:
             throw std::runtime_error("apply_new_costs(): cost vector size mismatch.");
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             const auto& etype = edges[ii].get_type();
-            if (std::holds_alternative<MatchingEdge>(etype) || std::holds_alternative<ChainEdge>(etype))
+            if (std::holds_alternative<MatchingEdge>(etype)) {
+                // Position updates supply quantized ground costs. Preserve
+                // the same trash-price shift used by build_impl(), so adding
+                // the independent trash bill back still cancels exactly.
+                costs_map[lemon_graph.arcFromId(ii)] = independent_trash
+                    ? new_costs_per_edge_idx[ii] - _ind_c_exp_q - _ind_c_theo_q
+                    : new_costs_per_edge_idx[ii];
+            } else if (std::holds_alternative<ChainEdge>(etype))
                 costs_map[lemon_graph.arcFromId(ii)] = new_costs_per_edge_idx[ii];
         }
         // Re-sync gap_cost from costs_map so chain_residual_distances stays correct.

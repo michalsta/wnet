@@ -44,7 +44,7 @@ def network(
         round_max_distance=False,
         force_dense_1d=not chain,
         solver=solver,
-        **factory
+        **factory,
     )
     graph.set_cost_scaling(scale)
     graph.add_independent_asymmetric_trash(exp_cost, theo_cost)
@@ -96,4 +96,31 @@ def test_dense_and_chain_costs_agree_at_coarse_scales(
     for point in [0.0, 1.0, 2.0]:
         dense.solve([point])
         chain.solve([point])
-        assert dense.wnet.total_cost() == chain.wnet.total_cost()
+    assert dense.wnet.total_cost() == chain.wnet.total_cost()
+
+
+@pytest.mark.parametrize(
+    "solver", [NetworkSimplex, CostScaling, CapacityScaling, CycleCanceling]
+)
+@pytest.mark.parametrize(
+    "update", ["update_positions_and_solve", "update_positions_and_get_gradient"]
+)
+@pytest.mark.parametrize("scale", [20, 40662879893724])
+def test_position_updates_preserve_independent_trash_shift(solver, update, scale):
+    graph = network(0.02, 0.075, scale, solver=solver())
+    graph.solve([1.0])
+    empirical = Distribution(np.zeros((2, 1)), np.array([2.0]))
+    # Include unchanged coordinates and repeated moves, on both sides of the
+    # match-versus-trash threshold, with fractional quantized trash prices.
+    for distance in [0.0, 0.025, 0.15, 0.06, 0.0]:
+        theoretical = Distribution(np.array([[distance], [0.0]]), np.array([3.0]))
+        getattr(graph, update)(empirical, [theoretical])
+        fresh = network(0.02, 0.075, scale, distance=distance, solver=solver())
+        fresh.solve([1.0])
+        assert graph.wnet.total_cost() == fresh.wnet.total_cost()
+        if solver is NetworkSimplex:
+            cut = graph.dual_cut()
+            assert (
+                cut["intercept"] + cut["gradient"] @ [1.0] <= fresh.total_cost() + 1e-9
+            )
+            assert cut["upper_bound"] >= fresh.total_cost() - 1e-9
