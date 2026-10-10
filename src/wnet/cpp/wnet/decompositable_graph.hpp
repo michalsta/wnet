@@ -19,6 +19,7 @@
 #include <type_traits>
 
 #include "wide_int.hpp"
+#include "slope_dp_dual.hpp"
 
 
 #define LEMON_ONLY_TEMPLATES
@@ -88,7 +89,13 @@ struct CapacityScalingConfig {
 // subgraphs (no MatchingEdges); bit-exact against NetworkSimplex.  Measured
 // ~300x faster than a cold NS solve on dense profile chains (pinene 70k:
 // 21 ms vs 6.2 s merged / ~26 s on the full wnet graph).
-struct SlopeDPConfig {};
+struct SlopeDPConfig {
+    std::string dual_mode = "lazy";
+    SlopeDPConfig(const std::string& mode = "lazy") : dual_mode(mode) {
+        if (mode != "lazy" && mode != "cluster")
+            throw std::invalid_argument("SlopeDP dual_mode must be lazy or cluster");
+    }
+};
 
 // Chain-native exact solver for W_p^p with p > 1: monotone-coupling sweep
 // over the sorted 1-D positions (see convex_sweep.hpp and
@@ -461,6 +468,11 @@ class WassersteinNetworkSubgraph {
     // ---- slope-DP backend state (SlopeDPConfig) -------------------------- //
     // Per chain position: incident arc ids (-1 when absent) and the fixed
     // empirical cap; per-solve: per-arc flows and the total.
+    mutable std::vector<VALUE_TYPE> _sdp_ce, _sdp_ct, _sdp_uc, _sdp_yc, _sdp_sc;
+    mutable std::vector<VALUE_TYPE> _sdp_dual;
+    mutable uint64_t _sdp_dual_version = std::numeric_limits<uint64_t>::max();
+    mutable VALUE_TYPE _sdp_dual_tau = -1;
+    mutable uint64_t _sdp_dual_recoveries = 0;
     mutable bool _sdp_cache_built = false;
     mutable std::vector<LEMON_INDEX> _sdp_src_arc, _sdp_sink_arc, _sdp_et_arc, _sdp_tt_arc;
     mutable std::vector<VALUE_TYPE> _sdp_emp_cap;      // per chain pos (0 for theo)
@@ -985,6 +997,9 @@ public:
         cc_solver.reset();
         _slope_solved = false;
         _sdp_cache_built = false;
+        _sdp_dual_version = std::numeric_limits<uint64_t>::max();
+        _sdp_dual.clear();
+        _sdp_ce.clear(); _sdp_ct.clear(); _sdp_uc.clear(); _sdp_yc.clear(); _sdp_sc.clear();
         _sweep_pos_built = false;
         _chain_arc_cache_built = false;
         _build_chain_topology();
@@ -1274,6 +1289,9 @@ public:
 
         std::vector<VALUE_TYPE> u(P, 0), y(P, 0), s(P > 0 ? P - 1 : 0, 0);
         W var_total = 0;
+        if (std::get<SlopeDPConfig>(_config).dual_mode == "cluster") {
+            _sdp_ce.clear(); _sdp_ct.clear(); _sdp_uc.clear(); _sdp_yc.clear(); _sdp_sc.clear();
+        }
         if (tau > 0 && chained) {
             // DP over co-located CLUSTERS (zero-cost gaps merged): ~3x fewer
             // conv steps on shared-grid profile data, and no zero-gap ties.
@@ -1327,6 +1345,10 @@ public:
                     }
                 }
                 if (c + 1 < C) s[cs[c + 1] - 1] = sc[c];  // inter-cluster gap
+            }
+            if (std::get<SlopeDPConfig>(_config).dual_mode == "cluster") {
+                _sdp_ce = std::move(ce); _sdp_ct = std::move(ct);
+                _sdp_uc = std::move(uc); _sdp_yc = std::move(yc); _sdp_sc = std::move(sc);
             }
         }
         // matched mass and transport
@@ -2549,6 +2571,77 @@ public:
         return std::make_tuple(std::move(pi), std::move(rc), std::move(lo), std::move(up));
     }
 
+    std::tuple<uint64_t, size_t, size_t> slope_dp_dual_stats() const {
+        return {_sdp_dual_recoveries, _sdp_ce.size(), _sdp_dual.size()};
+    }
+
+    // Nothing is recovered until a cut is requested. Reuse it for the same
+    // solution epoch; all solves and position updates advance that epoch.
+    void accumulate_slope_dp_dual_cut(VALUE_TYPE tau, long double& intercept,
+                                      std::vector<long double>& gradient) const {
+        if (!_solver_has_value()) throw std::runtime_error("Dual cuts require a solved SlopeDP backend");
+        const size_t P = _sdp_emp_cap.size();
+        if (_sdp_dual_version != _solution_version || _sdp_dual_tau != tau) {
+            using W = slopedp_detail::wide_t;
+            std::vector<VALUE_TYPE> e = _sdp_emp_cap, t(P, 0), u(P, 0), y(P, 0);
+            std::vector<VALUE_TYPE> s(P ? P - 1 : 0, 0), gap(s.size(), tau);
+            for (size_t p = 0; p < P; ++p) {
+                if (_sdp_src_arc[p] >= 0)
+                    u[p] = _slope_flow[_sdp_src_arc[p]] - (_sdp_et_arc[p] >= 0 ? _slope_flow[_sdp_et_arc[p]] : 0);
+                if (_sdp_sink_arc[p] >= 0) {
+                    t[p] = capacities_map[lemon_graph.arcFromId(_sdp_sink_arc[p])];
+                    y[p] = _slope_flow[_sdp_sink_arc[p]] - (_sdp_tt_arc[p] >= 0 ? _slope_flow[_sdp_tt_arc[p]] : 0);
+                }
+                if (p + 1 < P && _chain_topo) {
+                    s[p] = _slope_flow[_chain_topo->right_arc_ids[p]] - _slope_flow[_chain_topo->left_arc_ids[p]];
+                    gap[p] = _chain_topo->gap_cost[p];
+                }
+            }
+            std::vector<VALUE_TYPE> pi;
+            if (!_sdp_ce.empty()) {
+                const auto& cs = _sdp_cluster_start;
+                std::vector<VALUE_TYPE> cg(_sdp_sc.size());
+                for (size_t c = 0; c < cg.size(); ++c) cg[c] = _sdp_pos[cs[c + 1]] - _sdp_pos[cs[c]];
+                auto cp = slopedp_dual::recover<VALUE_TYPE>(_sdp_ce, _sdp_ct, _sdp_uc, _sdp_yc, _sdp_sc, cg, tau);
+                pi.resize(P);
+                for (size_t c = 0; c < cp.size(); ++c)
+                    std::fill(pi.begin() + cs[c], pi.begin() + cs[c + 1], cp[c]);
+            } else {
+                pi = slopedp_dual::recover<VALUE_TYPE>(e, t, u, y, s, gap, tau);
+            }
+            W primal = 0, dual = 0;
+            for (size_t p = 0; p < P; ++p) {
+                if (u[p] < 0 || u[p] > e[p] || y[p] < 0 || y[p] > t[p] ||
+                    pi[p] < -tau || pi[p] > 0 || (u[p] < e[p] && pi[p] != 0) ||
+                    (y[p] < t[p] && pi[p] != -tau))
+                    throw std::runtime_error("Invalid SlopeDP anchor complementarity");
+                W balance = W(u[p]) - y[p] + (p ? s[p - 1] : 0) - (p + 1 < P ? s[p] : 0);
+                if (balance != W(0)) throw std::runtime_error("Invalid SlopeDP primal balance");
+                primal += -W(tau) * y[p];
+                dual += W(pi[p]) * e[p] + W(-tau - pi[p]) * t[p];
+                if (p + 1 < P) {
+                    VALUE_TYPE delta = pi[p + 1] - pi[p];
+                    if (delta < -gap[p] || delta > gap[p] ||
+                        (s[p] > 0 && delta != -gap[p]) || (s[p] < 0 && delta != gap[p]))
+                        throw std::runtime_error("Invalid SlopeDP dual chain constraint");
+                    primal += W(s[p] >= 0 ? s[p] : -s[p]) * gap[p];
+                }
+            }
+            if (primal != dual) throw std::runtime_error("SlopeDP primal-dual objective mismatch");
+            _sdp_dual = std::move(pi);
+            _sdp_dual_version = _solution_version;
+            _sdp_dual_tau = tau;
+            ++_sdp_dual_recoveries;
+        }
+        for (const auto& node : nodes) {
+            const auto v = node.get_id();
+            if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&node.get_type()))
+                intercept += (long double)_sdp_dual[_sdp_node_pos[v]] * emp->get_intensity();
+            else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type()))
+                gradient[theo->get_spectrum_id()] += (long double)(-tau - _sdp_dual[_sdp_node_pos[v]]) * theo->get_intensity();
+        }
+    }
+
     // The matching problem has costs d-tau, nonnegative flows, and upper
     // bounds E_i/T_j. Its dual is alpha_i,beta_j <= 0 with
     // alpha_i + beta_j <= d_ij-tau. Build one common feasible dual from the
@@ -2556,8 +2649,9 @@ public:
     // to [-tau,0] preserves feasibility because d_ij >= 0.
     void accumulate_dual_cut(VALUE_TYPE tau, VALUE_TYPE shift,
                              long double& intercept, std::vector<long double>& gradient) const {
+        if (_use_slopedp()) { accumulate_slope_dp_dual_cut(tau, intercept, gradient); return; }
         if (!std::holds_alternative<NetworkSimplexConfig>(_config) || !_dual_valid)
-            throw std::runtime_error("Dual cuts require a solved NetworkSimplex backend");
+            throw std::runtime_error("Dual cuts require a solved NetworkSimplex or SlopeDP backend");
         const auto src_pi = _solver_potential(lemon_graph.nodeFromId(0));
         auto& pi = _dual_pi; auto& anchor_cap = _dual_caps;
         auto& matched = _dual_matched; auto& alpha = _dual_alpha; auto& beta = _dual_beta;
@@ -3765,7 +3859,7 @@ public:
     }
 
     // Supporting cut for continuous supplies with the network's fixed,
-    // quantized costs. Every transport solve remains integer network simplex.
+    // quantized costs. Transport solves remain integer NetworkSimplex or SlopeDP.
     // Returns intercept, slopes, continuous upper bound, rounding bound and rounded cost.
     auto dual_cut() const {
         require_valid_position_update(_position_update_invalid);

@@ -1,8 +1,7 @@
 #ifndef WNET_PROTOTYPE_SLOPE_DP_DUAL_HPP
 #define WNET_PROTOTYPE_SLOPE_DP_DUAL_HPP
 
-// Standalone prototype. Uses the production ConvexPL kernel, but does not
-// change the production solver or Python API.
+// Standalone benchmarking wrapper around production ConvexPL and dual recovery.
 #include "wnet/decompositable_graph.hpp"
 #include <numeric>
 #include <span>
@@ -123,44 +122,7 @@ Result<Retain> solve(const Input& in, I tau) {
 inline std::vector<I> recover(std::span<const I> e, std::span<const I> t,
                               std::span<const I> u, std::span<const I> y,
                               std::span<const I> s, std::span<const I> gap, I tau) {
-    const size_t n = e.size();
-    if (t.size() != n || u.size() != n || y.size() != n ||
-        s.size() != (n ? n - 1 : 0) || gap.size() != s.size() || tau < 0)
-        throw std::invalid_argument("inconsistent recovery inputs");
-    constexpr I headroom = std::numeric_limits<I>::max() / 4;
-    if (tau > headroom) throw std::overflow_error("reward exceeds prototype headroom");
-    std::vector<I> lower(n, -tau), upper(n, 0), pi(n);
-    for (size_t i = 0; i < n; ++i) {
-        if (u[i] < 0 || u[i] > e[i] || y[i] < 0 || y[i] > t[i])
-            throw std::runtime_error("invalid primal capacity");
-        if (u[i] < e[i]) lower[i] = 0;
-        if (y[i] < t[i]) upper[i] = -tau;
-        if (i) {
-            if (gap[i - 1] < 0 || gap[i - 1] > headroom)
-                throw std::overflow_error("gap exceeds prototype headroom");
-            // Bounds stay in [-tau,0]. Wide temporaries protect sums if a
-            // gap approaches the integer limit; only intersected values narrow.
-            I dl = s[i - 1] > 0 ? -gap[i - 1] : (s[i - 1] < 0 ? gap[i - 1] : -gap[i - 1]);
-            I dh = s[i - 1] > 0 ? -gap[i - 1] : gap[i - 1];
-            W l = W(lower[i - 1]) + dl, h = W(upper[i - 1]) + dh;
-            // wide_t's portable implementation intentionally has no ordering;
-            // all inputs in this prototype reserve int64 headroom for these sums.
-            lower[i] = std::max(lower[i], static_cast<I>(l));
-            upper[i] = std::min(upper[i], static_cast<I>(h));
-        }
-        if (lower[i] > upper[i]) throw std::runtime_error("no feasible DP dual");
-    }
-    if (n) pi.back() = upper.back();
-    for (size_t i = n; i > 1; --i) {
-        size_t j = i - 2;
-        I dl = s[j] > 0 ? -gap[j] : (s[j] < 0 ? gap[j] : -gap[j]);
-        I dh = s[j] > 0 ? -gap[j] : gap[j];
-        I l = std::max(lower[j], pi[j + 1] - dh);
-        I h = std::min(upper[j], pi[j + 1] - dl);
-        if (l > h) throw std::runtime_error("inconsistent backward interval");
-        pi[j] = h;
-    }
-    return pi;
+    return slopedp_dual::recover<I>(e, t, u, y, s, gap, tau);
 }
 
 inline std::vector<I> lazy_dual(const Input& in, const Primal& out) {

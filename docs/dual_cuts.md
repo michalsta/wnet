@@ -1,8 +1,8 @@
-# Dual cuts with integer network simplex
+# Dual cuts from integer transport solves
 
 `WassersteinNetwork.dual_cut()` constructs an affine lower bound for the
-continuous-supply objective using the existing integer NetworkSimplex solve.
-LEMON and LinkCut variants are supported. It does not run an LP transport
+continuous-supply objective using the existing integer transport solve.
+NetworkSimplex (LEMON and LinkCut) and 1D SlopeDP are supported. It does not run an LP transport
 solver or a residual shortest-path search.
 
 ```python
@@ -94,3 +94,32 @@ The production cutting-plane integration in wnetdeconv uses these bounds,
 refines supply precision when rounding limits progress, and rebuilds its model
 after refinement. Backends without this certificate retain a clearly marked
 heuristic search; improvement or a heuristic gap alone is not certified success.
+
+## Direct recovery from 1D DP
+
+`SlopeDP(dual_mode="lazy")` (the default) recovers matching potentials from
+expanded DP flows only when `dual_cut()` is called. Ordinary solves retain no
+additional cluster arrays and perform no dual recovery or validation.
+`SlopeDP(dual_mode="cluster")` instead moves the five existing cluster capacity
+and matched-flow arrays into solver state, retaining about 40 bytes per cluster.
+It recovers cluster potentials and expands them to peaks when a cut is requested.
+Both modes validate capacity bounds, flow conservation, complementary slackness,
+chain dual feasibility and exact integer primal/dual objective equality. The
+validated potentials are cached until the next solve or position update.
+Recovery and validation take linear time in the chain size; neither mode solves
+a second transport problem. Both use the same continuous-supply rounding bounds
+as NetworkSimplex. Raw `dual_values()` remains a NetworkSimplex API.
+
+```python
+from wnet.wnet_cpp import SlopeDP
+network = WassersteinNetwork(empirical, components, distance,
+                             split_distance=10, solver=SlopeDP(dual_mode="cluster"))
+network.add_simple_trash(3)
+network.build()
+network.solve([0.4, 0.6])
+cut = network.dual_cut()
+```
+
+Configurations are copied when the graph is built. Choose the mode before
+building, or rebuild after changing it. `slope_dp_dual_stats()` on a subgraph
+returns `(recoveries, retained_clusters, potential_count)` for diagnostics.
