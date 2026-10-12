@@ -1,19 +1,20 @@
 # Alternative balanced-tree storage
 
-Both chain solvers accept an optional storage choice:
+Both chain solvers accept `storage="flat"` (the default), `"tree"` (a map
+baseline), and `"augmented"` (a persistent split/join treap):
 
 ```python
 from wnet.wnet_cpp import SlopeDP, ConvexSweep
 
 slope = SlopeDP(dual_mode="cluster", storage="tree")
-sweep = ConvexSweep(storage="tree")
+sweep = ConvexSweep(storage="augmented")
 # Pass either configuration as WassersteinNetwork(..., solver=...).
 network.solve(weights, with_duals=True)  # ConvexSweep certificates
 cut = network.dual_cut()
 ```
 
 `storage="flat"` remains the default. SlopeDP's `lazy` and `cluster` dual modes
-work with either choice. ConvexSweep's cost-only and traced specializations,
+work with all three choices. ConvexSweep's cost-only and traced specializations,
 marginal calculations, position updates and precision rebuilds all use the
 selected storage. Trash semantics, integer arithmetic and quantization are
 shared. Tree selection is independent of whether duals are requested.
@@ -67,14 +68,22 @@ alone does not turn the sweep into an `O(N log N)` algorithm. Traced solves
 retain a sum of profile sizes across events, potentially quadratic, and free
 those snapshots after native dual recovery. Potential recovery is unchanged.
 
-Further speed improvements need an augmented tree and richer operations such
-as range maxima, lazy transformations or rank/mass queries. A plain map cannot
-provide those efficiently through its standard interface. Keeping the adapter
-small gives a correctness baseline for tree swaps; adding aggregates would
-also require updating the relevant profile operations.
+The augmented variant implements subtree masses and first moments for SlopeDP,
+and subtree maxima and lazy coordinate transforms for ConvexSweep. See
+[Augmented-tree storage](augmented_tree_storage.md) for its interface and
+remaining full-profile work.
 
-[`bench_tree_storage.cpp`](../prototypes/bench_tree_storage.cpp) compares
-SlopeDP and ConvexSweep kernel times and validates matching objectives. It
-accepts a position count and profitable radius, for example `1000 8` and
-`1000 1000` for narrow and wide windows. It excludes graph construction and
-potential recovery, so it is not an end-to-end optimizer benchmark.
+[`bench_tree_storage.cpp`](../prototypes/bench_tree_storage.cpp) accepts
+`positions radius storage mode repetitions`. Modes are `slope`, `cost`, `trace`,
+`duals`, and `marginals`; storage is `flat`, `tree`, or `augmented`. For example,
+`1000 1000 augmented cost 5` measures a wide-window cost-only sweep. Each run
+warms up once, reports median/min/max milliseconds, and emits a checksum for
+cross-storage parity. The native benchmark excludes graph construction. Its
+`duals` mode includes native recovery, and `marginals` includes both orientations.
+
+[`bench_augmented_network.py`](../prototypes/bench_augmented_network.py) measures
+Python graph construction, ordinary solves, solves with certificates, cached
+cut queries, and mixture derivatives. Run each storage in a separate process
+with `/usr/bin/time -f %M` to measure peak resident memory. Use one thread and
+a fixed CPU when comparing variants. These synthetic cases are not a complete
+benchmark of a deconvolution workload.

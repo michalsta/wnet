@@ -7,8 +7,9 @@ supporting cuts. The 1D SlopeDP backend also supplies certified cuts through
 optional direct DP recovery. ConvexSweep supplies certified cuts through
 templated traceback and eager native recovery with `solve(..., with_duals=True)`.
 See [Dual cuts](docs/dual_cuts.md). Both chain solvers offer optional
-`storage="tree"` backed by a swappable `std::map` policy; flat storage remains
-the default. See [Balanced-tree storage](docs/balanced_tree_storage.md).
+`storage="tree"` backed by a swappable `std::map` policy and
+`storage="augmented"` backed by a persistent augmented treap. Flat storage
+remains the default. See [Balanced-tree storage](docs/balanced_tree_storage.md).
 
 See the [release notes](CHANGELOG.md) for changes in each release.
 
