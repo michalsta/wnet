@@ -1,8 +1,11 @@
 # Solver implementation TODOs
 
-- Provide alternative balanced-tree implementations of both SlopeDP and
-  ConvexSweep. Keep the current implementations available for comparison.
-  Preserve integer arithmetic, quantization, trash semantics, and dual-cut
-  validity. Establish bounds on breakpoint growth and benchmark construction,
-  transport solves, certificate recovery, gradients, and peak memory on sparse
-  and wide-window inputs before selecting a default.
+- The alternative `storage="tree"` implementations of SlopeDP and ConvexSweep
+  now use a shared, templated ordered-breakpoint interface with `std::map` as
+  the first tree policy. Keep flat storage as the default. See
+  [Balanced-tree storage](balanced_tree_storage.md).
+- Explore augmented trees with subtree masses, range maxima and lazy range
+  updates. The map baseline does not remove ConvexSweep's full-profile scans
+  or snapshots. Establish bounds on breakpoint growth and benchmark graph
+  construction, transport solves, certificate recovery, gradients, and peak
+  memory on sparse and wide-window inputs before selecting a new default.
