@@ -12,8 +12,8 @@
 // GCC and Clang provide __int128; MSVC does not, so a software fallback
 // implements exactly the operations the solvers use:
 //   * wide_t     - accumulator: construction from int64, (wide)a * b, +=, +,
-//                  binary and unary -, ==/!=, explicit narrowing cast.  No
-//                  ordering, division or shifts.
+//                  binary and unary -, ==/!=, signed ordering, and explicit
+//                  narrowing cast. No division or shifts.
 //   * mul_div_trunc(a, b, c)     - (a * b) / c truncated toward zero, with the
 //                                  quotient assumed to fit in int64.
 //   * products_equal(a, b, c, d) - exact a * b == c * d.
@@ -121,6 +121,9 @@ struct wide_t {
     }
     friend constexpr bool operator!=(const wide_t& a, const wide_t& b) {
         return !(a == b);
+    }
+    friend constexpr bool operator<(const wide_t& a, const wide_t& b) {
+        return a.hi < b.hi || (a.hi == b.hi && a.lo < b.lo);
     }
     // (wide)a * b with |*this| known to fit in int64 — always true at the
     // DP's call sites, where the left factor is a freshly promoted int64.

@@ -31,6 +31,7 @@
 #include <lemon/capacity_scaling.h>
 #include <pylmcf/network_simplex_lct_adapter.h>
 #include "convex_sweep_dual.hpp"
+#include "convex_sweep_repair.hpp"
 
 // Pivot rule for NetworkSimplex. Values match lemon::NetworkSimplex::PivotRule.
 enum class NSPivotRule {
@@ -1456,8 +1457,14 @@ public:
     // reconstruction (grid data: exact).
     mutable std::vector<double> _sweep_real_pos;   // per chain position
     mutable bool _sweep_pos_built = false;
+    mutable bool _sweep_monge_checked = false, _sweep_monge = true;
+    mutable VALUE_TYPE _sweep_monge_tau = 0;
+    mutable bool _sweep_exact_solution = false;
+    mutable std::vector<convex_sweep::Match> _sweep_exact_matches;
+    mutable std::vector<VALUE_TYPE> _sweep_exact_alpha, _sweep_exact_beta;
 
     void _sweep_build_pos() const {
+        _sweep_monge_checked = false;
         if (!_sdp_cache_built) _sdp_build_cache();
         const size_t P = _sdp_emp_cap.size();
         _sweep_real_pos.assign(P, 0.0);
@@ -1470,6 +1477,18 @@ public:
             }
         }
         _sweep_pos_built = true;
+    }
+
+    template<class Cost>
+    bool _sweep_costs_monge(VALUE_TYPE tau, double radius, Cost cost) const {
+        if (!_sweep_monge_checked || _sweep_monge_tau != tau) {
+            std::vector<unsigned char> possible(_sdp_emp_cap.size(),0);
+            for (size_t p = 0; p < possible.size(); ++p) possible[p] = _sdp_sink_arc[p] >= 0;
+            _sweep_monge = convex_sweep_dual::is_monge<VALUE_TYPE>(
+                _sweep_real_pos,_sdp_emp_cap,possible,tau,radius,cost);
+            _sweep_monge_tau = tau; _sweep_monge_checked = true;
+        }
+        return _sweep_monge;
     }
 
     // Trash pricing for the sweep, identical semantics to _slope_dp_solve's
@@ -1534,6 +1553,8 @@ public:
         _sweep_dual_alpha.clear(); _sweep_dual_beta.clear();
         _sweep_trace_records = _sweep_trace_vertices = _sweep_matched_pairs = 0;
         _sweep_with_duals = WithDuals;
+        _sweep_exact_solution = false;
+        _sweep_exact_matches.clear(); _sweep_exact_alpha.clear(); _sweep_exact_beta.clear();
         const size_t P = _sdp_emp_cap.size();
         const bool chained = _chain_topo.has_value();
         std::vector<VALUE_TYPE> e(P, 0), t(P, 0);
@@ -1554,6 +1575,7 @@ public:
             return quantize_cost<VALUE_TYPE>(std::pow(std::abs(a - b), _p_order), _scale, _p_is_one);
         };
         auto profit_fn = [tau, cost](double a, double b) { return tau - cost(a, b); };
+        const bool monge = !chained || _sweep_costs_monge(tau,radius,cost);
         VALUE_TYPE profit = 0;
         std::conditional_t<WithDuals, std::vector<convex_sweep::Match>, convex_sweep::NoTraceStorage> matching;
         if (tau > 0 && chained && E > 0 && T > 0) {
@@ -1563,7 +1585,17 @@ public:
                 if (e[p] > 0) ev.push_back({_sweep_real_pos[p], 0, e[p], p});
                 if (t[p] > 0) ev.push_back({_sweep_real_pos[p], 1, t[p], p});
             }
-            if constexpr (WithDuals) {
+            if (!monge) {
+                auto result = convex_sweep::sweep_solve<true, Profile>(ev,profit_fn,radius);
+                auto [fixed,exact_profit,alpha,beta] = convex_sweep_dual::repair<VALUE_TYPE>(
+                    _sweep_real_pos,e,t,tau,radius,cost,result.matches);
+                profit = VALUE_TYPE(exact_profit);
+                _sweep_exact_solution = true;
+                _sweep_exact_matches = std::move(fixed);
+                _sweep_exact_alpha = std::move(alpha); _sweep_exact_beta = std::move(beta);
+                _sweep_trace_records = result.records; _sweep_trace_vertices = result.vertices;
+                _sweep_matched_pairs = _sweep_exact_matches.size();
+            } else if constexpr (WithDuals) {
                 auto result = convex_sweep::sweep_solve<true, Profile>(ev, profit_fn, radius);
                 profit = result.profit;
                 matching = std::move(result.matches);
@@ -1575,10 +1607,13 @@ public:
             }
         }
         if constexpr (WithDuals) {
-            auto [alpha, beta] = convex_sweep_dual::recover<VALUE_TYPE>(
-                _sweep_real_pos, e, t, tau, radius, cost, matching, W(profit));
-            _sweep_dual_alpha = std::move(alpha);
-            _sweep_dual_beta = std::move(beta);
+            if (_sweep_exact_solution) {
+                _sweep_dual_alpha = _sweep_exact_alpha; _sweep_dual_beta = _sweep_exact_beta;
+            } else {
+                auto [alpha, beta] = convex_sweep_dual::recover<VALUE_TYPE>(
+                    _sweep_real_pos, e, t, tau, radius, cost, matching, W(profit));
+                _sweep_dual_alpha = std::move(alpha); _sweep_dual_beta = std::move(beta);
+            }
             // set_point()/position updates advance the epoch after this call.
             _sweep_dual_version = _solution_version + 1;
             _sweep_dual_tau = tau;
@@ -1680,6 +1715,15 @@ public:
             return tq - quantize_cost<VALUE_TYPE>(
                 std::pow(d, p_ord), scale, trunc);
         };
+
+        if (_sweep_exact_solution) {
+            auto cost = [&](double a,double b) { return tau_eff-profit_fn(a,b); };
+            const auto gains = convex_sweep_dual::repaired_gains<VALUE_TYPE>(
+                _sweep_real_pos,e,t,tau_eff,radius,cost,_sweep_exact_matches,
+                _sweep_exact_alpha,_sweep_exact_beta);
+            for (size_t p = 0; p < P; ++p) marg[p] = dtrash0-gains[p];
+            return marg;
+        }
 
         // Events with zero-count theoretical probes at every theo-hosting
         // position; theo_event_pos[i] = chain position of theo event i.
@@ -2455,6 +2499,7 @@ public:
     // exactly — the prefix sum of |gap| from an origin of 0, so a descending
     // chain is stored ascending just as _sweep_build_pos() would store it.
     void _refresh_sweep_positions(const std::vector<double>* chain_pos) {
+        _sweep_monge_checked = false;
         const size_t P = _sdp_emp_cap.size();
         if (!_chain_topo.has_value() || P < 2) {
             // No chain to walk: _sweep_build_pos() leaves every position at the
