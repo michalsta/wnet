@@ -3,110 +3,113 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
+#include <deque>
 #include <limits>
 #include <span>
 #include <stdexcept>
-#include <vector>
 #include <utility>
-#include <lemon/static_graph.h>
-#include <lemon/network_simplex.h>
-#include "wide_int.hpp"
+#include <vector>
+#include "convex_sweep.hpp"
 
 namespace convex_sweep_dual {
 
-// Lazy certificate oracle for the partial matching problem. Only profitable
-// pairs need arcs: alpha,beta <= 0 automatically satisfy all other constraints.
-// This deliberately uses an auxiliary simplex solve, rather than treating
-// independent discrete marginals as a common feasible matching dual.
-// All positions, including zero-capacity theoretical positions, participate:
-// the resulting cut must remain valid when mixture weights change.
+// Recover one common dual from the traced primal matching. Write alpha = x,
+// beta = -y, with -tau <= x <= 0 and 0 <= y <= tau. Matching feasibility is
+// x_i <= y_j + c_ij - tau. Positive matches add the reverse inequality;
+// slack anchors pin x/y to zero. Propagate these difference constraints over
+// implicit profitable pairs, without storing pair arcs or solving transport.
 template<class I, class Cost>
 auto recover(std::span<const double> positions, std::span<const I> empirical,
              std::span<const I> theoretical, I tau, double radius,
-             Cost pair_cost, wide_int::wide_t expected_profit) {
-    using Graph = lemon::StaticDigraph;
-    using NS = lemon::NetworkSimplex<Graph, I, I>;
+             Cost pair_cost, std::span<const convex_sweep::Match> matching,
+             wide_int::wide_t expected_profit) {
     using W = wide_int::wide_t;
     const size_t n = positions.size();
     if (empirical.size() != n || theoretical.size() != n || tau < 0)
         throw std::invalid_argument("inconsistent ConvexSweep dual inputs");
-    if (n > (size_t(std::numeric_limits<int>::max()) - 2) / 2)
-        throw std::overflow_error("ConvexSweep certificate has too many nodes");
-    std::vector<I> alpha(n, 0), beta(n, 0);
-    if (!tau) {
-        if (expected_profit != W(0))
-            throw std::runtime_error("ConvexSweep zero-reward objective mismatch");
-        return std::make_pair(std::move(alpha), std::move(beta));
+    std::vector<I> used_e(n, 0), used_t(n, 0), x(n, 0), y(n, tau);
+    struct Tight { size_t target; I profit; };
+    std::vector<std::vector<Tight>> tight(n);
+    W primal = 0;
+    for (const auto& match : matching) {
+        const auto i = match.empirical, j = match.theoretical;
+        if (i >= n || j >= n || match.count <= 0 ||
+            match.count > empirical[i] - used_e[i] ||
+            match.count > theoretical[j] - used_t[j])
+            throw std::runtime_error("Invalid ConvexSweep traced capacity");
+        const I cost = pair_cost(positions[i], positions[j]);
+        if (cost > tau) throw std::runtime_error("Unprofitable ConvexSweep traced match");
+        const I profit = tau - cost;
+        used_e[i] += match.count; used_t[j] += match.count;
+        tight[i].push_back({j, profit});
+        primal += -W(profit) * match.count;
     }
-    struct Arc { int from, to; I cost, capacity; };
-    const int source = int(2 * n), sink = source + 1;
-    const I unlimited = std::numeric_limits<I>::max();
-    std::vector<Arc> arcs;
-    for (size_t i = 0; i < n; ++i) {
-        arcs.push_back({source, int(i), 0, empirical[i]});
-        arcs.push_back({int(n + i), sink, 0, theoretical[i]});
-        const double x = positions[i];
-        const auto first = std::lower_bound(positions.begin(), positions.end(),
-            std::nextafter(x - radius, -std::numeric_limits<double>::infinity()));
-        const auto last = std::upper_bound(first, positions.end(),
-            std::nextafter(x + radius, std::numeric_limits<double>::infinity()));
-        for (auto it = first; it != last; ++it) {
-            const size_t j = size_t(it - positions.begin());
-            const I cost = pair_cost(x, *it);
-            if (cost < tau) arcs.push_back({int(i), int(n + j), cost - tau, unlimited});
+    if (primal != -expected_profit)
+        throw std::runtime_error("ConvexSweep traceback objective mismatch");
+    std::deque<size_t> queue;
+    std::vector<bool> queued(2 * n, true);
+    std::vector<size_t> depth(2 * n, 0);
+    for (size_t j = 0; j < n; ++j)
+        if (used_t[j] < theoretical[j]) y[j] = 0;
+    for (size_t v = 0; v < 2 * n; ++v) queue.push_back(v);
+    auto enqueue = [&](size_t to, size_t from) {
+        depth[to] = depth[from] + 1;
+        if (depth[to] >= 2 * n)
+            throw std::runtime_error("Inconsistent ConvexSweep dual constraints");
+        if (!queued[to]) { queue.push_back(to); queued[to] = true; }
+    };
+    auto window = [&](double position) {
+        auto first = std::lower_bound(positions.begin(), positions.end(),
+            std::nextafter(position - radius, -std::numeric_limits<double>::infinity()));
+        auto last = std::upper_bound(first, positions.end(),
+            std::nextafter(position + radius, std::numeric_limits<double>::infinity()));
+        return std::make_pair(size_t(first - positions.begin()), size_t(last - positions.begin()));
+    };
+    while (!queue.empty()) {
+        const size_t v = queue.front(); queue.pop_front(); queued[v] = false;
+        if (v < n) {
+            for (const auto& edge : tight[v]) {
+                const I candidate = x[v] + edge.profit;
+                if (candidate < y[edge.target]) {
+                    if (candidate < 0)
+                        throw std::runtime_error("Invalid ConvexSweep theoretical potential");
+                    y[edge.target] = candidate;
+                    enqueue(n + edge.target, v);
+                }
+            }
+        } else {
+            const size_t j = v - n;
+            const auto [first, last] = window(positions[j]);
+            for (size_t i = first; i < last; ++i) {
+                const I cost = pair_cost(positions[i], positions[j]);
+                if (cost >= tau) continue;
+                const I candidate = y[j] + (cost - tau);
+                if (candidate < x[i]) {
+                    if (candidate < -tau || used_e[i] < empirical[i])
+                        throw std::runtime_error("Invalid ConvexSweep empirical potential");
+                    x[i] = candidate;
+                    enqueue(i, v);
+                }
+            }
         }
     }
-    arcs.push_back({sink, source, 0, unlimited});
-    if (arcs.size() > size_t(std::numeric_limits<int>::max()))
-        throw std::overflow_error("ConvexSweep certificate has too many arcs");
-    std::sort(arcs.begin(), arcs.end(), [](const Arc& a, const Arc& b) {
-        return a.from != b.from ? a.from < b.from : a.to < b.to;
-    });
-    std::vector<std::pair<int, int>> endpoints;
-    endpoints.reserve(arcs.size());
-    for (const auto& arc : arcs) endpoints.emplace_back(arc.from, arc.to);
-    Graph graph;
-    graph.build(sink + 1, endpoints.begin(), endpoints.end());
-    Graph::ArcMap<I> costs(graph), capacities(graph);
-    Graph::NodeMap<I> supplies(graph, 0);
-    for (size_t i = 0; i < arcs.size(); ++i) {
-        const auto arc = graph.arcFromId(int(i));
-        costs[arc] = arcs[i].cost;
-        capacities[arc] = arcs[i].capacity;
-    }
-    NS solver(graph);
-    if (solver.costMap(costs).upperMap(capacities).supplyMap(supplies).run() != NS::OPTIMAL)
-        throw std::runtime_error("ConvexSweep certificate recovery failed");
-    const I ps = solver.potential(graph.nodeFromId(source));
-    const I pt = solver.potential(graph.nodeFromId(sink));
-    auto clip_difference = [tau](I a, I b) -> I {
-        if (a >= b) return 0;
-        // Unsigned subtraction represents the full magnitude even if the
-        // signed difference would overflow. No ordering on software wide_t
-        // is needed (Windows uses the software 128-bit accumulator).
-        const uint64_t magnitude = uint64_t(b) - uint64_t(a);
-        return magnitude >= uint64_t(tau) ? -tau : -I(magnitude);
-    };
     W dual = 0;
     for (size_t i = 0; i < n; ++i) {
-        alpha[i] = clip_difference(ps, solver.potential(graph.nodeFromId(int(i))));
-        beta[i] = clip_difference(solver.potential(graph.nodeFromId(int(n + i))), pt);
-        dual += W(alpha[i]) * empirical[i] + W(beta[i]) * theoretical[i];
+        dual += W(x[i]) * empirical[i] - W(y[i]) * theoretical[i];
+        const auto [first, last] = window(positions[i]);
+        for (size_t j = first; j < last; ++j) {
+            const I cost = pair_cost(positions[i], positions[j]);
+            if (cost < tau && x[i] > y[j] + (cost - tau))
+                throw std::runtime_error("Invalid ConvexSweep matching dual");
+        }
+        for (const auto& edge : tight[i])
+            if (y[edge.target] != x[i] + edge.profit)
+                throw std::runtime_error("Invalid ConvexSweep match complementarity");
     }
-    // Validate feasibility independently of simplex's potential convention.
-    // O(arcs), and nonprofitable pairs satisfy the inequality automatically.
-    for (const auto& arc : arcs) {
-        if (arc.from < int(n) && arc.to >= int(n) && arc.to < source &&
-            alpha[arc.from] > arc.cost - beta[arc.to - int(n)])
-            throw std::runtime_error("Invalid ConvexSweep matching dual");
-    }
-    W primal = 0;
-    for (size_t i = 0; i < arcs.size(); ++i)
-        primal += W(arcs[i].cost) * solver.flow(graph.arcFromId(int(i)));
-    if (primal != dual || primal != -expected_profit)
+    if (dual != primal)
         throw std::runtime_error("ConvexSweep primal-dual objective mismatch");
-    return std::make_pair(std::move(alpha), std::move(beta));
+    for (auto& value : y) value = -value;
+    return std::make_pair(std::move(x), std::move(y));
 }
 }  // namespace convex_sweep_dual
 #endif

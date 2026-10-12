@@ -4,7 +4,7 @@
 continuous-supply objective using the existing integer transport solve.
 NetworkSimplex (LEMON and LinkCut), 1D SlopeDP and ConvexSweep are supported.
 NetworkSimplex and SlopeDP reuse their transport state directly. ConvexSweep
-uses the auxiliary certificate recovery described below.
+uses optional traced DP recovery described below.
 
 ```python
 network.solve(weights)
@@ -63,27 +63,34 @@ are only materialized when explicitly requested by Python.
 
 ## ConvexSweep recovery
 
-The sweep's separate discrete marginal derivatives do not constitute a
-common matching dual. On the first cut request after a solve, ConvexSweep
-constructs an auxiliary partial-matching circulation and runs integer network
-simplex. It includes only pairs whose quantized cost is less than the matching
-reward `tau`; all other matching constraints are satisfied automatically by
-nonpositive dual coefficients. Zero-capacity theoretical positions remain in
-the auxiliary problem so cuts remain valid when zero mixture weights grow.
+Use `network.solve(weights, with_duals=True)` with ConvexSweep to recover
+certificates eagerly. This selects a boolean-templated sweep kernel; ordinary
+solves use the `false` specialization, which retains no traceback records and
+does no dual recovery. `dual_cut()` requires a preceding traced solve and
+only reads the cached certificate. Position updates preserve the last solve's
+choice; precision rebuilds invalidate the solution.
 
-The recovered coefficients lie in `[-tau, 0]`. Every retained pair constraint
-is checked, and the auxiliary primal, dual, and sweep objectives must agree
-in exact 128-bit arithmetic before a certificate is returned. A disagreement
-raises an error rather than returning a certificate. The usual trash bracket
-and supply-rounding bound then apply.
+The traced sweep saves predecessor profiles and backtracks an optimal matching.
+Complementary slackness then gives tight constraints on matched pairs. Integer
+potential propagation enforces these equalities and the remaining matching
+inequalities, scanning profitable position windows on demand. There is no
+auxiliary simplex solve and no stored graph of all profitable pairs.
+Zero-capacity positions remain in the constraints so cuts stay valid when
+zero mixture weights grow. Separate discrete marginal derivatives are not
+used as a common matching dual.
 
-Recovery is optional and cached for one solution epoch. A new solve, position
-update, or precision rebuild invalidates it. Cost-only solves and marginal
-queries do not construct the auxiliary graph. With `N` position blocks and
-`W` blocks in the profitable window, recovery can retain `O(NW)` arcs (up to
-quadratic for a wide window), plus the cost of a simplex solve. Thus certified
-optimization currently sacrifices the sweep's small working-memory advantage
-during recovery. Direct dual recovery from the sweep remains future work.
+Recovered coefficients lie in `[-tau, 0]`. Every profitable pair inequality,
+positive-match equality, capacity constraint, and exact primal/dual objective
+agreement is checked with wide integer arithmetic before caching the result.
+A disagreement raises an error. The usual trash bracket and supply-rounding
+bound then apply.
+
+Traceback storage is proportional to the sum of saved piecewise-linear profile
+and profit-prefix sizes across events, potentially quadratic for wide windows.
+It is released after recovery. Potential propagation retains `O(N + M)` state
+for `N` position blocks and `M` matched pairs, and can scan windows repeatedly;
+it does not guarantee linear recovery time. Only `O(N)` dual coefficients
+remain cached for cut queries.
 
 ## Supply error and precision
 

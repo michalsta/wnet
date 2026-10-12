@@ -1076,7 +1076,7 @@ public:
         build_impl();
     }
 
-    void set_point(const std::vector<double>& point) {
+    void set_point(const std::vector<double>& point, bool with_duals = false) {
         require_valid_position_update(_position_update_invalid);
         _dual_valid = false;
         if(point.size() != no_target_distributions)
@@ -1156,7 +1156,8 @@ public:
             return;
         }
         if (_use_sweep()) {
-            _sweep_solve(lemon_total_flow);
+            if (with_duals) _sweep_solve<true>(lemon_total_flow);
+            else _sweep_solve<false>(lemon_total_flow);
             ++_solution_version;
             return;
         }
@@ -1489,65 +1490,81 @@ public:
         return c;
     }
 
+    VALUE_TYPE _sweep_matching_reward() const {
+        if (independent_trash) return _ind_c_exp_q + _ind_c_theo_q;
+        if (simple_trash_added) return _sdp_c_s;
+        if (experimental_trash_added && theoretical_trash_added)
+            return std::min(_sdp_c_exp, _sdp_c_theo);
+        return experimental_trash_added ? _sdp_c_exp : _sdp_c_theo;
+    }
+
+    template<bool WithDuals = false>
     void _sweep_solve(VALUE_TYPE F) const {
         using W = slopedp_detail::wide_t;
         if (!_sdp_cache_built) _sdp_build_cache();
         if (!_sweep_pos_built) _sweep_build_pos();
+        _sweep_dual_version = std::numeric_limits<uint64_t>::max();
+        _sweep_dual_alpha.clear(); _sweep_dual_beta.clear();
+        _sweep_trace_records = _sweep_trace_vertices = _sweep_matched_pairs = 0;
+        _sweep_with_duals = WithDuals;
         const size_t P = _sdp_emp_cap.size();
         const bool chained = _chain_topo.has_value();
-
         std::vector<VALUE_TYPE> e(P, 0), t(P, 0);
         VALUE_TYPE E = 0, T = 0;
         for (size_t p = 0; p < P; ++p) {
-            e[p] = _sdp_emp_cap[p];
-            E += e[p];
-            if (_sdp_sink_arc[p] >= 0) {
+            e[p] = _sdp_emp_cap[p]; E += e[p];
+            if (_sdp_sink_arc[p] >= 0)
                 t[p] = capacities_map[lemon_graph.arcFromId(_sdp_sink_arc[p])];
-                T += t[p];
-            }
+            T += t[p];
         }
-
         const W trash0 = _sweep_trash_cost(E, T, F, 0);
-        const VALUE_TYPE tau =
-            std::min(E, T) >= 1
-                ? (VALUE_TYPE)(trash0 - _sweep_trash_cost(E, T, F, 1))
-                : 0;
-
+        // This reward remains defined at zero supply, so dual cuts can support
+        // future positive weights even when the current sweep has no matches.
+        const VALUE_TYPE tau = _sweep_matching_reward();
+        const double scale = _p_is_one ? 1.0 : double(_scale);
+        const double radius = std::pow((double(tau) + 1.0) / scale, 1.0 / _p_order);
+        auto cost = [this](double a, double b) {
+            return quantize_cost<VALUE_TYPE>(std::pow(std::abs(a - b), _p_order), _scale, _p_is_one);
+        };
+        auto profit_fn = [tau, cost](double a, double b) { return tau - cost(a, b); };
         VALUE_TYPE profit = 0;
-        if (tau > 0 && chained) {
+        std::conditional_t<WithDuals, std::vector<convex_sweep::Match>, convex_sweep::NoTraceStorage> matching;
+        if (tau > 0 && chained && E > 0 && T > 0) {
             std::vector<convex_sweep::Event> ev;
             ev.reserve(2 * P);
             for (size_t p = 0; p < P; ++p) {
-                if (e[p] > 0) ev.push_back({_sweep_real_pos[p], 0, e[p]});
-                if (t[p] > 0) ev.push_back({_sweep_real_pos[p], 1, t[p]});
+                if (e[p] > 0) ev.push_back({_sweep_real_pos[p], 0, e[p], p});
+                if (t[p] > 0) ev.push_back({_sweep_real_pos[p], 1, t[p], p});
             }
-            // Prune radius: profits are strictly negative past it (llround /
-            // trunc rounding included), so pruning there is loss-free.
-            const double eff_scale = _p_is_one ? 1.0 : (double)_scale;
-            const double radius =
-                std::pow(((double)tau + 1.0) / eff_scale, 1.0 / _p_order);
-            const double p_ord = _p_order;
-            const int64_t scale = _scale;
-            const bool trunc = _p_is_one;
-            auto profit_fn = [tau, p_ord, scale, trunc](double a, double z)
-                -> VALUE_TYPE {
-                const double d = z > a ? z - a : a - z;
-                return tau - quantize_cost<VALUE_TYPE>(
-                    std::pow(d, p_ord), scale, trunc);
-            };
-            profit = convex_sweep::sweep_solve(ev, profit_fn, radius);
+            if constexpr (WithDuals) {
+                auto result = convex_sweep::sweep_solve<true>(ev, profit_fn, radius);
+                profit = result.profit;
+                matching = std::move(result.matches);
+                _sweep_trace_records = result.records;
+                _sweep_trace_vertices = result.vertices;
+                _sweep_matched_pairs = matching.size();
+            } else {
+                profit = convex_sweep::sweep_solve<false>(ev, profit_fn, radius);
+            }
         }
-
-        // total = trash0 - profit for every affine trash model.  Independent
-        // trash uses the shifted convention (total_cost() adds the bracket
-        // E*C_exp + T*C_theo, which equals trash0): report -profit.
-        _slope_total = independent_trash
-            ? (VALUE_TYPE)(-(W)profit)
-            : (VALUE_TYPE)(trash0 - (W)profit);
-        _slope_flow.clear();   // per-arc flows not derivable; _solver_flow throws
+        if constexpr (WithDuals) {
+            auto [alpha, beta] = convex_sweep_dual::recover<VALUE_TYPE>(
+                _sweep_real_pos, e, t, tau, radius, cost, matching, W(profit));
+            _sweep_dual_alpha = std::move(alpha);
+            _sweep_dual_beta = std::move(beta);
+            // set_point()/position updates advance the epoch after this call.
+            _sweep_dual_version = _solution_version + 1;
+            _sweep_dual_tau = tau;
+            ++_sweep_dual_recoveries;
+        }
+        _slope_total = independent_trash ? VALUE_TYPE(-W(profit)) : VALUE_TYPE(trash0 - W(profit));
+        _slope_flow.clear();
         _sweep_last_F = F;
         _slope_solved = true;
     }
+
+    mutable bool _sweep_with_duals = false;
+    mutable size_t _sweep_trace_records = 0, _sweep_trace_vertices = 0, _sweep_matched_pairs = 0;
 
     mutable VALUE_TYPE _sweep_last_F = 0;
 
@@ -2389,7 +2406,8 @@ public:
             _sweep_pos_built = false;
             _sdp_build_cache();
             _refresh_sweep_positions(new_chain_positions);
-            _sweep_solve(node_supply_map[lemon_graph.nodeFromId(0)]);
+            if (_sweep_with_duals) _sweep_solve<true>(node_supply_map[lemon_graph.nodeFromId(0)]);
+            else _sweep_solve<false>(node_supply_map[lemon_graph.nodeFromId(0)]);
             ++_solution_version;
             return;
         }
@@ -2647,40 +2665,17 @@ public:
         }
     }
 
-    std::tuple<uint64_t, size_t> convex_sweep_dual_stats() const {
-        return {_sweep_dual_recoveries, _sweep_dual_alpha.size()};
+    auto convex_sweep_dual_stats() const {
+        return std::make_tuple(_sweep_dual_recoveries, _sweep_dual_alpha.size(),
+                              _sweep_trace_records, _sweep_trace_vertices, _sweep_matched_pairs);
     }
 
     void accumulate_convex_sweep_dual_cut(VALUE_TYPE tau, long double& intercept,
                                          std::vector<long double>& gradient) const {
         if (!_solver_has_value())
             throw std::runtime_error("Dual cuts require a solved ConvexSweep backend");
-        const size_t P = _sdp_emp_cap.size();
-        if (_sweep_dual_version != _solution_version || _sweep_dual_tau != tau) {
-            using W = slopedp_detail::wide_t;
-            std::vector<VALUE_TYPE> t(P, 0);
-            VALUE_TYPE E = 0, T = 0;
-            for (size_t p = 0; p < P; ++p) {
-                E += _sdp_emp_cap[p];
-                if (_sdp_sink_arc[p] >= 0)
-                    t[p] = capacities_map[lemon_graph.arcFromId(_sdp_sink_arc[p])];
-                T += t[p];
-            }
-            const W profit = independent_trash ? -W(_slope_total)
-                : _sweep_trash_cost(E, T, _sweep_last_F, 0) - W(_slope_total);
-            const double scale = _p_is_one ? 1.0 : double(_scale);
-            const double radius = std::pow((double(tau) + 1.0) / scale, 1.0 / _p_order);
-            auto cost = [this](double a, double b) {
-                return quantize_cost<VALUE_TYPE>(std::pow(std::abs(a - b), _p_order), _scale, _p_is_one);
-            };
-            auto [alpha, beta] = convex_sweep_dual::recover<VALUE_TYPE>(
-                _sweep_real_pos, _sdp_emp_cap, t, tau, radius, cost, profit);
-            _sweep_dual_alpha = std::move(alpha);
-            _sweep_dual_beta = std::move(beta);
-            _sweep_dual_version = _solution_version;
-            _sweep_dual_tau = tau;
-            ++_sweep_dual_recoveries;
-        }
+        if (_sweep_dual_version != _solution_version || _sweep_dual_tau != tau)
+            throw std::runtime_error("ConvexSweep duals were not requested; call solve(..., with_duals=True)");
         for (const auto& node : nodes) {
             const auto v = node.get_id();
             if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&node.get_type()))
@@ -3620,10 +3615,10 @@ public:
         return _theoretical_trash_price(E_total, T_total);
     }
 
-    void solve()
+    void solve(bool with_duals = false)
     {
         std::vector<double> point(_no_theoretical_spectra, 1.0);
-        solve(point);
+        solve(point, with_duals);
     };
 
     // int64 cost-accumulator overflow guard.  A unit of flow traverses at most
@@ -3653,7 +3648,7 @@ public:
                 "(set_cost_scaling), or rescale the theoretical intensities.");
     }
 
-    void solve(const std::vector<double>& point) {
+    void solve(const std::vector<double>& point, bool with_duals = false) {
         require_valid_position_update(_position_update_invalid);
         if(!built)
             throw std::runtime_error("You must call build() before calling solve().");
@@ -3672,7 +3667,7 @@ public:
 
         _last_point.clear();
         for (auto& flow_subgraph : flow_subgraphs)
-            flow_subgraph->set_point(point);
+            flow_subgraph->set_point(point, with_duals);
         _last_point = point;
     };
 

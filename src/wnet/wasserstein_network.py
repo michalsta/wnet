@@ -531,8 +531,8 @@ class WassersteinNetwork:
         includes the supply-rounding uncertainty at the last evaluated point.
         Requires NetworkSimplex (including LinkCut), SlopeDP or ConvexSweep.
         SlopeDP recovers matching potentials from its chain flow. ConvexSweep
-        recovers a dual with an auxiliary simplex solve over profitable pairs.
-        Recovery is lazy, validated and cached until the next solve.
+        requires ``solve(..., with_duals=True)`` to trace the DP and recover
+        a validated dual eagerly. Cut queries reuse the cached coefficients.
         """
         return self.wnet.dual_cut()
 

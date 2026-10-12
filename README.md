@@ -4,8 +4,8 @@ Wasserstein Network (wnet) is a Python/C++ library for working with Wasserstein 
 
 NetworkSimplex variants expose raw dual certificates and continuous-supply
 supporting cuts. The 1D SlopeDP backend also supplies certified cuts through
-optional direct DP recovery. ConvexSweep supplies certified cuts through a
-lazy auxiliary simplex solve over profitable pairs, cached per solution.
+optional direct DP recovery. ConvexSweep supplies certified cuts through
+templated traceback and eager native recovery with `solve(..., with_duals=True)`.
 See [Dual cuts](docs/dual_cuts.md).
 
 See the [release notes](CHANGELOG.md) for changes in each release.

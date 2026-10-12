@@ -12,10 +12,11 @@ nb::class_<WNetIF> bind_network_if(nb::module_& m) {
         .def("add_independent_asymmetric_trash", &WassersteinNetwork<int64_t, double>::add_independent_asymmetric_trash, nb::arg("C_exp"), nb::arg("C_theo"))
         .def("build", &WassersteinNetwork<int64_t, double>::build, nb::arg("config") = NetworkSimplexConfig{})
         .def("solve",
-             [](WassersteinNetwork<int64_t, double>& self) { self.solve(); })
+             [](WassersteinNetwork<int64_t, double>& self, bool with_duals) { self.solve(with_duals); },
+             nb::arg("with_duals") = false)
         .def("solve",
-             [](WassersteinNetwork<int64_t, double>& self, const std::vector<double>& point) { self.solve(point); },
-             nb::arg("point"))
+             [](WassersteinNetwork<int64_t, double>& self, const std::vector<double>& point, bool with_duals) { self.solve(point, with_duals); },
+             nb::arg("point"), nb::arg("with_duals") = false)
         .def("total_cost", &WassersteinNetwork<int64_t, double>::total_cost)
         .def("dual_cut", [](const WassersteinNetwork<int64_t, double>& self) {
             auto [intercept, slopes, upper, error, rounded_cost] = self.dual_cut();

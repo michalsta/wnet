@@ -28,6 +28,8 @@
 #include <deque>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <vector>
 
 #include "wide_int.hpp"
@@ -339,7 +341,41 @@ struct Event {
     double pos;
     int side;    // 0 = empirical, 1 = theoretical
     i64 count;   // integer units
+    size_t index = SIZE_MAX;  // caller's position index (optional for cost-only)
 };
+
+struct Match { size_t empirical, theoretical; i64 count; };
+struct TraceResult {
+    i64 profit = 0;
+    std::vector<Match> matches;
+    size_t records = 0, vertices = 0;
+};
+
+struct TraceRecord {
+    PLF before[2], profits;
+    i64 own_limit = 0, end[2] = {0, 0};
+};
+struct TraceStorage {
+    struct Block { size_t index; i64 end; };
+    std::vector<TraceRecord> records;
+    std::vector<Block> blocks[2];
+    i64 end[2] = {0, 0};
+};
+struct NoTraceStorage {};
+
+// Maximum of an exact PL function on an integer interval; endpoints and
+// stored vertices suffice. Select one consistent predecessor at ties.
+inline std::pair<i64, i64> argmax(const PLF& f, i64 lo, i64 hi) {
+    if (lo > hi) return {0, NEG_INF};
+    std::pair<i64, i64> best{lo, f.eval(lo)};
+    auto consider = [&](i64 k, i64 value) {
+        if (value > best.second) best = {k, value};
+    };
+    consider(hi, f.eval(hi));
+    for (const auto& v : f.vs)
+        if (v.k >= lo && v.k <= hi) consider(v.k, v.v);
+    return best;
+}
 
 struct SideState {
     std::deque<std::pair<double, i64>> blocks;  // oldest first (pos, count)
@@ -365,9 +401,14 @@ PLF rank_prefix_profits(const SideState& st, double z, ProfitFn profit) {
     return T;
 }
 
-template <typename ProfitFn>
+template <bool Traceback = false, typename ProfitFn>
 void sweep_step(SideState& own, SideState& opp, double z, i64 q,
-                ProfitFn profit, double radius) {
+                ProfitFn profit, double radius, TraceRecord* trace = nullptr,
+                int own_side = 0) {
+    if constexpr (Traceback) {
+        trace->before[own_side] = own.V;
+        trace->before[1 - own_side] = opp.V;
+    }
     auto prune = [&](SideState& st) {
         i64 drop = 0;
         while (!st.blocks.empty() && (z - st.blocks.front().first) > radius) {
@@ -385,6 +426,10 @@ void sweep_step(SideState& own, SideState& opp, double z, i64 q,
     // Opposite side: windowed matching.
     opp.V.suffix_max();
     PLF T = rank_prefix_profits(opp, z, profit);
+    if constexpr (Traceback) {
+        trace->profits = T;
+        trace->own_limit = own.V.K();
+    }
     PLF VT = add_pl(opp.V, T);
     PLF newVopp = sub_pl(windowed_max(VT, q), T);
 
@@ -438,17 +483,116 @@ void sweep_step(SideState& own, SideState& opp, double z, i64 q,
     if (opp.V.vs.front().v < best0) opp.V.vs.front().v = best0;
 }
 
-template <typename ProfitFn>
-i64 sweep_solve(const std::vector<Event>& events, ProfitFn profit,
+template <bool Traceback = false, typename ProfitFn>
+auto sweep_solve(const std::vector<Event>& events, ProfitFn profit,
                 double radius) {
     SideState sides[2];
-    for (const Event& e : events) {
+    // The false specialization has no vectors, snapshots, or recording work.
+    std::conditional_t<Traceback, TraceStorage, NoTraceStorage> trace;
+    if constexpr (Traceback) trace.records.resize(events.size());
+    for (size_t i = 0; i < events.size(); ++i) {
+        const Event& e = events[i];
         if (e.count <= 0) continue;
-        sweep_step(sides[e.side], sides[1 - e.side], e.pos, e.count,
-                   profit, radius);
+        if constexpr (Traceback) {
+            auto& record = trace.records[i];
+            record.end[0] = trace.end[0]; record.end[1] = trace.end[1];
+            sweep_step<true>(sides[e.side], sides[1 - e.side], e.pos, e.count,
+                            profit, radius, &record, e.side);
+            trace.end[e.side] += e.count;
+            trace.blocks[e.side].push_back({e.index == SIZE_MAX ? i : e.index, trace.end[e.side]});
+        } else {
+            sweep_step<false>(sides[e.side], sides[1 - e.side], e.pos, e.count,
+                             profit, radius);
+        }
     }
     i64 best = std::max(sides[0].V.max_value(), sides[1].V.max_value());
-    return std::max<i64>(best, 0);
+    if constexpr (!Traceback) {
+        return std::max<i64>(best, 0);
+    } else {
+        TraceResult result;
+        result.profit = std::max<i64>(best, 0);
+        int side = sides[0].V.max_value() >= sides[1].V.max_value() ? 0 : 1;
+        i64 pending = argmax(sides[side].V, 0, sides[side].V.K()).first;
+        i64 value = result.profit;
+        auto emit = [&](const Event& event, size_t current, int opposite, i64 from, i64 to) {
+            const auto& blocks = trace.blocks[opposite];
+            auto it = std::upper_bound(blocks.begin(), blocks.end(), from,
+                [](i64 rank, const TraceStorage::Block& block) { return rank < block.end; });
+            while (from < to) {
+                if (it == blocks.end()) throw std::runtime_error("Invalid sweep traceback rank");
+                const i64 take = std::min(to, it->end) - from;
+                result.matches.push_back(event.side == 1
+                    ? Match{it->index, current, take} : Match{current, it->index, take});
+                from += take;
+                ++it;
+            }
+        };
+        for (size_t i = events.size(); i-- > 0;) {
+            const auto& e = events[i];
+            if (e.count <= 0) continue;
+            const auto& r = trace.records[i];
+            ++result.records;
+            result.vertices += r.before[0].vs.size() + r.before[1].vs.size() + r.profits.vs.size();
+            const int own = e.side, opp = 1 - own;
+            PLF envelope = r.before[opp];
+            envelope.suffix_max();
+            envelope.truncate(r.profits.K());
+            const PLF vt = add_pl(envelope, r.profits);
+            auto stay = [&](i64 g) {
+                auto choice = argmax(vt, g, std::min(vt.K(), g + e.count));
+                choice.second -= r.profits.eval(g);
+                return choice;
+            };
+            auto append = [&](i64 g) {
+                if (g > r.own_limit + e.count) return std::pair<i64, i64>{0, NEG_INF};
+                return argmax(r.before[own], std::max<i64>(0, g - e.count), r.before[own].K());
+            };
+            auto flip = [&](i64 g) {
+                if (g > e.count) return std::pair<i64, i64>{0, NEG_INF};
+                // Some fresh pending units may be discarded after the flip.
+                // Neutral sync represents this free-drop choice at zero.
+                auto choice = argmax(vt, 0, std::min(vt.K(), e.count - g));
+                return std::pair<i64, i64>{e.count - choice.first, choice.second};
+            };
+            // Neutral sync may select either side's transition at g == 0.
+            if (!pending) {
+                const i64 own_value = std::max(append(0).second, flip(0).second);
+                const i64 opp_value = stay(0).second;
+                side = own_value >= opp_value ? own : opp;
+            }
+            i64 k = 0, predecessor = 0;
+            if (side == own) {
+                const auto choice = append(pending);
+                const auto flipped = flip(pending);
+                if (choice.second >= flipped.second) {
+                    if (choice.second != value) throw std::runtime_error("Invalid sweep append traceback");
+                    pending = choice.first;
+                    value = r.before[own].eval(pending);
+                    continue;
+                }
+                if (flipped.second != value) throw std::runtime_error("Invalid sweep flip traceback at event " + std::to_string(i)
+                    + ", pending=" + std::to_string(pending) + ", value=" + std::to_string(value)
+                    + ", flip=" + std::to_string(flipped.second) + ", append=" + std::to_string(choice.second));
+                k = e.count - flipped.first;
+                const auto previous = argmax(r.before[opp], k, r.before[opp].K());
+                predecessor = previous.first;
+                const size_t index = e.index == SIZE_MAX ? i : e.index;
+                emit(e, index, opp, r.end[opp] - k, r.end[opp]);
+            } else {
+                const auto choice = stay(pending);
+                if (choice.second != value) throw std::runtime_error("Invalid sweep matching traceback");
+                k = choice.first;
+                predecessor = argmax(r.before[opp], k, r.before[opp].K()).first;
+                const size_t index = e.index == SIZE_MAX ? i : e.index;
+                emit(e, index, opp, r.end[opp] - k, r.end[opp] - pending);
+            }
+            side = opp;
+            pending = predecessor;
+            value = r.before[opp].eval(pending);
+        }
+        if (pending || value) throw std::runtime_error("Invalid sweep initial traceback state");
+        return result;
+    }
 }
 
 // ---------------------------------------------------------------------- //

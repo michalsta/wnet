@@ -105,7 +105,7 @@ def test_global_bounds(p, model, scale):
         with pytest.raises(RuntimeError, match="solve"):
             graph.dual_cut()
         for point in probes[:6]:
-            graph.solve(point)
+            graph.solve(point, with_duals=True)
             cut = graph.dual_cut()
             assert objective(point) <= cut["upper_bound"] + 1e-8
             assert (
@@ -121,22 +121,35 @@ def test_global_bounds(p, model, scale):
                 )
 
 
-def test_recovery_is_lazy_cached_and_invalidated():
+def test_recovery_is_eager_optional_cached_and_invalidated():
     graph, _ = fixture("independent", 100000, 2)
     graph.solve([1, 1])
+    cost = graph.total_cost()
     sg = graph.get_subgraph(0)
-    assert sg.convex_sweep_dual_stats() == (0, 0)
+    assert sg.convex_sweep_dual_stats() == (0, 0, 0, 0, 0)
+    with pytest.raises(RuntimeError, match="with_duals=True"):
+        graph.dual_cut()
+    graph.solve([1, 1], with_duals=True)
+    assert graph.total_cost() == cost
+    recoveries, potentials, records, vertices, pairs = sg.convex_sweep_dual_stats()
+    assert recoveries == 1
+    assert potentials > 0 and records > 0 and vertices > 0 and pairs > 0
     first = graph.dual_cut()
-    assert sg.convex_sweep_dual_stats()[0] == 1
     np.testing.assert_array_equal(first["gradient"], graph.dual_cut()["gradient"])
     assert sg.convex_sweep_dual_stats()[0] == 1
-    graph.solve([0, 0.7])
-    graph.dual_cut()
+    graph.solve([0, 0.7], with_duals=True)
     assert sg.convex_sweep_dual_stats()[0] == 2
+    graph.dual_cut()
+    graph.solve()
+    assert sg.convex_sweep_dual_stats() == (2, 0, 0, 0, 0)
+    with pytest.raises(RuntimeError, match="with_duals=True"):
+        graph.dual_cut()
+    graph.solve(with_duals=True)
+    graph.dual_cut()
     graph.refine_intensity_precision(10)
     with pytest.raises(RuntimeError, match="solve"):
         graph.dual_cut()
-    graph.solve([0, 0.7])
+    graph.solve([0, 0.7], with_duals=True)
     graph.dual_cut()
 
 
@@ -145,7 +158,7 @@ def test_reversed_trash_prices_across_mass_balance(p):
     graph, objective = fixture("both", 17.3, p, reverse_trash=True)
     probes = [[0, 0], [0, 3], [3, 0], [3, 3], [0.2, 0.7]]
     for point in probes:
-        graph.solve(point)
+        graph.solve(point, with_duals=True)
         cut = graph.dual_cut()
         assert objective(point) <= cut["upper_bound"] + 1e-8
         for probe in probes:
@@ -172,6 +185,13 @@ def test_position_updates_zero_reward_and_disconnected_peaks(integer):
     graph.add_independent_asymmetric_trash(3, 5)
     graph.build()
     graph.solve([1])
+    graph.update_positions_and_solve(
+        dist([0, 2, 100], [1, 1, 1]), [dist([1, 200], [2, 1])]
+    )
+    assert graph.get_subgraph(0).convex_sweep_dual_stats() == (0, 0, 0, 0, 0)
+    with pytest.raises(RuntimeError, match="with_duals=True"):
+        graph.dual_cut()
+    graph.solve([1], with_duals=True)
     cut = graph.dual_cut()
     assert cut["upper_bound"] == pytest.approx(10)
     assert cut["intercept"] + cut["gradient"] @ [1] == pytest.approx(10)
@@ -192,5 +212,5 @@ def test_position_updates_zero_reward_and_disconnected_peaks(integer):
     )
     zero.add_independent_asymmetric_trash(0, 0)
     zero.build()
-    zero.solve([1])
+    zero.solve([1], with_duals=True)
     assert zero.dual_cut()["upper_bound"] == pytest.approx(0)
