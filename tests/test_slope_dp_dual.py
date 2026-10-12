@@ -8,7 +8,7 @@ from test_dual_cut import fixture
 @pytest.mark.parametrize('mode', ['lazy', 'cluster'])
 @pytest.mark.parametrize('model', ['simple', 'both', 'independent', 'experimental', 'theoretical'])
 @pytest.mark.parametrize('scale', [1, 17.3, 100000])
-@pytest.mark.parametrize("storage", ["flat", "tree"])
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_dp_global_bounds(mode, model, scale, storage):
     for seed in range(4):
         graph, objective = fixture(model, scale, WarmMode.NONE, seed=seed,
@@ -29,7 +29,7 @@ def test_dp_global_bounds(mode, model, scale, storage):
 
 
 @pytest.mark.parametrize('mode', ['lazy', 'cluster'])
-@pytest.mark.parametrize("storage", ["flat", "tree"])
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_recovery_is_optional_cached_and_invalidated(mode, storage):
     graph, _ = fixture('independent', 100000, WarmMode.NONE, chain=True, backend=SlopeDP(mode, storage=storage))
     graph.solve([1, 1])
@@ -65,7 +65,7 @@ def test_modes_validate_configuration():
 
 @pytest.mark.parametrize('mode', ['lazy', 'cluster'])
 @pytest.mark.parametrize('integer', [False, True])
-@pytest.mark.parametrize("storage", ["flat", "tree"])
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_position_updates_refresh_potentials_and_handle_zero_reward(mode, integer, storage):
     from wnet import Distribution, WassersteinNetwork
     from wnet.distances import DistanceMetric
@@ -98,7 +98,7 @@ def test_position_updates_refresh_potentials_and_handle_zero_reward(mode, intege
 
 @pytest.mark.parametrize('mode', ['lazy', 'cluster'])
 @pytest.mark.parametrize('model,expected', [('simple', 4), ('independent', 9)])
-@pytest.mark.parametrize("storage", ["flat", "tree"])
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_disconnected_chains_and_isolated_peaks(mode, model, expected, storage):
     from wnet import Distribution, WassersteinNetwork
     from wnet.distances import DistanceMetric

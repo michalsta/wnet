@@ -92,8 +92,8 @@ struct CapacityScalingConfig {
 // ~300x faster than a cold NS solve on dense profile chains (pinene 70k:
 // 21 ms vs 6.2 s merged / ~26 s on the full wnet graph).
 inline std::string validate_dp_storage(const std::string& storage) {
-    if (storage != "flat" && storage != "tree")
-        throw std::invalid_argument("DP storage must be flat or tree");
+    if (storage != "flat" && storage != "tree" && storage != "augmented")
+        throw std::invalid_argument("DP storage must be flat, tree or augmented");
     return storage;
 }
 struct SlopeDPConfig {
@@ -1235,6 +1235,8 @@ public:
     void _slope_dp_solve(VALUE_TYPE F) const {
         if (std::get<SlopeDPConfig>(_config).storage == "tree")
             _slope_dp_solve_impl<breakpoint_storage::MapStorage>(F);
+        else if (std::get<SlopeDPConfig>(_config).storage == "augmented")
+            _slope_dp_solve_impl<breakpoint_storage::AugmentedStorage<>>(F);
         else _slope_dp_solve_impl<breakpoint_storage::FlatSlopeStorage>(F);
     }
 
@@ -1319,7 +1321,11 @@ public:
             for (size_t c = 0; c < C; ++c)
                 for (size_t p = cs[c]; p < cs[c + 1]; ++p) { ce[c] += e[p]; ct[c] += t[p]; }
 
-            slopedp_detail::ConvexPL<VALUE_TYPE, Storage> DP;
+            auto DP = [] {
+                if constexpr (requires { typename Storage::template Slope<VALUE_TYPE>; })
+                    return typename Storage::template Slope<VALUE_TYPE>{};
+                else return slopedp_detail::ConvexPL<VALUE_TYPE, Storage>{};
+            }();
             const VALUE_TYPE WALLM = std::numeric_limits<VALUE_TYPE>::max() / 1024;
             DP.insL(0, WALLM);
             DP.insR(0, WALLM);
@@ -1514,6 +1520,8 @@ public:
     void _sweep_solve(VALUE_TYPE F) const {
         if (std::get<ConvexSweepConfig>(_config).storage == "tree")
             _sweep_solve_impl<WithDuals, convex_sweep::TreePLF>(F);
+        else if (std::get<ConvexSweepConfig>(_config).storage == "augmented")
+            _sweep_solve_impl<WithDuals, convex_sweep::AugmentedPLF>(F);
         else _sweep_solve_impl<WithDuals, convex_sweep::PLF>(F);
     }
 
@@ -1609,6 +1617,8 @@ public:
     std::vector<VALUE_TYPE> _sweep_position_marginals() const {
         if (std::get<ConvexSweepConfig>(_config).storage == "tree")
             return _sweep_position_marginals_impl<convex_sweep::TreePLF>();
+        if (std::get<ConvexSweepConfig>(_config).storage == "augmented")
+            return _sweep_position_marginals_impl<convex_sweep::AugmentedPLF>();
         return _sweep_position_marginals_impl<convex_sweep::PLF>();
     }
 

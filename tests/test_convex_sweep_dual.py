@@ -89,7 +89,7 @@ def fixture(model, scale, p, seed=42, reverse_trash=False, storage="flat"):
     "model", ["simple", "both", "independent", "experimental", "theoretical"]
 )
 @pytest.mark.parametrize("scale", [1, 17.3, 100000])
-@pytest.mark.parametrize("storage", ["flat", "tree"])
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_global_bounds(p, model, scale, storage):
     for seed in range(3):
         graph, objective = fixture(model, scale, p, seed, storage=storage)
@@ -122,7 +122,7 @@ def test_global_bounds(p, model, scale, storage):
                 )
 
 
-@pytest.mark.parametrize("storage", ["flat", "tree"])
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_recovery_is_eager_optional_cached_and_invalidated(storage):
     graph, _ = fixture("independent", 100000, 2, storage=storage)
     graph.solve([1, 1])
@@ -156,7 +156,7 @@ def test_recovery_is_eager_optional_cached_and_invalidated(storage):
 
 
 @pytest.mark.parametrize("p", [1.5, 2, 3])
-@pytest.mark.parametrize("storage", ["flat", "tree"])
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_reversed_trash_prices_across_mass_balance(p, storage):
     graph, objective = fixture("both", 17.3, p, reverse_trash=True, storage=storage)
     probes = [[0, 0], [0, 3], [3, 0], [3, 3], [0.2, 0.7]]
@@ -169,7 +169,7 @@ def test_reversed_trash_prices_across_mass_balance(p, storage):
 
 
 @pytest.mark.parametrize("integer", [False, True])
-@pytest.mark.parametrize("storage", ["flat", "tree"])
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_position_updates_zero_reward_and_disconnected_peaks(integer, storage):
     dtype = np.int64 if integer else float
 

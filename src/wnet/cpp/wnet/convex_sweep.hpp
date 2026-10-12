@@ -34,6 +34,7 @@
 
 #include "wide_int.hpp"
 #include "ordered_breakpoints.hpp"
+#include "augmented_profiles.hpp"
 
 namespace convex_sweep {
 
@@ -65,6 +66,7 @@ struct BasicPLF {
     i64 K() const { return vs.back().k; }
 
     i64 eval(i64 k) const {
+        if constexpr (requires { vs.eval(k); }) return vs.eval(k);
         if (k <= vs.front().k) return vs.front().v;
         if (k >= vs.back().k) return vs.back().v;
         const auto right = vs.lower_bound(k);
@@ -130,6 +132,7 @@ struct BasicPLF {
     // suffix_max() when free drops are intended.
     void shift_append(i64 q) {
         if (q <= 0) return;
+        if constexpr (requires { vs.shift_append(q); }) { vs.shift_append(q); return; }
         std::vector<V> out;
         out.reserve(vs.size() + 2);
         out.push_back({0, vs.front().v});
@@ -143,6 +146,7 @@ struct BasicPLF {
     // Restrict the domain to [0, K_new].
     void truncate(i64 K_new) {
         if (K_new >= K()) return;
+        if constexpr (requires { vs.truncate(K_new); }) { vs.truncate(K_new); return; }
         i64 vK = eval(K_new);
         std::vector<V> out;
         for (const V& x : vs) {
@@ -158,6 +162,7 @@ struct BasicPLF {
     // In-place pointwise max with `other` (domains may differ; outside its
     // domain a function does not contribute).
     void pointwise_max(const PLF& other) {
+        if constexpr (requires { vs.pointwise_max(other.vs); }) { vs.pointwise_max(other.vs); return; }
         std::vector<i64> ks;
         ks.reserve(vs.size() + other.vs.size());
         for (auto& x : vs) ks.push_back(x.k);
@@ -193,7 +198,13 @@ struct BasicPLF {
         normalize();
     }
 
+    void set_front_value(i64 value) {
+        if constexpr (requires { vs.set_front_value(value); }) vs.set_front_value(value);
+        else vs.front().v = value;
+    }
+
     i64 max_value() const {
+        if constexpr (requires { vs.vertex_argmax(0, K()); }) return vs.vertex_argmax(0, K()).second;
         i64 m = NEG_INF;
         for (const V& x : vs) m = std::max(m, x.v);
         return m;
@@ -202,6 +213,7 @@ struct BasicPLF {
 
 using PLF = BasicPLF<>;
 using TreePLF = BasicPLF<breakpoint_storage::MapStorage>;
+using AugmentedPLF = BasicPLF<breakpoint_storage::AugmentedStorage<>>;
 
 // Monotone O(1)-amortized evaluator: valid only for non-decreasing query ks.
 template<class F>
@@ -316,6 +328,8 @@ inline F windowed_max(const F& f, i64 q) {
                 // evaluate exactly with a fresh scan (rare path)
                 auto exact_at = [&](i64 gg) -> i64 {
                     i64 hh = std::min(K, gg + q);
+                    if constexpr (requires { f.vs.vertex_argmax(gg,hh); })
+                        return std::max({f.eval(gg),f.eval(hh),f.vs.vertex_argmax(gg,hh).second});
                     i64 m = std::max(f.eval(gg), f.eval(hh));
                     for (const auto& x : f.vs) {
                         if (x.k > gg && x.k < hh) m = std::max(m, x.v);
@@ -378,6 +392,10 @@ inline std::pair<i64, i64> argmax(const F& f, i64 lo, i64 hi) {
         if (value > best.second) best = {k, value};
     };
     consider(hi, f.eval(hi));
+    if constexpr (requires { f.vs.vertex_argmax(lo,hi); }) {
+        auto candidate = f.vs.vertex_argmax(lo,hi); consider(candidate.first,candidate.second);
+        return best;
+    }
     for (const auto& v : f.vs)
         if (v.k >= lo && v.k <= hi) consider(v.k, v.v);
     return best;
@@ -485,8 +503,8 @@ void sweep_step(BasicSideState<F>& own, BasicSideState<F>& opp, double z, i64 q,
 
     // Neutral-state sync: V_own(0) and V_opp(0) are the same logical state.
     i64 best0 = std::max(own.V.eval(0), opp.V.eval(0));
-    if (own.V.vs.front().v < best0) own.V.vs.front().v = best0;
-    if (opp.V.vs.front().v < best0) opp.V.vs.front().v = best0;
+    if (own.V.vs.front().v < best0) own.V.set_front_value(best0);
+    if (opp.V.vs.front().v < best0) opp.V.set_front_value(best0);
 }
 
 template <bool Traceback = false, class F = PLF, typename ProfitFn>
@@ -615,6 +633,7 @@ inline F reflect_pl(const F& f) {
     // r(k) = f(K - k)
     F r;
     i64 K = f.K();
+    if constexpr (requires { f.vs.reflected(K); }) { r.vs = f.vs.reflected(K); return r; }
     r.vs.reserve(f.vs.size());
     for (auto it = f.vs.rbegin(); it != f.vs.rend(); ++it)
         r.vs.push_back({K - it->k, it->v});
@@ -639,6 +658,9 @@ inline F windowed_max_left(const F& f, i64 q) {
 // g(m) = f(min(m + q, K)), domain [0, K]
 template<class F>
 inline F shift_left_clamp(const F& f, i64 q) {
+    if constexpr (requires (F out) { out.vs.shift_left_clamp(q); }) {
+        F out = f; out.vs.shift_left_clamp(q); return out;
+    }
     i64 K = f.K();
     F out;
     for (const auto& x : f.vs) {
@@ -658,6 +680,9 @@ inline F shift_left_clamp(const F& f, i64 q) {
 template<class F>
 inline F extend_flat(const F& f, i64 K_new) {
     F out = f;
+    if constexpr (requires { out.vs.extend_flat(K_new); }) {
+        if (K_new > out.K()) out.vs.extend_flat(K_new); return out;
+    }
     if (K_new > out.K()) out.vs.push_back({K_new, out.vs.back().v});
     out.normalize();
     return out;

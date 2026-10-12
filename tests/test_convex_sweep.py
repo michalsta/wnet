@@ -166,7 +166,7 @@ def test_p1_matches_slopedp_bitexact(independent):
         np.testing.assert_array_equal(gc, gs, err_msg=f"trial {trial}")
 
 
-@pytest.mark.parametrize("storage", ["flat", "tree"])
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_gradient_matches_finite_difference(storage):
     emp = d1([100.0, 100.4, 107.0], [2.0, 2.0, 1.0])
     theos = [d1([100.0], [3.0]), d1([104.0], [1.0])]
@@ -203,7 +203,7 @@ def test_gradient_matches_finite_difference(storage):
         ), f"component {k}: fd={fd} vs grad={grads[k]}"
 
 
-@pytest.mark.parametrize("storage", ["flat", "tree"])
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_non_sweep_solver_on_p2_chain_rejected(storage):
     emp, theos = d1([0.0], [1.0]), [d1([1.0], [1.0])]
     W = WassersteinNetwork(

@@ -64,6 +64,10 @@ int main() {
             const auto traced = convex_sweep::sweep_solve<true>(events, benefit, radius);
             assert(cost_only == previous.back());
             assert(traced.profit == cost_only);
+            const auto aug_cost = convex_sweep::sweep_solve<false, convex_sweep::AugmentedPLF>(events,benefit,radius);
+            const auto aug_trace = convex_sweep::sweep_solve<true, convex_sweep::AugmentedPLF>(events,benefit,radius);
+            assert(aug_cost == cost_only && aug_trace.profit == cost_only);
+            convex_sweep_dual::recover<I>(pos,emp,theo,reward,radius,cost,aug_trace.matches,W(aug_trace.profit));
             const auto tree_cost = convex_sweep::sweep_solve<false, convex_sweep::TreePLF>(events, benefit, radius);
             const auto tree_trace = convex_sweep::sweep_solve<true, convex_sweep::TreePLF>(events, benefit, radius);
             assert(tree_cost == cost_only && tree_trace.profit == cost_only);
@@ -73,10 +77,13 @@ int main() {
             std::vector<convex_sweep::BasicSnapshot<convex_sweep::TreePLF>> tree_snapshots;
             assert(convex_sweep::forward_store(events, benefit, radius, flat_snapshots) ==
                    convex_sweep::forward_store(events, benefit, radius, tree_snapshots));
-            std::vector<I> flat_marginals, tree_marginals;
+            std::vector<convex_sweep::BasicSnapshot<convex_sweep::AugmentedPLF>> aug_snapshots;
+            assert(convex_sweep::forward_store(events,benefit,radius,aug_snapshots) == cost_only);
+            std::vector<I> flat_marginals, tree_marginals,aug_marginals;
             convex_sweep::adjoint_compose(events, benefit, flat_snapshots, flat_marginals);
             convex_sweep::adjoint_compose(events, benefit, tree_snapshots, tree_marginals);
-            assert(flat_marginals == tree_marginals);
+            convex_sweep::adjoint_compose(events,benefit,aug_snapshots,aug_marginals);
+            assert(flat_marginals == tree_marginals && flat_marginals == aug_marginals);
             convex_sweep_dual::recover<I>(pos, emp, theo, reward, radius, cost,
                                           traced.matches, W(traced.profit));
         } catch (const std::exception& exc) {
