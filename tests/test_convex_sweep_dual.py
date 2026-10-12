@@ -9,7 +9,7 @@ from wnet.distances import DistanceMetric
 from wnet.wnet_cpp import ConvexSweep
 
 
-def fixture(model, scale, p, seed=42, reverse_trash=False):
+def fixture(model, scale, p, seed=42, reverse_trash=False, storage="flat"):
     rng = np.random.default_rng(seed)
     x = rng.integers(0, 6, 5).astype(float)
     e = rng.uniform(0.2, 2, 5)
@@ -23,7 +23,7 @@ def fixture(model, scale, p, seed=42, reverse_trash=False):
         DistanceMetric.L1,
         split_distance=20,
         intensity_scale=scale,
-        solver=ConvexSweep(),
+        solver=ConvexSweep(storage=storage),
         p=p,
         round_max_distance=False,
     )
@@ -89,9 +89,10 @@ def fixture(model, scale, p, seed=42, reverse_trash=False):
     "model", ["simple", "both", "independent", "experimental", "theoretical"]
 )
 @pytest.mark.parametrize("scale", [1, 17.3, 100000])
-def test_global_bounds(p, model, scale):
+@pytest.mark.parametrize("storage", ["flat", "tree"])
+def test_global_bounds(p, model, scale, storage):
     for seed in range(3):
-        graph, objective = fixture(model, scale, p, seed)
+        graph, objective = fixture(model, scale, p, seed, storage=storage)
         probes = np.vstack(
             [
                 np.zeros(2),
@@ -121,8 +122,9 @@ def test_global_bounds(p, model, scale):
                 )
 
 
-def test_recovery_is_eager_optional_cached_and_invalidated():
-    graph, _ = fixture("independent", 100000, 2)
+@pytest.mark.parametrize("storage", ["flat", "tree"])
+def test_recovery_is_eager_optional_cached_and_invalidated(storage):
+    graph, _ = fixture("independent", 100000, 2, storage=storage)
     graph.solve([1, 1])
     cost = graph.total_cost()
     sg = graph.get_subgraph(0)
@@ -154,8 +156,9 @@ def test_recovery_is_eager_optional_cached_and_invalidated():
 
 
 @pytest.mark.parametrize("p", [1.5, 2, 3])
-def test_reversed_trash_prices_across_mass_balance(p):
-    graph, objective = fixture("both", 17.3, p, reverse_trash=True)
+@pytest.mark.parametrize("storage", ["flat", "tree"])
+def test_reversed_trash_prices_across_mass_balance(p, storage):
+    graph, objective = fixture("both", 17.3, p, reverse_trash=True, storage=storage)
     probes = [[0, 0], [0, 3], [3, 0], [3, 3], [0.2, 0.7]]
     for point in probes:
         graph.solve(point, with_duals=True)
@@ -166,7 +169,8 @@ def test_reversed_trash_prices_across_mass_balance(p):
 
 
 @pytest.mark.parametrize("integer", [False, True])
-def test_position_updates_zero_reward_and_disconnected_peaks(integer):
+@pytest.mark.parametrize("storage", ["flat", "tree"])
+def test_position_updates_zero_reward_and_disconnected_peaks(integer, storage):
     dtype = np.int64 if integer else float
 
     def dist(xs, values):
@@ -179,7 +183,7 @@ def test_position_updates_zero_reward_and_disconnected_peaks(integer):
         split_distance=10,
         intensity_scale=100,
         p=2,
-        solver=ConvexSweep(),
+        solver=ConvexSweep(storage=storage),
     )
     graph.set_cost_scaling(0)
     graph.add_independent_asymmetric_trash(3, 5)
@@ -208,7 +212,7 @@ def test_position_updates_zero_reward_and_disconnected_peaks(integer):
         DistanceMetric.L1,
         split_distance=10,
         p=2,
-        solver=ConvexSweep(),
+        solver=ConvexSweep(storage=storage),
     )
     zero.add_independent_asymmetric_trash(0, 0)
     zero.build()

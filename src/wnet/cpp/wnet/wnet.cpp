@@ -90,12 +90,17 @@ NB_MODULE(wnet_cpp, m) {
         .def_rw("factor", &CapacityScalingConfig::factor);
 
     nb::class_<SlopeDPConfig>(m, "SlopeDP")
-        .def(nb::init<const std::string&>(), nb::arg("dual_mode") = "lazy")
+        .def(nb::init<const std::string&, const std::string&>(),
+             nb::arg("dual_mode") = "lazy", nb::arg("storage") = "flat")
         .def_prop_rw("dual_mode", [](const SlopeDPConfig& c) { return c.dual_mode; },
-                     [](SlopeDPConfig& c, const std::string& mode) { c = SlopeDPConfig(mode); });
+                     [](SlopeDPConfig& c, const std::string& mode) { c = SlopeDPConfig(mode, c.storage); })
+        .def_prop_rw("storage", [](const SlopeDPConfig& c) { return c.storage; },
+                     [](SlopeDPConfig& c, const std::string& storage) { c.storage = validate_dp_storage(storage); });
 
     nb::class_<ConvexSweepConfig>(m, "ConvexSweep")
-        .def(nb::init<>());
+        .def(nb::init<const std::string&>(), nb::arg("storage") = "flat")
+        .def_prop_rw("storage", [](const ConvexSweepConfig& c) { return c.storage; },
+                     [](ConvexSweepConfig& c, const std::string& storage) { c.storage = validate_dp_storage(storage); });
 
     nb::class_<FlowNode<int64_t>>(m, "FlowNode")
         .def(nb::init<LEMON_INDEX, SourceNode>())

@@ -8,10 +8,11 @@ from test_dual_cut import fixture
 @pytest.mark.parametrize('mode', ['lazy', 'cluster'])
 @pytest.mark.parametrize('model', ['simple', 'both', 'independent', 'experimental', 'theoretical'])
 @pytest.mark.parametrize('scale', [1, 17.3, 100000])
-def test_dp_global_bounds(mode, model, scale):
+@pytest.mark.parametrize("storage", ["flat", "tree"])
+def test_dp_global_bounds(mode, model, scale, storage):
     for seed in range(4):
         graph, objective = fixture(model, scale, WarmMode.NONE, seed=seed,
-                                   chain=True, backend=SlopeDP(dual_mode=mode))
+                                   chain=True, backend=SlopeDP(dual_mode=mode, storage=storage))
         probes = np.vstack([np.zeros(2), np.ones(2), np.random.default_rng(seed).uniform(0, 3, (8, 2))])
         truths = [objective(w) for w in probes]
         with pytest.raises(RuntimeError, match='solve'):
@@ -28,8 +29,9 @@ def test_dp_global_bounds(mode, model, scale):
 
 
 @pytest.mark.parametrize('mode', ['lazy', 'cluster'])
-def test_recovery_is_optional_cached_and_invalidated(mode):
-    graph, _ = fixture('independent', 100000, WarmMode.NONE, chain=True, backend=SlopeDP(mode))
+@pytest.mark.parametrize("storage", ["flat", "tree"])
+def test_recovery_is_optional_cached_and_invalidated(mode, storage):
+    graph, _ = fixture('independent', 100000, WarmMode.NONE, chain=True, backend=SlopeDP(mode, storage=storage))
     graph.solve([1, 1])
     sg = graph.get_subgraph(0)
     recoveries, clusters, potentials = sg.slope_dp_dual_stats()
@@ -63,7 +65,8 @@ def test_modes_validate_configuration():
 
 @pytest.mark.parametrize('mode', ['lazy', 'cluster'])
 @pytest.mark.parametrize('integer', [False, True])
-def test_position_updates_refresh_potentials_and_handle_zero_reward(mode, integer):
+@pytest.mark.parametrize("storage", ["flat", "tree"])
+def test_position_updates_refresh_potentials_and_handle_zero_reward(mode, integer, storage):
     from wnet import Distribution, WassersteinNetwork
     from wnet.distances import DistanceMetric
     dtype = np.int64 if integer else float
@@ -71,7 +74,7 @@ def test_position_updates_refresh_potentials_and_handle_zero_reward(mode, intege
         return Distribution(np.array([xs], float), np.array(vals, dtype=dtype))
     graph = WassersteinNetwork(dist([0, 2], [1, 1]), [dist([1], [2])],
                                DistanceMetric.L1, split_distance=10,
-                               intensity_scale=100, solver=SlopeDP(mode))
+                               intensity_scale=100, solver=SlopeDP(mode, storage=storage))
     graph.add_simple_trash(3)
     graph.build()
     graph.solve([1])
@@ -86,7 +89,7 @@ def test_position_updates_refresh_potentials_and_handle_zero_reward(mode, intege
     graph.dual_cut()
     # Independent trash with no matching reward exercises the skipped DP path.
     zero = WassersteinNetwork(dist([0], [1]), [dist([0], [1])], DistanceMetric.L1,
-                              split_distance=10, solver=SlopeDP(mode))
+                              split_distance=10, solver=SlopeDP(mode, storage=storage))
     zero.add_independent_asymmetric_trash(0, 0)
     zero.build()
     zero.solve([1])
@@ -95,13 +98,14 @@ def test_position_updates_refresh_potentials_and_handle_zero_reward(mode, intege
 
 @pytest.mark.parametrize('mode', ['lazy', 'cluster'])
 @pytest.mark.parametrize('model,expected', [('simple', 4), ('independent', 9)])
-def test_disconnected_chains_and_isolated_peaks(mode, model, expected):
+@pytest.mark.parametrize("storage", ["flat", "tree"])
+def test_disconnected_chains_and_isolated_peaks(mode, model, expected, storage):
     from wnet import Distribution, WassersteinNetwork
     from wnet.distances import DistanceMetric
     empirical = Distribution(np.array([[0., 100.]]), np.ones(2))
     target = Distribution(np.array([[1., 200.]]), np.ones(2))
     graph = WassersteinNetwork(empirical, [target], DistanceMetric.L1,
-                               split_distance=10, solver=SlopeDP(mode))
+                               split_distance=10, solver=SlopeDP(mode, storage=storage))
     if model == 'simple':
         graph.add_simple_trash(3)
     else:

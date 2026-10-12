@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <optional>
 #include <deque>
+#include "ordered_breakpoints.hpp"
 #include <queue>
 #include <variant>
 #include <type_traits>
@@ -90,9 +91,16 @@ struct CapacityScalingConfig {
 // subgraphs (no MatchingEdges); bit-exact against NetworkSimplex.  Measured
 // ~300x faster than a cold NS solve on dense profile chains (pinene 70k:
 // 21 ms vs 6.2 s merged / ~26 s on the full wnet graph).
+inline std::string validate_dp_storage(const std::string& storage) {
+    if (storage != "flat" && storage != "tree")
+        throw std::invalid_argument("DP storage must be flat or tree");
+    return storage;
+}
 struct SlopeDPConfig {
     std::string dual_mode = "lazy";
-    SlopeDPConfig(const std::string& mode = "lazy") : dual_mode(mode) {
+    std::string storage = "flat";
+    SlopeDPConfig(const std::string& mode = "lazy", const std::string& store = "flat")
+        : dual_mode(mode), storage(validate_dp_storage(store)) {
         if (mode != "lazy" && mode != "cluster")
             throw std::invalid_argument("SlopeDP dual_mode must be lazy or cluster");
     }
@@ -102,7 +110,10 @@ struct SlopeDPConfig {
 // over the sorted 1-D positions (see convex_sweep.hpp and
 // docs/wp_chain_design.md).  Valid only for chain-factory subgraphs; prices
 // trash analytically like SlopeDP (affine trash_of, constant marginal tau).
-struct ConvexSweepConfig {};
+struct ConvexSweepConfig {
+    std::string storage = "flat";
+    ConvexSweepConfig(const std::string& store = "flat") : storage(validate_dp_storage(store)) {}
+};
 
 using SolverConfig = std::variant<
     NetworkSimplexConfig, CostScalingConfig,
@@ -120,7 +131,7 @@ namespace slopedp_detail {
 // See wide_int.hpp for the native/software split.
 using wide_t = wide_int::wide_t;
 
-template <typename V>
+template <typename V, class Storage = breakpoint_storage::FlatSlopeStorage>
 struct ConvexPL {
     using W = wide_t;
     static constexpr V NEG_BIG = std::numeric_limits<V>::min() / 4;
@@ -131,8 +142,8 @@ struct ConvexPL {
     // point wanders a few dozen entries deep); both structures stay small
     // (~1e3-1e4 entries on 2e5-node chains).
     struct BP { V key, mass; };
-    std::vector<BP> L;      // ascending keys; back = max
-    std::deque<BP> R;       // ascending keys
+    typename Storage::template Left<BP> L;      // ascending keys; back = max
+    typename Storage::template Right<BP> R;       // ascending keys
     V offL = 0, offR = 0;
     V rTotal = 0;
     W minval = 0;
@@ -143,18 +154,12 @@ struct ConvexPL {
     void insL(V pos, V m) {
         if (!m) return;
         V k = pos - offL;
-        size_t i = L.size();
-        while (i > 0 && L[i - 1].key > k) --i;
-        if (i > 0 && L[i - 1].key == k) L[i - 1].mass += m;
-        else L.insert(L.begin() + i, {k, m});
+        L.add_mass(k, m);
     }
     void insR(V pos, V m) {
         if (!m) return;
         V k = pos - offR;
-        size_t i = std::lower_bound(R.begin(), R.end(), k,
-                       [](const BP& e, V kk) { return e.key < kk; }) - R.begin();
-        if (i < R.size() && R[i].key == k) R[i].mass += m;
-        else R.insert(R.begin() + i, {k, m});
+        R.add_mass(k, m);
         rTotal += m;
     }
 
@@ -1228,6 +1233,13 @@ public:
     }
 
     void _slope_dp_solve(VALUE_TYPE F) const {
+        if (std::get<SlopeDPConfig>(_config).storage == "tree")
+            _slope_dp_solve_impl<breakpoint_storage::MapStorage>(F);
+        else _slope_dp_solve_impl<breakpoint_storage::FlatSlopeStorage>(F);
+    }
+
+    template<class Storage>
+    void _slope_dp_solve_impl(VALUE_TYPE F) const {
         using W = slopedp_detail::wide_t;
         if (!_sdp_cache_built) _sdp_build_cache();
         const size_t P = _sdp_emp_cap.size();
@@ -1307,7 +1319,7 @@ public:
             for (size_t c = 0; c < C; ++c)
                 for (size_t p = cs[c]; p < cs[c + 1]; ++p) { ce[c] += e[p]; ct[c] += t[p]; }
 
-            slopedp_detail::ConvexPL<VALUE_TYPE> DP;
+            slopedp_detail::ConvexPL<VALUE_TYPE, Storage> DP;
             const VALUE_TYPE WALLM = std::numeric_limits<VALUE_TYPE>::max() / 1024;
             DP.insL(0, WALLM);
             DP.insR(0, WALLM);
@@ -1500,6 +1512,13 @@ public:
 
     template<bool WithDuals = false>
     void _sweep_solve(VALUE_TYPE F) const {
+        if (std::get<ConvexSweepConfig>(_config).storage == "tree")
+            _sweep_solve_impl<WithDuals, convex_sweep::TreePLF>(F);
+        else _sweep_solve_impl<WithDuals, convex_sweep::PLF>(F);
+    }
+
+    template<bool WithDuals, class Profile>
+    void _sweep_solve_impl(VALUE_TYPE F) const {
         using W = slopedp_detail::wide_t;
         if (!_sdp_cache_built) _sdp_build_cache();
         if (!_sweep_pos_built) _sweep_build_pos();
@@ -1537,14 +1556,14 @@ public:
                 if (t[p] > 0) ev.push_back({_sweep_real_pos[p], 1, t[p], p});
             }
             if constexpr (WithDuals) {
-                auto result = convex_sweep::sweep_solve<true>(ev, profit_fn, radius);
+                auto result = convex_sweep::sweep_solve<true, Profile>(ev, profit_fn, radius);
                 profit = result.profit;
                 matching = std::move(result.matches);
                 _sweep_trace_records = result.records;
                 _sweep_trace_vertices = result.vertices;
                 _sweep_matched_pairs = matching.size();
             } else {
-                profit = convex_sweep::sweep_solve<false>(ev, profit_fn, radius);
+                profit = convex_sweep::sweep_solve<false, Profile>(ev, profit_fn, radius);
             }
         }
         if constexpr (WithDuals) {
@@ -1588,6 +1607,13 @@ public:
     // boundaries this is the discrete +1-unit right difference, matching
     // the residual-marginal convention of the other backends.
     std::vector<VALUE_TYPE> _sweep_position_marginals() const {
+        if (std::get<ConvexSweepConfig>(_config).storage == "tree")
+            return _sweep_position_marginals_impl<convex_sweep::TreePLF>();
+        return _sweep_position_marginals_impl<convex_sweep::PLF>();
+    }
+
+    template<class Profile>
+    std::vector<VALUE_TYPE> _sweep_position_marginals_impl() const {
         using W = slopedp_detail::wide_t;
         if (!_solver_has_value())
             throw std::runtime_error("Must call solve() before derivatives.");
@@ -1669,7 +1695,7 @@ public:
                 for (size_t p = P; p-- > 0;) emit(p);
             else
                 for (size_t p = 0; p < P; ++p) emit(p);
-            std::vector<convex_sweep::Snapshot> snaps;
+            std::vector<convex_sweep::BasicSnapshot<Profile>> snaps;
             const convex_sweep::i64 opt =
                 convex_sweep::forward_store(ev, profit_fn, radius, snaps);
             std::vector<convex_sweep::i64> composed;

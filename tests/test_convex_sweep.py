@@ -28,7 +28,7 @@ def d1(pos, intens):
     return Distribution_1D(np.array(pos, dtype=float), np.array(intens, dtype=float))
 
 
-def build(emp, theos, kind, independent, p, cap, intensity_scale=64.0):
+def build(emp, theos, kind, independent, p, cap, intensity_scale=64.0, storage="flat"):
     kw = dict(round_max_distance=False, intensity_scale=intensity_scale, p=p)
     if kind == "sweep":
         W = WassersteinNetwork(
@@ -36,12 +36,17 @@ def build(emp, theos, kind, independent, p, cap, intensity_scale=64.0):
             theos,
             DistanceMetric.LINF,
             split_distance=cap,
-            solver=ConvexSweep(),
+            solver=ConvexSweep(storage=storage),
             **kw,
         )
     elif kind == "slope":
         W = WassersteinNetwork(
-            emp, theos, DistanceMetric.LINF, split_distance=cap, solver=SlopeDP(), **kw
+            emp,
+            theos,
+            DistanceMetric.LINF,
+            split_distance=cap,
+            solver=SlopeDP(storage=storage),
+            **kw,
         )
     else:
         W = WassersteinNetwork(
@@ -161,7 +166,8 @@ def test_p1_matches_slopedp_bitexact(independent):
         np.testing.assert_array_equal(gc, gs, err_msg=f"trial {trial}")
 
 
-def test_gradient_matches_finite_difference():
+@pytest.mark.parametrize("storage", ["flat", "tree"])
+def test_gradient_matches_finite_difference(storage):
     emp = d1([100.0, 100.4, 107.0], [2.0, 2.0, 1.0])
     theos = [d1([100.0], [3.0]), d1([104.0], [1.0])]
     W = WassersteinNetwork(
@@ -169,7 +175,7 @@ def test_gradient_matches_finite_difference():
         theos,
         DistanceMetric.LINF,
         split_distance=8.0,
-        solver=ConvexSweep(),
+        solver=ConvexSweep(storage=storage),
         p=2.0,
         round_max_distance=False,
         intensity_scale=1e6,
@@ -197,14 +203,15 @@ def test_gradient_matches_finite_difference():
         ), f"component {k}: fd={fd} vs grad={grads[k]}"
 
 
-def test_non_sweep_solver_on_p2_chain_rejected():
+@pytest.mark.parametrize("storage", ["flat", "tree"])
+def test_non_sweep_solver_on_p2_chain_rejected(storage):
     emp, theos = d1([0.0], [1.0]), [d1([1.0], [1.0])]
     W = WassersteinNetwork(
         emp,
         theos,
         DistanceMetric.LINF,
         split_distance=5.0,
-        solver=SlopeDP(),
+        solver=SlopeDP(storage=storage),
         p=2.0,
         round_max_distance=False,
     )

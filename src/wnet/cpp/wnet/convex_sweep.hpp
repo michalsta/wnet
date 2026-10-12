@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "wide_int.hpp"
+#include "ordered_breakpoints.hpp"
 
 namespace convex_sweep {
 
@@ -48,9 +49,11 @@ constexpr i64 NEG_INF = std::numeric_limits<i64>::min() / 4;
 // ---------------------------------------------------------------------- //
 // Piecewise-linear function on integer domain [0, K].
 // ---------------------------------------------------------------------- //
-struct PLF {
+template<class Storage = breakpoint_storage::FlatProfileStorage>
+struct BasicPLF {
+    using PLF = BasicPLF;
     struct V { i64 k; i64 v; };
-    std::vector<V> vs;  // k strictly increasing; front().k == 0
+    typename Storage::template Vertices<V> vs;  // k strictly increasing; front().k == 0
 
     static PLF constant(i64 K, i64 value) {
         PLF f;
@@ -64,13 +67,9 @@ struct PLF {
     i64 eval(i64 k) const {
         if (k <= vs.front().k) return vs.front().v;
         if (k >= vs.back().k) return vs.back().v;
-        size_t lo = 0, hi = vs.size() - 1;
-        while (hi - lo > 1) {
-            size_t mid = (lo + hi) / 2;
-            if (vs[mid].k <= k) lo = mid; else hi = mid;
-        }
-        const V& a = vs[lo];
-        const V& b = vs[hi];
+        const auto right = vs.lower_bound(k);
+        const V& b = *right;
+        const V& a = *std::prev(right);
         return a.v + mul_div_trunc(b.v - a.v, k - a.k, b.k - a.k);
     }
 
@@ -99,10 +98,10 @@ struct PLF {
     void suffix_max() {
         std::vector<V> out;
         i64 run = NEG_INF;  // suffix max over processed (right) part
-        for (size_t i = vs.size(); i-- > 0;) {
-            const V b = vs[i];
-            if (i + 1 < vs.size()) {
-                const V a = vs[i + 1];  // right neighbour
+        for (auto it = vs.rbegin(); it != vs.rend(); ++it) {
+            const V b = *it;
+            if (it != vs.rbegin()) {
+                const V a = *std::prev(it);  // right neighbour
                 if (b.v > run && a.v < run) {
                     // decreasing-to-the-right segment crosses the plateau:
                     // find last integer with line(k) > run, insert pair.
@@ -201,37 +200,41 @@ struct PLF {
     }
 };
 
+using PLF = BasicPLF<>;
+using TreePLF = BasicPLF<breakpoint_storage::MapStorage>;
+
 // Monotone O(1)-amortized evaluator: valid only for non-decreasing query ks.
+template<class F>
 struct Walker {
-    const PLF& f;
-    size_t seg = 0;
-    explicit Walker(const PLF& f) : f(f) {}
+    const F& f;
+    decltype(std::declval<const F&>().vs.begin()) seg;
+    explicit Walker(const F& f) : f(f), seg(f.vs.begin()) {}
     i64 eval(i64 k) {
         const auto& vs = f.vs;
         if (k <= vs.front().k) return vs.front().v;
         if (k >= vs.back().k) return vs.back().v;
-        while (vs[seg + 1].k <= k) ++seg;
-        const PLF::V& a = vs[seg];
-        const PLF::V& b = vs[seg + 1];
+        while (std::next(seg)->k <= k) ++seg;
+        const typename F::V& a = *seg;
+        const typename F::V& b = *std::next(seg);
         if (k == a.k) return a.v;
         return a.v + mul_div_trunc(b.v - a.v, k - a.k, b.k - a.k);
     }
 };
 
-template <bool SUB>
-inline PLF addsub_pl(const PLF& a, const PLF& b) {
-    PLF out;
+template <bool SUB, class F>
+inline F addsub_pl(const F& a, const F& b) {
+    F out;
     out.vs.reserve(a.vs.size() + b.vs.size());
     Walker wa(a), wb(b);
-    size_t ia = 0, ib = 0;
+    auto ia = a.vs.begin(), ib = b.vs.begin();
     i64 prev = std::numeric_limits<i64>::min();
-    while (ia < a.vs.size() || ib < b.vs.size()) {
+    while (ia != a.vs.end() || ib != b.vs.end()) {
         i64 k;
-        if (ib >= b.vs.size()) k = a.vs[ia++].k;
-        else if (ia >= a.vs.size()) k = b.vs[ib++].k;
-        else if (a.vs[ia].k < b.vs[ib].k) k = a.vs[ia++].k;
-        else if (b.vs[ib].k < a.vs[ia].k) k = b.vs[ib++].k;
-        else { k = a.vs[ia].k; ++ia; ++ib; }
+        if (ib == b.vs.end()) k = (ia++)->k;
+        else if (ia == a.vs.end()) k = (ib++)->k;
+        else if (ia->k < ib->k) k = (ia++)->k;
+        else if (ib->k < ia->k) k = (ib++)->k;
+        else { k = ia->k; ++ia; ++ib; }
         if (k == prev) continue;
         prev = k;
         i64 va = wa.eval(k), vb = wb.eval(k);
@@ -241,14 +244,17 @@ inline PLF addsub_pl(const PLF& a, const PLF& b) {
     return out;
 }
 
-inline PLF add_pl(const PLF& a, const PLF& b) { return addsub_pl<false>(a, b); }
-inline PLF sub_pl(const PLF& a, const PLF& b) { return addsub_pl<true>(a, b); }
+template<class F>
+inline F add_pl(const F& a, const F& b) { return addsub_pl<false>(a, b); }
+template<class F>
+inline F sub_pl(const F& a, const F& b) { return addsub_pl<true>(a, b); }
 
 // result(g) = max_{g <= k <= min(K, g+q)} f(k), domain [0, K].
 // Monotone-deque sliding max over candidate breakpoints (vertices and
 // their -q images), with adjacent-integer inserts where the window-edge
 // lines cross between candidates.  O(n log n).
-inline PLF windowed_max(const PLF& f, i64 q) {
+template<class F>
+inline F windowed_max(const F& f, i64 q) {
     const i64 K = f.K();
     std::vector<i64> ks;
     ks.reserve(2 * f.vs.size() + 2);
@@ -264,30 +270,30 @@ inline PLF windowed_max(const PLF& f, i64 q) {
 
     // Sliding max of interior vertex values over windows (g, g+q):
     // process candidates in ascending g with a monotone deque of vertex
-    // indices whose k lies in the open window.  Edge evaluations use
+    // iterators whose k lies in the open window.  Edge evaluations use
     // monotone walkers (g and g+q are both ascending).
-    std::deque<size_t> dq;      // vertex indices, values decreasing
-    size_t next_v = 0;          // next vertex to admit
+    std::deque<decltype(f.vs.begin())> dq;  // vertex iterators, values decreasing
+    auto next_v = f.vs.begin();          // next vertex to admit
     Walker w_lo(f), w_hi(f);
     auto win_val = [&](i64 g) -> i64 {
         i64 hi = std::min(K, g + q);
-        while (next_v < f.vs.size() && f.vs[next_v].k < hi) {
+        while (next_v != f.vs.end() && next_v->k < hi) {
             // admit only vertices strictly inside (g, hi); ones at <= g are
             // evicted below
-            while (!dq.empty() && f.vs[dq.back()].v <= f.vs[next_v].v)
+            while (!dq.empty() && dq.back()->v <= next_v->v)
                 dq.pop_back();
             dq.push_back(next_v);
             ++next_v;
         }
-        while (!dq.empty() && f.vs[dq.front()].k <= g) dq.pop_front();
+        while (!dq.empty() && dq.front()->k <= g) dq.pop_front();
         i64 m = std::max(w_lo.eval(g), w_hi.eval(hi));
-        if (!dq.empty()) m = std::max(m, f.vs[dq.front()].v);
+        if (!dq.empty()) m = std::max(m, dq.front()->v);
         return m;
     };
 
-    PLF out;
+    F out;
     out.vs.reserve(ks.size() * 2);
-    std::vector<PLF::V> extra;
+    std::vector<typename F::V> extra;
     Walker w_c1(f), w_c2(f), w_c3(f), w_c4(f);
     i64 prev_g = -1, prev_val = 0;
     for (i64 g : ks) {
@@ -327,8 +333,7 @@ inline PLF windowed_max(const PLF& f, i64 q) {
     }
     (void)prev_val;
     for (const auto& x : extra) out.vs.push_back(x);
-    std::sort(out.vs.begin(), out.vs.end(),
-              [](const PLF::V& a, const PLF::V& b) { return a.k < b.k; });
+    out.vs.sort();
     out.normalize();
     return out;
 }
@@ -351,13 +356,13 @@ struct TraceResult {
     size_t records = 0, vertices = 0;
 };
 
-struct TraceRecord {
-    PLF before[2], profits;
+template<class F> struct BasicTraceRecord {
+    F before[2], profits;
     i64 own_limit = 0, end[2] = {0, 0};
 };
-struct TraceStorage {
+template<class F> struct BasicTraceStorage {
     struct Block { size_t index; i64 end; };
-    std::vector<TraceRecord> records;
+    std::vector<BasicTraceRecord<F>> records;
     std::vector<Block> blocks[2];
     i64 end[2] = {0, 0};
 };
@@ -365,7 +370,8 @@ struct NoTraceStorage {};
 
 // Maximum of an exact PL function on an integer interval; endpoints and
 // stored vertices suffice. Select one consistent predecessor at ties.
-inline std::pair<i64, i64> argmax(const PLF& f, i64 lo, i64 hi) {
+template<class F>
+inline std::pair<i64, i64> argmax(const F& f, i64 lo, i64 hi) {
     if (lo > hi) return {0, NEG_INF};
     std::pair<i64, i64> best{lo, f.eval(lo)};
     auto consider = [&](i64 k, i64 value) {
@@ -377,17 +383,17 @@ inline std::pair<i64, i64> argmax(const PLF& f, i64 lo, i64 hi) {
     return best;
 }
 
-struct SideState {
+template<class F> struct BasicSideState {
     std::deque<std::pair<double, i64>> blocks;  // oldest first (pos, count)
-    PLF V = PLF::constant(0, 0);
+    F V = F::constant(0, 0);
 };
 
 // T(k): newest-rank prefix profit sums of st's pendings against z, as a
 // PL function of k (vertices at cumulative block counts; slopes = per-unit
 // profits, integer).  ProfitFn: (pending_pos, z) -> i64.
-template <typename ProfitFn>
-PLF rank_prefix_profits(const SideState& st, double z, ProfitFn profit) {
-    PLF T;
+template <class F, typename ProfitFn>
+F rank_prefix_profits(const BasicSideState<F>& st, double z, ProfitFn profit) {
+    F T;
     T.vs.push_back({0, 0});
     i64 k = 0, acc = 0;
     for (size_t i = st.blocks.size(); i-- > 0;) {
@@ -401,15 +407,15 @@ PLF rank_prefix_profits(const SideState& st, double z, ProfitFn profit) {
     return T;
 }
 
-template <bool Traceback = false, typename ProfitFn>
-void sweep_step(SideState& own, SideState& opp, double z, i64 q,
-                ProfitFn profit, double radius, TraceRecord* trace = nullptr,
+template <bool Traceback = false, class F, typename ProfitFn>
+void sweep_step(BasicSideState<F>& own, BasicSideState<F>& opp, double z, i64 q,
+                ProfitFn profit, double radius, BasicTraceRecord<F>* trace = nullptr,
                 int own_side = 0) {
     if constexpr (Traceback) {
         trace->before[own_side] = own.V;
         trace->before[1 - own_side] = opp.V;
     }
-    auto prune = [&](SideState& st) {
+    auto prune = [&](BasicSideState<F>& st) {
         i64 drop = 0;
         while (!st.blocks.empty() && (z - st.blocks.front().first) > radius) {
             drop += st.blocks.front().second;
@@ -425,24 +431,24 @@ void sweep_step(SideState& own, SideState& opp, double z, i64 q,
 
     // Opposite side: windowed matching.
     opp.V.suffix_max();
-    PLF T = rank_prefix_profits(opp, z, profit);
+    F T = rank_prefix_profits(opp, z, profit);
     if constexpr (Traceback) {
         trace->profits = T;
         trace->own_limit = own.V.K();
     }
-    PLF VT = add_pl(opp.V, T);
-    PLF newVopp = sub_pl(windowed_max(VT, q), T);
+    F VT = add_pl(opp.V, T);
+    F newVopp = sub_pl(windowed_max(VT, q), T);
 
     // Flip: match exactly j pendings (all remaining), keep m = q - j fresh
     // units pending on own: flip(m) = VT(j), m = q - j, 0 <= j <= min(K,q).
     // flip is VT reflected: vertex (j, v) -> (q - j, v).
     const i64 jmax = std::min(opp.V.K(), q);
-    PLF flip;
+    F flip;
     {
         // flip(m) = VT(q - m) for m in [q - jmax, q]; unreachable below
         // (j > jmax would need more pendings than exist): NEG_INF with the
         // adjacent-integer drop so interpolation never manufactures values.
-        std::vector<PLF::V> rv;
+        std::vector<typename F::V> rv;
         for (auto it = VT.vs.rbegin(); it != VT.vs.rend(); ++it)
             if (it->k <= jmax) rv.push_back({q - it->k, it->v});
         if (rv.empty() || rv.front().k != q - jmax)
@@ -465,7 +471,7 @@ void sweep_step(SideState& own, SideState& opp, double z, i64 q,
     {
         // Extend flip to own's domain with an adjacent-integer drop to
         // NEG_INF so interpolation never manufactures values.
-        PLF fe = flip;
+        F fe = flip;
         i64 Ko = own.V.K();
         if (fe.K() < Ko) {
             if (fe.K() + 1 <= Ko) fe.vs.push_back({fe.K() + 1, NEG_INF});
@@ -483,12 +489,12 @@ void sweep_step(SideState& own, SideState& opp, double z, i64 q,
     if (opp.V.vs.front().v < best0) opp.V.vs.front().v = best0;
 }
 
-template <bool Traceback = false, typename ProfitFn>
+template <bool Traceback = false, class F = PLF, typename ProfitFn>
 auto sweep_solve(const std::vector<Event>& events, ProfitFn profit,
                 double radius) {
-    SideState sides[2];
-    // The false specialization has no vectors, snapshots, or recording work.
-    std::conditional_t<Traceback, TraceStorage, NoTraceStorage> trace;
+    BasicSideState<F> sides[2];
+    // The false specialization has no traceback vectors or recording work.
+    std::conditional_t<Traceback, BasicTraceStorage<F>, NoTraceStorage> trace;
     if constexpr (Traceback) trace.records.resize(events.size());
     for (size_t i = 0; i < events.size(); ++i) {
         const Event& e = events[i];
@@ -517,7 +523,7 @@ auto sweep_solve(const std::vector<Event>& events, ProfitFn profit,
         auto emit = [&](const Event& event, size_t current, int opposite, i64 from, i64 to) {
             const auto& blocks = trace.blocks[opposite];
             auto it = std::upper_bound(blocks.begin(), blocks.end(), from,
-                [](i64 rank, const TraceStorage::Block& block) { return rank < block.end; });
+                [](i64 rank, const typename BasicTraceStorage<F>::Block& block) { return rank < block.end; });
             while (from < to) {
                 if (it == blocks.end()) throw std::runtime_error("Invalid sweep traceback rank");
                 const i64 take = std::min(to, it->end) - from;
@@ -534,10 +540,10 @@ auto sweep_solve(const std::vector<Event>& events, ProfitFn profit,
             ++result.records;
             result.vertices += r.before[0].vs.size() + r.before[1].vs.size() + r.profits.vs.size();
             const int own = e.side, opp = 1 - own;
-            PLF envelope = r.before[opp];
+            F envelope = r.before[opp];
             envelope.suffix_max();
             envelope.truncate(r.profits.K());
-            const PLF vt = add_pl(envelope, r.profits);
+            const F vt = add_pl(envelope, r.profits);
             auto stay = [&](i64 g) {
                 auto choice = argmax(vt, g, std::min(vt.K(), g + e.count));
                 choice.second -= r.profits.eval(g);
@@ -604,9 +610,10 @@ auto sweep_solve(const std::vector<Event>& events, ProfitFn profit,
 // Validated against oracle re-solves in prototypes/wp_sweep_prototype.py.
 // ---------------------------------------------------------------------- //
 
-inline PLF reflect_pl(const PLF& f) {
+template<class F>
+inline F reflect_pl(const F& f) {
     // r(k) = f(K - k)
-    PLF r;
+    F r;
     i64 K = f.K();
     r.vs.reserve(f.vs.size());
     for (auto it = f.vs.rbegin(); it != f.vs.rend(); ++it)
@@ -615,22 +622,25 @@ inline PLF reflect_pl(const PLF& f) {
     return r;
 }
 
-inline PLF prefix_max_pl(const PLF& f) {
+template<class F>
+inline F prefix_max_pl(const F& f) {
     // g(k) = max_{k' <= k} f(k')
-    PLF r = reflect_pl(f);
+    F r = reflect_pl(f);
     r.suffix_max();
     return reflect_pl(r);
 }
 
 // g(k) = max_{max(0, k-q) <= k' <= k} f(k')
-inline PLF windowed_max_left(const PLF& f, i64 q) {
+template<class F>
+inline F windowed_max_left(const F& f, i64 q) {
     return reflect_pl(windowed_max(reflect_pl(f), q));
 }
 
 // g(m) = f(min(m + q, K)), domain [0, K]
-inline PLF shift_left_clamp(const PLF& f, i64 q) {
+template<class F>
+inline F shift_left_clamp(const F& f, i64 q) {
     i64 K = f.K();
-    PLF out;
+    F out;
     for (const auto& x : f.vs) {
         i64 m = x.k - q;
         if (m < 0) continue;
@@ -644,26 +654,27 @@ inline PLF shift_left_clamp(const PLF& f, i64 q) {
     return out;
 }
 
-// Extend a PLF's domain to K_new by repeating its last value.
-inline PLF extend_flat(const PLF& f, i64 K_new) {
-    PLF out = f;
+// Extend a profile's domain to K_new by repeating its last value.
+template<class F>
+inline F extend_flat(const F& f, i64 K_new) {
+    F out = f;
     if (K_new > out.K()) out.vs.push_back({K_new, out.vs.back().v});
     out.normalize();
     return out;
 }
 
-struct Snapshot {
+template<class F> struct BasicSnapshot {
     // Post-prune, pre-transition state at each event (index i), plus final.
-    SideState sides[2];
+    BasicSideState<F> sides[2];
 };
 
-template <typename ProfitFn>
+template <class F = PLF, typename ProfitFn>
 i64 forward_store(const std::vector<Event>& events, ProfitFn profit,
-                  double radius, std::vector<Snapshot>& snaps) {
-    SideState sides[2];
+                  double radius, std::vector<BasicSnapshot<F>>& snaps) {
+    BasicSideState<F> sides[2];
     snaps.clear();
     snaps.reserve(events.size() + 1);
-    auto prune_side = [&](SideState& st, double z) {
+    auto prune_side = [&](BasicSideState<F>& st, double z) {
         i64 drop = 0;
         while (!st.blocks.empty() && (z - st.blocks.front().first) > radius) {
             drop += st.blocks.front().second;
@@ -692,42 +703,42 @@ i64 forward_store(const std::vector<Event>& events, ProfitFn profit,
 // theoretical event and records it into `composed` (same length as events,
 // NEG_INF elsewhere).  C[side] entering iteration i is the completion
 // function on snapshot(i+1) domains; the loop rewinds it to snapshot(i).
-template <typename ProfitFn>
+template <class F = PLF, typename ProfitFn>
 void adjoint_compose(const std::vector<Event>& events, ProfitFn profit,
-                     const std::vector<Snapshot>& snaps,
+                     const std::vector<BasicSnapshot<F>>& snaps,
                      std::vector<i64>& composed) {
     const size_t n = events.size();
     composed.assign(n, NEG_INF);
-    PLF C[2] = {PLF::constant(snaps[n].sides[0].V.K(), 0),
-                PLF::constant(snaps[n].sides[1].V.K(), 0)};
+    F C[2] = {F::constant(snaps[n].sides[0].V.K(), 0),
+                F::constant(snaps[n].sides[1].V.K(), 0)};
     for (size_t i = n; i-- > 0;) {
         const Event& e = events[i];
         const int own_s = e.side, opp_s = 1 - e.side;
         const i64 q = e.count;
-        const Snapshot& pre = snaps[i];
-        const Snapshot& post = snaps[i + 1];
+        const BasicSnapshot<F>& pre = snaps[i];
+        const BasicSnapshot<F>& post = snaps[i + 1];
         // Prune adjoint between post-transition of event i and snapshot(i+1):
         // snapshot(i+1) was taken after the NEXT event's prune, so extend C
         // flat to the post-transition domains.
         const i64 K_own_post = pre.sides[own_s].V.K() + q;
         const i64 K_opp_post = pre.sides[opp_s].V.K();
-        PLF C_own_after = extend_flat(C[own_s], K_own_post);
-        PLF C_opp_after = extend_flat(C[opp_s], K_opp_post);
+        F C_own_after = extend_flat(C[own_s], K_own_post);
+        F C_opp_after = extend_flat(C[opp_s], K_opp_post);
 
         // T over the OPP side's pendings before event i (post-prune).
-        PLF T = rank_prefix_profits(pre.sides[opp_s], e.pos, profit);
+        F T = rank_prefix_profits(pre.sides[opp_s], e.pos, profit);
 
         // ---- composition: one extra unit of side `1` (theoretical) at this
         // event, consumed here (matched to an opp pending or kept among the
         // fresh block's pendings up to q real slots).
         if (e.side == 1) {
             const i64 qh = q + 1;
-            PLF Vt = pre.sides[opp_s].V;
+            F Vt = pre.sides[opp_s].V;
             Vt.suffix_max();
-            PLF VT = add_pl(Vt, T);
+            F VT = add_pl(Vt, T);
             // (A') stay on opp side: max_g [win_max_{[g,g+qh]}(VT) - T + C_opp]
-            PLF X = windowed_max(VT, qh);
-            PLF comp = add_pl(sub_pl(X, T), C_opp_after);
+            F X = windowed_max(VT, qh);
+            F comp = add_pl(sub_pl(X, T), C_opp_after);
             i64 best = comp.max_value();
             // (B') flip: j matched in [1..min(qh, K)], keep m = qh - j <= q
             // (m <= q means the EXTRA unit was consumed, not left pending):
@@ -759,11 +770,11 @@ void adjoint_compose(const std::vector<Event>& events, ProfitFn profit,
         //   stay: C_pre(k) = max_{kappa <= k} [ T(kappa)
         //          + max_{g in [kappa-q, kappa]} (C_opp_after(g) - T(g)) ]
         //   flip: C_pre(k) >= max_{j <= min(q,k)} [ T(j) + C_own_after(q-j) ]
-        PLF CT = sub_pl(C_opp_after, T);
-        PLF H = add_pl(T, windowed_max_left(CT, q));
-        PLF C_opp_pre = prefix_max_pl(H);
+        F CT = sub_pl(C_opp_after, T);
+        F H = add_pl(T, windowed_max_left(CT, q));
+        F C_opp_pre = prefix_max_pl(H);
         {
-            // flip term as PLF over k: C_pre(k) >= max_{j <= min(q, k)} D(j),
+            // flip term as a PL profile over k: C_pre(k) >= max_{j <= min(q, k)} D(j),
             // D(j) = T(j) + C_own_after(q - j), reachable j in [j_lo, j_hi].
             i64 j_hi = std::min<i64>(q, T.K());
             i64 j_lo = std::max<i64>(0, q - C_own_after.K());
@@ -781,7 +792,7 @@ void adjoint_compose(const std::vector<Event>& events, ProfitFn profit,
                 ks.push_back(j_hi);
                 std::sort(ks.begin(), ks.end());
                 ks.erase(std::unique(ks.begin(), ks.end()), ks.end());
-                PLF D;
+                F D;
                 if (j_lo > 0) {
                     D.vs.push_back({0, NEG_INF});
                     if (j_lo > 1) D.vs.push_back({j_lo - 1, NEG_INF});
@@ -790,19 +801,24 @@ void adjoint_compose(const std::vector<Event>& events, ProfitFn profit,
                     D.vs.push_back({j, T.eval(j) + C_own_after.eval(q - j)});
                 D.normalize();
                 // flipk(k) = PM(min(k, j_hi)) = flat extension of prefix max
-                PLF flipk = extend_flat(prefix_max_pl(D), C_opp_pre.K());
+                F flipk = extend_flat(prefix_max_pl(D), C_opp_pre.K());
                 C_opp_pre.pointwise_max(flipk);
             }
         }
         C_opp_pre.truncate(pre.sides[opp_s].V.K());
         // Own side (the block was appended): C_pre(m) = max_{m' <= m+q} C(m')
-        PLF C_own_pre = shift_left_clamp(prefix_max_pl(C_own_after), q);
+        F C_own_pre = shift_left_clamp(prefix_max_pl(C_own_after), q);
         C_own_pre.truncate(pre.sides[own_s].V.K());
 
         C[own_s] = std::move(C_own_pre);
         C[opp_s] = std::move(C_opp_pre);
     }
 }
+
+using SideState = BasicSideState<PLF>;
+using Snapshot = BasicSnapshot<PLF>;
+using TraceRecord = BasicTraceRecord<PLF>;
+using TraceStorage = BasicTraceStorage<PLF>;
 
 }  // namespace convex_sweep
 
