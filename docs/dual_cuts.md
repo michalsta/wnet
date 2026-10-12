@@ -2,8 +2,9 @@
 
 `WassersteinNetwork.dual_cut()` constructs an affine lower bound for the
 continuous-supply objective using the existing integer transport solve.
-NetworkSimplex (LEMON and LinkCut) and 1D SlopeDP are supported. It does not run an LP transport
-solver or a residual shortest-path search.
+NetworkSimplex (LEMON and LinkCut), 1D SlopeDP and ConvexSweep are supported.
+NetworkSimplex and SlopeDP reuse their transport state directly. ConvexSweep
+uses the auxiliary certificate recovery described below.
 
 ```python
 network.solve(weights)
@@ -19,7 +20,7 @@ through `total_cost()`. The upper bound includes an explicit supply-rounding
 error plus a floating-point accumulation cushion. Cost-coefficient rounding is
 not silently claimed to be exact original real-coefficient optimization.
 
-Raw per-subgraph certificates are exposed through
+NetworkSimplex raw per-subgraph certificates are exposed through
 `network.get_subgraph(k).dual_values()`: potentials, reduced costs, signed
 lower-bound multipliers and signed upper-bound multipliers, as int64 arrays in
 subgraph node/arc order. Products and sums require checked/wide arithmetic;
@@ -59,6 +60,30 @@ warm solves. Other backends retain their capacity representation.
 Scratch buffers and anchor/trash arc indices are retained per component.
 Cut construction accumulates coefficients directly in C++; full dual arrays
 are only materialized when explicitly requested by Python.
+
+## ConvexSweep recovery
+
+The sweep's separate discrete marginal derivatives do not constitute a
+common matching dual. On the first cut request after a solve, ConvexSweep
+constructs an auxiliary partial-matching circulation and runs integer network
+simplex. It includes only pairs whose quantized cost is less than the matching
+reward `tau`; all other matching constraints are satisfied automatically by
+nonpositive dual coefficients. Zero-capacity theoretical positions remain in
+the auxiliary problem so cuts remain valid when zero mixture weights grow.
+
+The recovered coefficients lie in `[-tau, 0]`. Every retained pair constraint
+is checked, and the auxiliary primal, dual, and sweep objectives must agree
+in exact 128-bit arithmetic before a certificate is returned. A disagreement
+raises an error rather than returning a certificate. The usual trash bracket
+and supply-rounding bound then apply.
+
+Recovery is optional and cached for one solution epoch. A new solve, position
+update, or precision rebuild invalidates it. Cost-only solves and marginal
+queries do not construct the auxiliary graph. With `N` position blocks and
+`W` blocks in the profitable window, recovery can retain `O(NW)` arcs (up to
+quadratic for a wide window), plus the cost of a simplex solve. Thus certified
+optimization currently sacrifices the sweep's small working-memory advantage
+during recovery. Direct dual recovery from the sweep remains future work.
 
 ## Supply error and precision
 

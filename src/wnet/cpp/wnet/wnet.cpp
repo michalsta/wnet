@@ -154,6 +154,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_flow_map", &WassersteinNetworkSubgraph<int64_t, int64_t>::get_flow_map)
         .def("is_solved", &WassersteinNetworkSubgraph<int64_t, int64_t>::is_solved)
         .def("slope_dp_dual_stats", &WassersteinNetworkSubgraph<int64_t, int64_t>::slope_dp_dual_stats)
+        .def("convex_sweep_dual_stats", &WassersteinNetworkSubgraph<int64_t, int64_t>::convex_sweep_dual_stats)
         .def("dual_values", [](const WassersteinNetworkSubgraph<int64_t, int64_t>& self) {
             auto [pi, rc, lo, up] = self.dual_values(); nb::dict out;
             out["potentials"] = vector_to_numpy<int64_t>(pi);
@@ -198,6 +199,7 @@ NB_MODULE(wnet_cpp, m) {
         .def("get_flow_map", &WassersteinNetworkSubgraph<int64_t, double>::get_flow_map)
         .def("is_solved", &WassersteinNetworkSubgraph<int64_t, double>::is_solved)
         .def("slope_dp_dual_stats", &WassersteinNetworkSubgraph<int64_t, double>::slope_dp_dual_stats)
+        .def("convex_sweep_dual_stats", &WassersteinNetworkSubgraph<int64_t, double>::convex_sweep_dual_stats)
         .def("dual_values", [](const WassersteinNetworkSubgraph<int64_t, double>& self) {
             auto [pi, rc, lo, up] = self.dual_values(); nb::dict out;
             out["potentials"] = vector_to_numpy<int64_t>(pi);

@@ -29,6 +29,7 @@
 #include <lemon/cost_scaling.h>
 #include <lemon/capacity_scaling.h>
 #include <pylmcf/network_simplex_lct_adapter.h>
+#include "convex_sweep_dual.hpp"
 
 // Pivot rule for NetworkSimplex. Values match lemon::NetworkSimplex::PivotRule.
 enum class NSPivotRule {
@@ -473,6 +474,10 @@ class WassersteinNetworkSubgraph {
     mutable uint64_t _sdp_dual_version = std::numeric_limits<uint64_t>::max();
     mutable VALUE_TYPE _sdp_dual_tau = -1;
     mutable uint64_t _sdp_dual_recoveries = 0;
+    mutable std::vector<VALUE_TYPE> _sweep_dual_alpha, _sweep_dual_beta;
+    mutable uint64_t _sweep_dual_version = std::numeric_limits<uint64_t>::max();
+    mutable VALUE_TYPE _sweep_dual_tau = -1;
+    mutable uint64_t _sweep_dual_recoveries = 0;
     mutable bool _sdp_cache_built = false;
     mutable std::vector<LEMON_INDEX> _sdp_src_arc, _sdp_sink_arc, _sdp_et_arc, _sdp_tt_arc;
     mutable std::vector<VALUE_TYPE> _sdp_emp_cap;      // per chain pos (0 for theo)
@@ -2642,6 +2647,49 @@ public:
         }
     }
 
+    std::tuple<uint64_t, size_t> convex_sweep_dual_stats() const {
+        return {_sweep_dual_recoveries, _sweep_dual_alpha.size()};
+    }
+
+    void accumulate_convex_sweep_dual_cut(VALUE_TYPE tau, long double& intercept,
+                                         std::vector<long double>& gradient) const {
+        if (!_solver_has_value())
+            throw std::runtime_error("Dual cuts require a solved ConvexSweep backend");
+        const size_t P = _sdp_emp_cap.size();
+        if (_sweep_dual_version != _solution_version || _sweep_dual_tau != tau) {
+            using W = slopedp_detail::wide_t;
+            std::vector<VALUE_TYPE> t(P, 0);
+            VALUE_TYPE E = 0, T = 0;
+            for (size_t p = 0; p < P; ++p) {
+                E += _sdp_emp_cap[p];
+                if (_sdp_sink_arc[p] >= 0)
+                    t[p] = capacities_map[lemon_graph.arcFromId(_sdp_sink_arc[p])];
+                T += t[p];
+            }
+            const W profit = independent_trash ? -W(_slope_total)
+                : _sweep_trash_cost(E, T, _sweep_last_F, 0) - W(_slope_total);
+            const double scale = _p_is_one ? 1.0 : double(_scale);
+            const double radius = std::pow((double(tau) + 1.0) / scale, 1.0 / _p_order);
+            auto cost = [this](double a, double b) {
+                return quantize_cost<VALUE_TYPE>(std::pow(std::abs(a - b), _p_order), _scale, _p_is_one);
+            };
+            auto [alpha, beta] = convex_sweep_dual::recover<VALUE_TYPE>(
+                _sweep_real_pos, _sdp_emp_cap, t, tau, radius, cost, profit);
+            _sweep_dual_alpha = std::move(alpha);
+            _sweep_dual_beta = std::move(beta);
+            _sweep_dual_version = _solution_version;
+            _sweep_dual_tau = tau;
+            ++_sweep_dual_recoveries;
+        }
+        for (const auto& node : nodes) {
+            const auto v = node.get_id();
+            if (const auto* emp = std::get_if<EmpiricalNode<intensity_type>>(&node.get_type()))
+                intercept += (long double)_sweep_dual_alpha[_sdp_node_pos[v]] * emp->get_intensity();
+            else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type()))
+                gradient[theo->get_spectrum_id()] += (long double)_sweep_dual_beta[_sdp_node_pos[v]] * theo->get_intensity();
+        }
+    }
+
     // The matching problem has costs d-tau, nonnegative flows, and upper
     // bounds E_i/T_j. Its dual is alpha_i,beta_j <= 0 with
     // alpha_i + beta_j <= d_ij-tau. Build one common feasible dual from the
@@ -2650,8 +2698,9 @@ public:
     void accumulate_dual_cut(VALUE_TYPE tau, VALUE_TYPE shift,
                              long double& intercept, std::vector<long double>& gradient) const {
         if (_use_slopedp()) { accumulate_slope_dp_dual_cut(tau, intercept, gradient); return; }
+        if (_use_sweep()) { accumulate_convex_sweep_dual_cut(tau, intercept, gradient); return; }
         if (!std::holds_alternative<NetworkSimplexConfig>(_config) || !_dual_valid)
-            throw std::runtime_error("Dual cuts require a solved NetworkSimplex or SlopeDP backend");
+            throw std::runtime_error("Dual cuts require a solved NetworkSimplex, SlopeDP or ConvexSweep backend");
         const auto src_pi = _solver_potential(lemon_graph.nodeFromId(0));
         auto& pi = _dual_pi; auto& anchor_cap = _dual_caps;
         auto& matched = _dual_matched; auto& alpha = _dual_alpha; auto& beta = _dual_beta;
@@ -3859,7 +3908,7 @@ public:
     }
 
     // Supporting cut for continuous supplies with the network's fixed,
-    // quantized costs. Transport solves remain integer NetworkSimplex or SlopeDP.
+    // quantized costs. Transport solves retain the selected integer backend.
     // Returns intercept, slopes, continuous upper bound, rounding bound and rounded cost.
     auto dual_cut() const {
         require_valid_position_update(_position_update_invalid);

@@ -529,8 +529,10 @@ class WassersteinNetwork:
         Costs are the fixed quantized costs of this network. ``intercept`` and
         ``gradient`` define a global affine lower bound; ``upper_bound``
         includes the supply-rounding uncertainty at the last evaluated point.
-        Requires NetworkSimplex (including LinkCut) or SlopeDP. SlopeDP recovers
-        and validates matching potentials lazily, caching them until the next solve.
+        Requires NetworkSimplex (including LinkCut), SlopeDP or ConvexSweep.
+        SlopeDP recovers matching potentials from its chain flow. ConvexSweep
+        recovers a dual with an auxiliary simplex solve over profitable pairs.
+        Recovery is lazy, validated and cached until the next solve.
         """
         return self.wnet.dual_cut()
 
