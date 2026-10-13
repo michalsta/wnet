@@ -4,8 +4,8 @@ Independently applying `round(S * abs(x-y)**p)` can destroy the Monge
 inequality, even though the real power cost is convex. ConvexSweep assumes
 Monge order. Production therefore quantizes the geometry and convex cost
 function before solving; it does not detect or repair non-Monge matchings.
-The withdrawn cycle-correction code survives only in the historical benchmark
-prototypes, which reproduce the old rounded-pair experiments.
+The non-Monge cycle-correction and alternative-solver experiment prototypes
+have been removed. Validation targets the structurally Monge cost model.
 
 For each chain component, reconstruct its nonnegative coordinates from the
 chain origin, then round each coordinate once onto a common grid:
