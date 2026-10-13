@@ -11,9 +11,6 @@ These are alternatives to the flat and map kernels. They share the graph,
 integer cost model, flow reconstruction and certificate recovery with those
 kernels. SlopeDP's lazy and cluster dual modes both work. ConvexSweep retains
 its separate compile-time cost-only and traced paths and eager dual recovery.
-When integer rounding breaks Monge order, all three stores share the native
-matching correction described in [dual cuts](dual_cuts.md#convexsweep-recovery);
-ordinary solves then also need traceback and correction for an exact cost.
 The flat policy remains the default: lower asymptotic costs for individual
 operations do not guarantee faster solves, and these trees allocate larger
 nodes and perform reference counting.

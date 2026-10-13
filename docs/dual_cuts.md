@@ -65,13 +65,12 @@ are only materialized when explicitly requested by Python.
 
 Use `network.solve(weights, with_duals=True)` with ConvexSweep to recover
 certificates eagerly. This selects a boolean-templated sweep kernel; ordinary
-solves with Monge costs use the `false` specialization, which retains no
-traceback records and does no dual recovery. `dual_cut()` requires a preceding
-solve with `with_duals=True` and
+solves use the `false` specialization, which retains no traceback records and
+does no dual recovery. `dual_cut()` requires a preceding traced solve and
 only reads the cached certificate. Position updates preserve the last solve's
 choice; precision rebuilds invalidate the solution.
 
-The traced sweep saves predecessor profiles and backtracks a monotone matching.
+The traced sweep saves predecessor profiles and backtracks an optimal matching.
 Complementary slackness then gives tight constraints on matched pairs. Integer
 potential propagation enforces these equalities and the remaining matching
 inequalities, scanning profitable position windows on demand. There is no
@@ -86,28 +85,12 @@ agreement is checked with wide integer arithmetic before caching the result.
 A disagreement raises an error. The usual trash bracket and supply-rounding
 bound then apply.
 
-Rounding convex pair costs to integers can violate the Monge inequalities that
-make the monotone matching optimal. ConvexSweep checks those inequalities once
-per geometry/cost model, including possible targets with zero current supply.
-If they fail, both ordinary and certificate solves trace the sweep and correct
-its matching using negative cycles in an implicit residual network. Exchanges
-move weighted chunks and strictly improve the integer objective; the same full
-primal/dual checks validate the corrected result. This uses native integer
-arithmetic, without an auxiliary simplex solve or a stored graph of all pairs.
-Corrected one-unit derivatives use shortest residual paths with reduced costs.
-Position updates and precision rebuilds invalidate the geometry check.
-
-This correctness path can be substantially slower than an uncorrected sweep.
-It stores `O(N + M)` residual state but can scan profitable windows repeatedly;
-there is no linear-time bound for correction. The corrected matching and its
-potentials remain cached to support derivatives even after ordinary solves.
-
 Traceback storage is proportional to the sum of saved piecewise-linear profile
 and profit-prefix sizes across events, potentially quadratic for wide windows.
 It is released after recovery. Potential propagation retains `O(N + M)` state
 for `N` position blocks and `M` matched pairs, and can scan windows repeatedly;
 it does not guarantee linear recovery time. Only `O(N)` dual coefficients
-remain cached for cut queries on the Monge path.
+remain cached for cut queries.
 
 ## Supply error and precision
 

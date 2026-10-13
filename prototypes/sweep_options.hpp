@@ -2,6 +2,7 @@
 #define WNET_PROTOTYPE_SWEEP_OPTIONS_HPP
 // Experimental alternatives; production dispatch is deliberately unchanged.
 #include "wnet/decompositable_graph.hpp"
+#include "non_monge_repair.hpp"
 #include <chrono>
 #include <fstream>
 #include <lemon/list_graph.h>

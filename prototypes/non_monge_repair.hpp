@@ -1,6 +1,7 @@
+// Historical benchmark only; production ConvexSweep preserves Monge instead.
 #ifndef WNET_CONVEX_SWEEP_REPAIR_HPP
 #define WNET_CONVEX_SWEEP_REPAIR_HPP
-#include "convex_sweep_dual.hpp"
+#include "wnet/convex_sweep_dual.hpp"
 #include <queue>
 #include <tuple>
 #include <unordered_map>
