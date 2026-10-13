@@ -762,6 +762,8 @@ public:
         auto& source_node = nodes[0];
         auto& sink_node = nodes[1];
 
+        // TODO: this map is sized to the whole network, so building all subgraphs is
+        // O(subgraphs * nodes); a shared map or a subgraph-local lookup would make it linear.
         std::vector<LEMON_INDEX> node_id_map(all_nodes.size(), -1);
 
         for (const auto& node_id : subgraph_node_ids)
@@ -3351,8 +3353,6 @@ public:
         }
 
 
-        // TODO: optimize, right now this is needlessly O(subgraphs.size() * edges.size()),
-        // can be O(subgraphs.size() + edges.size())
         flow_subgraphs.reserve(_subgraphs.size());
         for (size_t subgraph_idx = 0; subgraph_idx < _subgraphs.size(); ++subgraph_idx)
         {

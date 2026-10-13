@@ -57,7 +57,7 @@ private:
             throw std::overflow_error("Augmented treap mass overflow");
         return a+b;
     }
-    static void own(Ptr& p) { if (p && !p.unique()) p = std::make_shared<Node>(*p); }
+    static void own(Ptr& p) { if (p && p.use_count() != 1) p = std::make_shared<Node>(*p); }
     static I transform(I k, int sign, I shift) { return sign == 1 ? k+shift : shift-k; }
     static void apply(Ptr& p, int sign, I shift, I dv = 0) {
         if (!p) return;
