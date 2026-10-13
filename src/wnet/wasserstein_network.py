@@ -1,4 +1,5 @@
 import math
+import operator
 import re
 import warnings
 from typing import Optional
@@ -84,6 +85,7 @@ class WassersteinNetwork:
         intensity_scale (float | None): None => auto (FineGridScaler, chosen at build() time so it sees the declared trash costs); an explicit value is used verbatim.
         round_max_distance (bool): Round a fractional cap up to an integer (legacy p == 1 truncation behaviour) with a warning. Applied to whichever of max_distance/split_distance was given.
         split_distance (float | None): Explicit chain-semantics split radius (see above).
+        cost_precision_bits (int | None): Optional automatic cost-scaling target, 1–52 bits. The largest relevant integer cost targets 2**bits, subject to existing safety limits and a minimum scale of 1. For quadratic ConvexSweep the reference cost is the trash escape price; other solvers/orders use the existing maximum cost bound. Opts p=1 into scaling. A positive explicit cost scale overrides this target. None retains the existing policy.
     """
 
     _SOLVER_METHODS = {
@@ -133,6 +135,7 @@ class WassersteinNetwork:
         intensity_scale: Optional[float] = None,
         round_max_distance: bool = True,
         split_distance: Optional[float] = None,
+        cost_precision_bits: Optional[int] = None,
     ) -> None:
         # Must exist before anything that could trigger __getattr__.
         self._wnet_obj = None
@@ -200,6 +203,9 @@ class WassersteinNetwork:
         self._theo_trash_cost: Optional[float] = None
         self._independent_trash_costs: Optional[tuple] = None
         self._cost_scaling_arg: Optional[int] = None
+        self._cost_precision_bits_arg: Optional[int] = None
+        if cost_precision_bits is not None:
+            self.set_cost_precision_bits(cost_precision_bits)
         self._flow_budget_arg: Optional[float] = None
 
     # ------------------------------------------------------------------ #
@@ -315,9 +321,33 @@ class WassersteinNetwork:
         """Opt-in p=1 cost scaling (lets a caller pass real distances instead
         of pre-scaling positions). scale <= 0 => auto. Must be called before
         build(). ConvexSweep quantizes coordinates on a shared grid to
-        preserve Monge order, then evaluates integer convex pair costs."""
+        preserve Monge order, then evaluates integer convex pair costs.
+        A positive explicit scale overrides cost_precision_bits."""
         self._check_not_built("set_cost_scaling")
         self._cost_scaling_arg = int(scale)
+
+    def set_cost_precision_bits(self, bits: int) -> None:
+        """Set the automatic cost-scaling target to 2**bits (1–52).
+
+        Existing overflow limits may reduce the scale; scale is at least 1.
+        Quadratic ConvexSweep uses the trash escape price as reference.
+        Other solvers/orders use the existing maximum cost bound. This opts
+        p=1 into scaling. A positive explicit set_cost_scaling() overrides
+        the target.
+        Must be called before build().
+        """
+        self._check_not_built("set_cost_precision_bits")
+        if isinstance(bits, (bool, np.bool_)):
+            raise ValueError("cost_precision_bits must be an integer between 1 and 52.")
+        try:
+            bits = operator.index(bits)
+        except TypeError:
+            raise ValueError(
+                "cost_precision_bits must be an integer between 1 and 52."
+            ) from None
+        if not 1 <= bits <= 52:
+            raise ValueError("cost_precision_bits must be an integer between 1 and 52.")
+        self._cost_precision_bits_arg = bits
 
     def set_flow_budget(self, flow: float) -> None:
         """Declared upper bound on point-scaled total flow (real intensity
@@ -471,6 +501,8 @@ class WassersteinNetwork:
         wnet.set_intensity_scale(float(intensity_scale))
         if self._cost_scaling_arg is not None:
             wnet.set_cost_scaling(self._cost_scaling_arg)
+        if self._cost_precision_bits_arg is not None:
+            wnet.set_cost_precision_bits(self._cost_precision_bits_arg)
         if self._flow_budget_arg is not None:
             wnet.set_flow_budget(self._flow_budget_arg)
         if self._simple_trash_cost is not None:

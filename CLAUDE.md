@@ -156,6 +156,8 @@ Flow inside LEMON is always integer; the two scales below are what make real-val
 
 ConvexSweep has a separate Monge-preserving policy: it rounds all chain coordinates once on a shared grid and evaluates integer convex costs (linear/squared for p=1/2; integer tangent hull otherwise). Automatic p=2 scaling budgets against trash prices rather than full run-span squares. `scale_factor()` reports the scale used. Dense pair rounding and additive-gap SlopeDP need not be bit-identical to it; see `docs/monge_quantization.md`. There is no non-Monge matching repair in production.
 
+`WassersteinNetwork(cost_precision_bits=bits)` or `set_cost_precision_bits(bits)` before build caps the automatic cost target at `2**bits` (integer 1–52). Existing overflow limits remain in force; a positive explicit cost scale overrides the target. This opts p=1 into scaling and is retained by intensity precision refinement. Omitting it preserves the existing policy.
+
 `total_cost()` is therefore in `W_p**p` units; take the p-th root for the literal `W_p` (which `WassersteinDistance()` does).
 
 **Intensity scaling.** `set_intensity_scale(s)` (before `build()`) maps real intensities to integer supplies as `round(real * s)`. `WassersteinNetwork.__init__` sets it automatically from a `FineGridScaler` unless an explicit `intensity_scale=` is passed; the scaler returns 1.0 for integer-valued data (bit-compatible with the legacy path). `intensity_scale_factor()` exposes it, and `total_cost()` divides by `scale_factor() * intensity_scale_factor()`.

@@ -25,6 +25,21 @@ M need not be an integer for grid coordinates and squared costs to be integers.
 Legacy unscaled p=1 uses a unit coordinate grid, rather than truncating
 individual distances. Other solvers keep their existing cost quantization.
 
+To control the precision/performance tradeoff without selecting a dataset's
+scale manually, pass `cost_precision_bits=24` to `WassersteinNetwork`, or call
+`network.set_cost_precision_bits(24)` before `build()`. Values 1–52 target a
+largest relevant integer cost of `2**bits`: the trash escape price for quadratic
+ConvexSweep, and the existing maximum cost bound for other solvers/orders. The selected
+scale is the floor of that target divided by the reference real cost, limited
+by the existing accumulator, coordinate and representability ceilings, with a
+minimum of 1. Thus the target need not be reached when another limit binds.
+Omitting the option keeps the existing automatic policy. The option enables
+cost scaling at p=1; a positive explicit `set_cost_scaling(scale)` takes
+precedence. Supply precision refinement retains the target and recomputes the
+safe scale. For p=2, reducing the target by two bits approximately doubles the
+coordinate grid spacing when the precision target is the active limit. Monge
+order holds at every scale; lower precision changes the approximated costs.
+
 For fractional powers and other orders, sample tangents to
 `S*(q/M)**p`, round their slopes to integers, and choose integer intercepts
 from the convex conjugate on the component's distance domain. Build their

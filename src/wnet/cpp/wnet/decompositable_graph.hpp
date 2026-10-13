@@ -284,7 +284,8 @@ struct ConvexPL {
 //
 // S is the floor of the tighter of the two ceilings (>= 1).  total_flow <= 0
 // (unknown / p==1) falls back to the per-edge bound alone.
-inline int64_t pick_cost_scale(double c_max, double total_flow, bool p_is_one) {
+inline int64_t pick_cost_scale(double c_max, double total_flow, bool p_is_one,
+                               int cost_precision_bits = 0) {
     if (p_is_one || !(c_max > 0.0)) return 1;
     constexpr double PER_EDGE_TARGET = 4503599627370496.0;   // 2^52
     constexpr double ACCUMULATOR_TARGET = 4611686018427387904.0; // 2^62
@@ -295,7 +296,12 @@ inline int64_t pick_cost_scale(double c_max, double total_flow, bool p_is_one) {
     // 2^60 is far above any scale the two budget ceilings can make useful,
     // is exactly representable in double, and keeps the cast well-defined.
     constexpr double SCALE_CEILING = 1152921504606846976.0;  // 2^60
-    double s = std::floor(PER_EDGE_TARGET / c_max);
+    // Optional precision target caps the largest relevant integer cost;
+    // accumulator and representability limits remain independent ceilings.
+    const double target = cost_precision_bits > 0
+        ? std::min(PER_EDGE_TARGET, std::ldexp(1.0, cost_precision_bits))
+        : PER_EDGE_TARGET;
+    double s = std::floor(target / c_max);
     if (total_flow > 0.0) {
         const double s_acc = std::floor(ACCUMULATOR_TARGET / (c_max * total_flow));
         if (s_acc < s) s = s_acc;
@@ -3045,6 +3051,7 @@ class WassersteinNetwork {
     // <= 0 means auto (pick_cost_scale); > 0 is used verbatim.
     bool _cost_scaling_requested = false;
     int64_t _explicit_cost_scale = 0;
+    int _cost_precision_bits = 0; // 0 retains the existing automatic policy
 
     // Single source of truth for the quantize_cost "p_is_one" (truncate) flag.
     // Costs are scaled+rounded whenever p != 1 OR the caller opted into cost
@@ -3158,6 +3165,22 @@ public:
         }
     }
 
+    // Aim for a maximum relevant integer cost of 2^bits in automatic mode.
+    // This is a precision target, not a relaxation of arithmetic safety.
+    // An explicit positive cost scale takes precedence. Opts p=1 into scaling.
+    void set_cost_precision_bits(int bits) {
+        if (built)
+            throw std::runtime_error("set_cost_precision_bits() must be called before build().");
+        if (bits < 1 || bits > 52)
+            throw std::invalid_argument("cost_precision_bits must be between 1 and 52.");
+        if constexpr (std::is_integral_v<intensity_type>) {
+            throw std::invalid_argument("Integer intensity backend does not support cost scaling.");
+        } else {
+            _cost_precision_bits = bits;
+            _cost_scaling_requested = true;
+        }
+    }
+
     // Declare an upper bound on the point-scaled total flow this network will
     // be solved with: empirical total plus sum_i(point[i] * theoretical_i
     // total), in real (pre-intensity-scale) units.  build() sizes the auto
@@ -3201,6 +3224,7 @@ public:
         _max_real_cost(other._max_real_cost),
         _cost_scaling_requested(other._cost_scaling_requested),
         _explicit_cost_scale(other._explicit_cost_scale),
+        _cost_precision_bits(other._cost_precision_bits),
         _intensity_scale(other._intensity_scale),
         _flow_budget(other._flow_budget),
         _emp_flow_total(other._emp_flow_total),
@@ -3465,7 +3489,8 @@ public:
         if (_cost_scaling_requested && _explicit_cost_scale > 0)
             _scale = _explicit_cost_scale;
         else
-            _scale = pick_cost_scale(_max_real_cost, total_flow * _intensity_scale, _truncate);
+            _scale = pick_cost_scale(_max_real_cost, total_flow * _intensity_scale,
+                                     _truncate, _cost_precision_bits);
         if (std::holds_alternative<ConvexSweepConfig>(config) && _p_order == 2
             && !(_cost_scaling_requested && _explicit_cost_scale > 0)) {
             // Only profitable quadratic pairs enter the DP. Budget against
@@ -3474,7 +3499,8 @@ public:
             const double escape = _independent_trash_added
                 ? _isolated_exp_trash_cost + _isolated_theo_trash_cost
                 : std::max(_isolated_exp_trash_cost, _isolated_theo_trash_cost);
-            _scale = pick_cost_scale(escape, total_flow * _intensity_scale, false);
+            _scale = pick_cost_scale(escape, total_flow * _intensity_scale,
+                                     false, _cost_precision_bits);
             // Chain gap arcs still have an int64 map, and grid coordinates
             // must fit the exact-double integer range. Reserve gap headroom.
             const double span = std::sqrt(_max_real_cost);
@@ -3540,6 +3566,7 @@ public:
             std::max(max_cost, chain_bound), _dimension);
         result.set_intensity_scale(intensity_scale);
         if (_cost_scaling_requested) result.set_cost_scaling(0);
+        if (_cost_precision_bits) result.set_cost_precision_bits(_cost_precision_bits);
         result.set_flow_budget(_flow_budget);
         if (_simple_trash_added) result.add_simple_trash(_isolated_exp_trash_cost);
         if (_experimental_trash_added) result.add_experimental_trash(_isolated_exp_trash_cost);
