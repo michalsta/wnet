@@ -314,7 +314,8 @@ class WassersteinNetwork:
     def set_cost_scaling(self, scale: int = 0) -> None:
         """Opt-in p=1 cost scaling (lets a caller pass real distances instead
         of pre-scaling positions). scale <= 0 => auto. Must be called before
-        build()."""
+        build(). ConvexSweep quantizes coordinates on a shared grid to
+        preserve Monge order, then evaluates integer convex pair costs."""
         self._check_not_built("set_cost_scaling")
         self._cost_scaling_arg = int(scale)
 

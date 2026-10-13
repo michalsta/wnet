@@ -9,6 +9,19 @@ from wnet.distances import DistanceMetric
 from wnet.wnet_cpp import ConvexSweep
 
 
+def cost_model_error(graph):
+    # LP below uses independently rounded powers. Certificates refer to the
+    # shared-grid convex model; compare the two using its per-unit error bound.
+    mass = float(graph._base_distribution.sum_intensities)
+    return mass * (
+        max(
+            (sg.convex_sweep_cost_quantization_error() for sg in graph.subgraphs()),
+            default=0,
+        )
+        + 0.5 / graph.scale_factor()
+    )
+
+
 def fixture(model, scale, p, seed=42, reverse_trash=False, storage="flat"):
     rng = np.random.default_rng(seed)
     x = rng.integers(0, 6, 5).astype(float)
@@ -102,23 +115,27 @@ def test_global_bounds(p, model, scale, storage):
                 np.random.default_rng(seed).uniform(0, 3, (6, 2)),
             ]
         )
+        model_error = cost_model_error(graph)
         truths = [objective(w) for w in probes]
         with pytest.raises(RuntimeError, match="solve"):
             graph.dual_cut()
         for point in probes[:6]:
             graph.solve(point, with_duals=True)
             cut = graph.dual_cut()
-            assert objective(point) <= cut["upper_bound"] + 1e-8
+            assert objective(point) <= cut["upper_bound"] + model_error + 1e-8
             assert (
                 abs(objective(point) - graph.total_cost())
-                <= cut["rounding_error"] + 1e-8
+                <= cut["rounding_error"] + model_error + 1e-8
             )
             for probe, value in zip(probes, truths):
-                assert cut["intercept"] + cut["gradient"] @ probe <= value + 1e-8
+                assert (
+                    cut["intercept"] + cut["gradient"] @ probe
+                    <= value + model_error + 1e-8
+                )
             if scale == 100000:
                 assert (
                     objective(point) - (cut["intercept"] + cut["gradient"] @ point)
-                    <= 2 * cut["rounding_error"] + 1e-8
+                    <= 2 * cut["rounding_error"] + model_error + 1e-8
                 )
 
 
@@ -159,13 +176,17 @@ def test_recovery_is_eager_optional_cached_and_invalidated(storage):
 @pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
 def test_reversed_trash_prices_across_mass_balance(p, storage):
     graph, objective = fixture("both", 17.3, p, reverse_trash=True, storage=storage)
+    model_error = cost_model_error(graph)
     probes = [[0, 0], [0, 3], [3, 0], [3, 3], [0.2, 0.7]]
     for point in probes:
         graph.solve(point, with_duals=True)
         cut = graph.dual_cut()
-        assert objective(point) <= cut["upper_bound"] + 1e-8
+        assert objective(point) <= cut["upper_bound"] + model_error + 1e-8
         for probe in probes:
-            assert cut["intercept"] + cut["gradient"] @ probe <= objective(probe) + 1e-8
+            assert (
+                cut["intercept"] + cut["gradient"] @ probe
+                <= objective(probe) + model_error + 1e-8
+            )
 
 
 @pytest.mark.parametrize("integer", [False, True])

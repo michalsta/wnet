@@ -1,5 +1,13 @@
 # Sweep quantization experiments
 
+Historical experiment (12 October 2026): these alternatives compare against
+independently rounded pair costs. Production ConvexSweep now uses
+[Monge-preserving quantization](../docs/monge_quantization.md). Its withdrawn
+repair is retained in `non_monge_repair.hpp` solely to reproduce this baseline.
+Use the frozen exported inputs for the published comparison; new exports use
+the currently installed production factory and its current scales.
+
+
 These standalone programs compare alternatives to the production rounding
 correction. They do not change production solver dispatch. They currently
 support p=1 and p=2 and independent symmetric trash.

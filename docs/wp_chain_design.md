@@ -1,5 +1,12 @@
 # Chain-native solver for W_p, p > 1 — design note
 
+**Quantization update, 2026-10-13:** the original per-pair rounding design
+below is superseded by [Monge-preserving quantization](monge_quantization.md).
+Dense bit parity is not a general correctness criterion. Production uses a
+shared coordinate grid and an integer convex cost function, with no repair
+of non-Monge matchings.
+
+
 Status: IMPLEMENTED through stage 3 (`convex_sweep.hpp`, solver config
 `ConvexSweep`, wnet commit 82a7d1f; wnetdeconv exposes `p` and routes 1-D
 p != 1 to it).  Validation: standalone kernel fuzz vs a unit-level alignment

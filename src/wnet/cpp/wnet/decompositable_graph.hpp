@@ -31,6 +31,7 @@
 #include <lemon/capacity_scaling.h>
 #include <pylmcf/network_simplex_lct_adapter.h>
 #include "convex_sweep_dual.hpp"
+#include "monge_cost.hpp"
 
 // Pivot rule for NetworkSimplex. Values match lemon::NetworkSimplex::PivotRule.
 enum class NSPivotRule {
@@ -1451,13 +1452,15 @@ public:
     // kernel maximizes matching profit sum(tau - c(d)) and the total is
     // trash_of(0) - profit, valid for every affine trash model (the same
     // affinity SlopeDP relies on).  Costs are recomputed per pair as
-    // quantize_cost(|dx|^p) — the same function the dense factory applies
-    // per arc — so factory parity is exact up to the prefix-sum position
-    // reconstruction (grid data: exact).
+    // one shared coordinate grid and an integer convex distance function.
+    // Individual pair rounding is forbidden: it can destroy Monge order.
     mutable std::vector<double> _sweep_real_pos;   // per chain position
-    mutable bool _sweep_pos_built = false;
+    mutable bool _sweep_pos_built = false, _sweep_grid_built = false;
+    mutable std::vector<double> _sweep_grid_pos;
+    mutable monge_cost::GridPower _sweep_cost_model;
 
     void _sweep_build_pos() const {
+        _sweep_grid_built = false;
         if (!_sdp_cache_built) _sdp_build_cache();
         const size_t P = _sdp_emp_cap.size();
         _sweep_real_pos.assign(P, 0.0);
@@ -1470,6 +1473,15 @@ public:
             }
         }
         _sweep_pos_built = true;
+    }
+
+    void _sweep_build_grid() const {
+        if (!_sweep_pos_built) _sweep_build_pos();
+        if (!_sweep_grid_built) {
+            _sweep_cost_model.reset(_sweep_real_pos, _p_is_one ? 1 : _scale,
+                                    _p_order, _sweep_grid_pos);
+            _sweep_grid_built = true;
+        }
     }
 
     // Trash pricing for the sweep, identical semantics to _slope_dp_solve's
@@ -1529,7 +1541,7 @@ public:
     void _sweep_solve_impl(VALUE_TYPE F) const {
         using W = slopedp_detail::wide_t;
         if (!_sdp_cache_built) _sdp_build_cache();
-        if (!_sweep_pos_built) _sweep_build_pos();
+        _sweep_build_grid();
         _sweep_dual_version = std::numeric_limits<uint64_t>::max();
         _sweep_dual_alpha.clear(); _sweep_dual_beta.clear();
         _sweep_trace_records = _sweep_trace_vertices = _sweep_matched_pairs = 0;
@@ -1548,10 +1560,9 @@ public:
         // This reward remains defined at zero supply, so dual cuts can support
         // future positive weights even when the current sweep has no matches.
         const VALUE_TYPE tau = _sweep_matching_reward();
-        const double scale = _p_is_one ? 1.0 : double(_scale);
-        const double radius = std::pow((double(tau) + 1.0) / scale, 1.0 / _p_order);
+        const double radius = _sweep_cost_model.radius(tau);
         auto cost = [this](double a, double b) {
-            return quantize_cost<VALUE_TYPE>(std::pow(std::abs(a - b), _p_order), _scale, _p_is_one);
+            return VALUE_TYPE(_sweep_cost_model.cost(a, b));
         };
         auto profit_fn = [tau, cost](double a, double b) { return tau - cost(a, b); };
         VALUE_TYPE profit = 0;
@@ -1560,8 +1571,8 @@ public:
             std::vector<convex_sweep::Event> ev;
             ev.reserve(2 * P);
             for (size_t p = 0; p < P; ++p) {
-                if (e[p] > 0) ev.push_back({_sweep_real_pos[p], 0, e[p], p});
-                if (t[p] > 0) ev.push_back({_sweep_real_pos[p], 1, t[p], p});
+                if (e[p] > 0) ev.push_back({_sweep_grid_pos[p], 0, e[p], p});
+                if (t[p] > 0) ev.push_back({_sweep_grid_pos[p], 1, t[p], p});
             }
             if constexpr (WithDuals) {
                 auto result = convex_sweep::sweep_solve<true, Profile>(ev, profit_fn, radius);
@@ -1576,7 +1587,7 @@ public:
         }
         if constexpr (WithDuals) {
             auto [alpha, beta] = convex_sweep_dual::recover<VALUE_TYPE>(
-                _sweep_real_pos, e, t, tau, radius, cost, matching, W(profit));
+                _sweep_grid_pos, e, t, tau, radius, cost, matching, W(profit));
             _sweep_dual_alpha = std::move(alpha);
             _sweep_dual_beta = std::move(beta);
             // set_point()/position updates advance the epoch after this call.
@@ -1628,7 +1639,7 @@ public:
         if (!_solver_has_value())
             throw std::runtime_error("Must call solve() before derivatives.");
         if (!_sdp_cache_built) _sdp_build_cache();
-        if (!_sweep_pos_built) _sweep_build_pos();
+        _sweep_build_grid();
         const size_t P = _sdp_emp_cap.size();
         const bool chained = _chain_topo.has_value();
 
@@ -1655,7 +1666,6 @@ public:
         // With no empirical mass the extra theoretical unit can never match.
         if (!chained || E < 1) return marg;
 
-        const double eff_scale = _p_is_one ? 1.0 : (double)_scale;
         // tau for the kernel: if min(E,T) == 0 the solve used tau = 0, but
         // the +1-unit probe can create the first match; price it with the
         // regime tau of (E, T+1).
@@ -1668,17 +1678,9 @@ public:
                 : 0;
         }
         if (tau_eff <= 0) return marg;
-        const double radius =
-            std::pow(((double)tau_eff + 1.0) / eff_scale, 1.0 / _p_order);
-        const double p_ord = _p_order;
-        const int64_t scale = _scale;
-        const bool trunc = _p_is_one;
-        const VALUE_TYPE tq = tau_eff;
-        auto profit_fn = [tq, p_ord, scale, trunc](double a, double z)
-            -> VALUE_TYPE {
-            const double d = z > a ? z - a : a - z;
-            return tq - quantize_cost<VALUE_TYPE>(
-                std::pow(d, p_ord), scale, trunc);
+        const double radius = _sweep_cost_model.radius(tau_eff);
+        auto profit_fn = [this, tau_eff](double a, double z) -> VALUE_TYPE {
+            return tau_eff - VALUE_TYPE(_sweep_cost_model.cost(a, z));
         };
 
         // Events with zero-count theoretical probes at every theo-hosting
@@ -1691,7 +1693,7 @@ public:
             theo_pos_of_event.reserve(2 * P);
             auto emit = [&](size_t p) {
                 const double z =
-                    mirror ? -_sweep_real_pos[p] : _sweep_real_pos[p];
+                    mirror ? -_sweep_grid_pos[p] : _sweep_grid_pos[p];
                 if (e[p] > 0) {
                     ev.push_back({z, 0, e[p]});
                     theo_pos_of_event.push_back(SIZE_MAX);
@@ -2455,6 +2457,7 @@ public:
     // exactly — the prefix sum of |gap| from an origin of 0, so a descending
     // chain is stored ascending just as _sweep_build_pos() would store it.
     void _refresh_sweep_positions(const std::vector<double>* chain_pos) {
+        _sweep_grid_built = false;
         const size_t P = _sdp_emp_cap.size();
         if (!_chain_topo.has_value() || P < 2) {
             // No chain to walk: _sweep_build_pos() leaves every position at the
@@ -2699,6 +2702,12 @@ public:
             else if (const auto* theo = std::get_if<TheoreticalNode<intensity_type>>(&node.get_type()))
                 gradient[theo->get_spectrum_id()] += (long double)(-tau - _sdp_dual[_sdp_node_pos[v]]) * theo->get_intensity();
         }
+    }
+
+    double convex_sweep_cost_quantization_error() const {
+        if (!_use_sweep()) throw std::runtime_error("Requires ConvexSweep backend");
+        _sweep_build_grid();
+        return _sweep_cost_model.error();
     }
 
     auto convex_sweep_dual_stats() const {
@@ -3457,6 +3466,21 @@ public:
             _scale = _explicit_cost_scale;
         else
             _scale = pick_cost_scale(_max_real_cost, total_flow * _intensity_scale, _truncate);
+        if (std::holds_alternative<ConvexSweepConfig>(config) && _p_order == 2
+            && !(_cost_scaling_requested && _explicit_cost_scale > 0)) {
+            // Only profitable quadratic pairs enter the DP. Budget against
+            // escape prices, not the squared span of an entire chain run.
+            // Distant squares remain exact in wide arithmetic and are pruned.
+            const double escape = _independent_trash_added
+                ? _isolated_exp_trash_cost + _isolated_theo_trash_cost
+                : std::max(_isolated_exp_trash_cost, _isolated_theo_trash_cost);
+            _scale = pick_cost_scale(escape, total_flow * _intensity_scale, false);
+            // Chain gap arcs still have an int64 map, and grid coordinates
+            // must fit the exact-double integer range. Reserve gap headroom.
+            const double span = std::sqrt(_max_real_cost);
+            if (span > 1) _scale = std::min(_scale, static_cast<int64_t>(
+                std::max(1.0L, std::floor(std::ldexp(1.0L, 60) / span))));
+        }
         if (std::holds_alternative<NetworkSimplexConfig>(config)
             && std::get<NetworkSimplexConfig>(config).warm == NSWarmMode::LinkCut
             && _max_real_cost > 0) {
@@ -3666,13 +3690,18 @@ public:
     // it, the accumulator can wrap and return plausible-looking garbage, so
     // reject the point loudly instead.
     void check_accumulator_budget(const std::vector<double>& point) const {
-        if (!(_max_real_cost > 0.0)) return;
+        const double cost_bound = std::holds_alternative<ConvexSweepConfig>(_built_config)
+            && _p_order == 2 ? (_independent_trash_added
+                ? _isolated_exp_trash_cost + _isolated_theo_trash_cost
+                : std::max(_isolated_exp_trash_cost, _isolated_theo_trash_cost))
+            : _max_real_cost;
+        if (!(cost_bound > 0.0)) return;
         double flow = _emp_flow_total;
         const size_t n = std::min(point.size(), _theo_flow_totals.size());
         for (size_t i = 0; i < n; ++i)
             flow += point[i] * _theo_flow_totals[i];
         constexpr double ACCUMULATOR_TARGET = 4611686018427387904.0; // 2^62
-        const double worst_cost = _max_real_cost * static_cast<double>(_scale)
+        const double worst_cost = cost_bound * static_cast<double>(_scale)
                                   * flow * _intensity_scale;
         if (!(worst_cost <= ACCUMULATOR_TARGET))
             throw std::overflow_error(

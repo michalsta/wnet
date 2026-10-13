@@ -61,6 +61,23 @@ Scratch buffers and anchor/trash arc indices are retained per component.
 Cut construction accumulates coefficients directly in C++; full dual arrays
 are only materialized when explicitly requested by Python.
 
+## ConvexSweep cost quantization
+
+ConvexSweep requires a Monge cost matrix. Independently rounding each real
+pair cost can violate that condition, so the solver first rounds all chain
+coordinates onto one shared integer grid. At p=1 the cost is the integer
+absolute difference; at p=2 it is its exact integer square. Other powers use
+an integer convex tangent envelope. No non-Monge correction or geometry-wide
+Monge check runs in production. See [Monge quantization](monge_quantization.md).
+
+`total_cost()`, discrete marginal derivatives and the recovered dual all use
+this same model. It generally differs from dense independently rounded pair
+costs and from SlopeDP's sum of rounded gap costs. The returned cut is exact
+for the fixed model, with the usual supply-rounding allowance; that allowance
+does **not** include coordinate/cost-model approximation. A per-unit bound
+relative to real `distance**p` is available from
+`get_subgraph(k).convex_sweep_cost_quantization_error()`.
+
 ## ConvexSweep recovery
 
 Use `network.solve(weights, with_duals=True)` with ConvexSweep to recover
