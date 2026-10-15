@@ -92,6 +92,11 @@ Complementary slackness then gives tight constraints on matched pairs. Integer
 potential propagation enforces these equalities and the remaining matching
 inequalities, scanning profitable position windows on demand. There is no
 auxiliary simplex solve and no stored graph of all profitable pairs.
+Recovery groups positions with identical quantized grid coordinates, sums
+empirical and theoretical capacities separately, and uses the grouped matching
+directly. Identical coordinates have identical cost rows and columns, so the
+result is an exact certificate; its potentials are copied to every original
+peak before cuts are assembled. Distinct coordinates skip capacity aggregation.
 Zero-capacity positions remain in the constraints so cuts stay valid when
 zero mixture weights grow. Separate discrete marginal derivatives are not
 used as a common matching dual.
@@ -104,10 +109,11 @@ bound then apply.
 
 Traceback storage is proportional to the sum of saved piecewise-linear profile
 and profit-prefix sizes across events, potentially quadratic for wide windows.
-It is released after recovery. Potential propagation retains `O(N + M)` state
-for `N` position blocks and `M` matched pairs, and can scan windows repeatedly;
-it does not guarantee linear recovery time. Only `O(N)` dual coefficients
-remain cached for cut queries.
+It is released after recovery. Potential propagation retains `O(U + M)` state
+for `U` distinct grid coordinates and `M` grouped matched pairs, and can scan
+windows repeatedly; it does not guarantee linear recovery time. Mapping and
+broadcasting use `O(P + U + M)` temporary storage for `P` original position
+blocks. Only `O(P)` dual coefficients remain cached for cut queries.
 
 ## Supply error and precision
 

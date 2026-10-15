@@ -239,3 +239,43 @@ def test_position_updates_zero_reward_and_disconnected_peaks(integer, storage):
     zero.build()
     zero.solve([1], with_duals=True)
     assert zero.dual_cut()["upper_bound"] == pytest.approx(0)
+
+
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
+def test_grouped_duals_support_zero_weight_models(storage):
+    # Many separate peaks share coordinates; the second model starts with no
+    # supply. Its coordinates must still receive valid potentials for its cut.
+    empirical = Distribution(np.array([[0.0] * 40]), np.full(40, 0.25))
+    targets = [
+        Distribution(np.array([[0.0] * 30]), np.full(30, 0.2)),
+        Distribution(np.array([[1.0] * 32]), np.full(32, 0.25)),
+    ]
+    graph = WassersteinNetwork(
+        empirical,
+        targets,
+        DistanceMetric.L1,
+        split_distance=20,
+        intensity_scale=100000,
+        solver=ConvexSweep(storage=storage),
+        p=2,
+    )
+    graph.set_cost_scaling(0)
+    graph.add_independent_asymmetric_trash(5, 5)
+    graph.build()
+    points = [[0, 0], [1, 0], [0, 1], [1, 1], [0.5, 2]]
+    cuts = []
+    for point in points:
+        graph.solve(point, with_duals=True)
+        # Trace pairs stay grouped rather than expanding to peak fragments.
+        assert graph.get_subgraph(0).convex_sweep_dual_stats()[-1] <= 2
+        cut = graph.dual_cut()
+        assert cut["intercept"] + cut["gradient"] @ point == pytest.approx(
+            graph.total_cost(), abs=2 * cut["rounding_error"] + 1e-8
+        )
+        cuts.append(cut)
+    for point in points:
+        graph.solve(point)
+        for cut in cuts:
+            assert cut["intercept"] + cut["gradient"] @ point <= (
+                graph.total_cost() + 2 * cut["rounding_error"] + 1e-8
+            )

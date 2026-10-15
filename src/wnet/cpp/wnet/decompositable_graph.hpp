@@ -1576,8 +1576,10 @@ public:
         auto profit_fn = [tau, cost](double a, double b) { return tau - cost(a, b); };
         VALUE_TYPE profit = 0;
         std::conditional_t<WithDuals, std::vector<convex_sweep::Match>, convex_sweep::NoTraceStorage> matching;
+        // Dual recovery consumes grouped event indices directly; no expanded
+        // peak matching or per-event fragment mapping is needed.
+        convex_sweep::GroupedEvents<false> grouped;
         if (tau > 0 && chained && E > 0 && T > 0) {
-            convex_sweep::GroupedEvents<WithDuals> grouped;
             grouped.events.reserve(2 * P);
             for (size_t p = 0; p < P; ++p) {
                 if (e[p] > 0)
@@ -1590,17 +1592,18 @@ public:
             if constexpr (WithDuals) {
                 auto result = convex_sweep::sweep_solve<true, Profile>(ev, profit_fn, radius);
                 profit = result.profit;
-                matching = grouped.expand(result.matches);
+                matching = std::move(result.matches);
                 _sweep_trace_records = result.records;
                 _sweep_trace_vertices = result.vertices;
-                _sweep_matched_pairs = matching.size();
+                _sweep_matched_pairs = matching.size(); // grouped coordinate pairs
             } else {
                 profit = convex_sweep::sweep_solve<false, Profile>(ev, profit_fn, radius);
             }
         }
         if constexpr (WithDuals) {
-            auto [alpha, beta] = convex_sweep_dual::recover<VALUE_TYPE>(
-                _sweep_grid_pos, e, t, tau, radius, cost, matching, W(profit));
+            auto [alpha, beta] = convex_sweep_dual::recover_grouped<VALUE_TYPE>(
+                _sweep_grid_pos, e, t, tau, radius, cost, grouped.events,
+                std::move(matching), W(profit));
             _sweep_dual_alpha = std::move(alpha);
             _sweep_dual_beta = std::move(beta);
             // set_point()/position updates advance the epoch after this call.

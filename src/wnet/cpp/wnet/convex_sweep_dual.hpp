@@ -111,5 +111,66 @@ auto recover(std::span<const double> positions, std::span<const I> empirical,
     for (auto& value : y) value = -value;
     return std::make_pair(std::move(x), std::move(y));
 }
+// Equal grid coordinates have identical cost rows/columns. Recover on their
+// summed capacities, then broadcast the certificate to every original peak.
+// Include zero-supply coordinates: their potentials constrain future weights.
+// Matching indices refer to the sorted grouped sweep events, not peak indices.
+template<class I, class Cost>
+auto recover_grouped(std::span<const double> positions, std::span<const I> empirical,
+                     std::span<const I> theoretical, I tau, double radius,
+                     Cost pair_cost, std::span<const convex_sweep::Event> events,
+                     std::vector<convex_sweep::Match> matching,
+                     wide_int::wide_t expected_profit) {
+    const size_t n = positions.size();
+    if (empirical.size() != n || theoretical.size() != n || tau < 0)
+        throw std::invalid_argument("inconsistent ConvexSweep dual inputs");
+    const bool duplicates = std::adjacent_find(positions.begin(), positions.end()) != positions.end();
+    std::vector<double> grouped_pos;
+    std::vector<I> grouped_e, grouped_t;
+    std::vector<size_t> original;
+    if (duplicates) {
+        grouped_pos.reserve(n);
+        grouped_e.reserve(n);
+        grouped_t.reserve(n);
+        original.reserve(n);
+        for (size_t i = 0; i < n; ++i) {
+            if (grouped_pos.empty() || grouped_pos.back() != positions[i]) {
+                grouped_pos.push_back(positions[i]);
+                grouped_e.push_back(0);
+                grouped_t.push_back(0);
+            }
+            grouped_e.back() += empirical[i];
+            grouped_t.back() += theoretical[i];
+            original.push_back(grouped_pos.size() - 1);
+        }
+    }
+    const std::span<const double> coords = duplicates ? std::span<const double>(grouped_pos) : positions;
+    std::vector<size_t> event_coordinate;
+    event_coordinate.reserve(events.size());
+    size_t j = 0;
+    for (const auto& event : events) {
+        while (j < coords.size() && coords[j] < event.pos) ++j;
+        if (j == coords.size() || coords[j] != event.pos)
+            throw std::invalid_argument("inconsistent ConvexSweep event coordinates");
+        event_coordinate.push_back(j);
+    }
+    for (auto& match : matching) {
+        match.empirical = event_coordinate.at(match.empirical);
+        match.theoretical = event_coordinate.at(match.theoretical);
+    }
+    // Avoid grouped capacity buffers and broadcasting when all coordinates
+    // already differ (the usual case at fine precision).
+    if (!duplicates)
+        return recover<I>(positions, empirical, theoretical, tau, radius,
+                          pair_cost, matching, expected_profit);
+    auto [a, b] = recover<I>(grouped_pos, grouped_e, grouped_t, tau, radius,
+                             pair_cost, matching, expected_profit);
+    std::vector<I> alpha(n), beta(n);
+    for (size_t i = 0; i < n; ++i) {
+        alpha[i] = a[original[i]];
+        beta[i] = b[original[i]];
+    }
+    return std::make_pair(std::move(alpha), std::move(beta));
+}
 }  // namespace convex_sweep_dual
 #endif

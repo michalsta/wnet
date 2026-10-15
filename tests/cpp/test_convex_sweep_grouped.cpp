@@ -143,14 +143,25 @@ template <class F> void check(const Input &in, bool marginal = true) {
     auto [alpha, beta] =
         convex_sweep_dual::recover<i64>(in.x, in.e, in.t, in.tau, in.model.radius(in.tau), cost,
                                         matching, wide_int::wide_t(expected));
-    wide_int::wide_t dual = 0;
-    for (size_t i = 0; i < e.size(); ++i) {
-        require(alpha[i] <= 0 && beta[i] <= 0, "dual sign");
-        dual += wide_int::wide_t(in.e[i]) * alpha[i] + wide_int::wide_t(in.t[i]) * beta[i];
-        for (size_t j = 0; j < e.size(); ++j)
-            require(alpha[i] + beta[j] <= -profit(in.x[i], in.x[j]), "dual pair infeasible");
-    }
-    require(dual == -wide_int::wide_t(expected), "duality gap");
+    auto verify_certificate = [&](const auto& a, const auto& b) {
+        wide_int::wide_t dual = 0;
+        for (size_t i = 0; i < e.size(); ++i) {
+            require(a[i] <= 0 && b[i] <= 0, "dual sign");
+            dual += wide_int::wide_t(in.e[i]) * a[i] + wide_int::wide_t(in.t[i]) * b[i];
+            for (size_t j = 0; j < e.size(); ++j)
+                require(a[i] + b[j] <= -profit(in.x[i], in.x[j]), "dual pair infeasible");
+        }
+        require(dual == -wide_int::wide_t(expected), "duality gap");
+    };
+    verify_certificate(alpha, beta);
+    auto [group_a, group_b] = convex_sweep_dual::recover_grouped<i64>(
+        in.x, in.e, in.t, in.tau, in.model.radius(in.tau), cost,
+        g.events, trace.matches, wide_int::wide_t(expected));
+    verify_certificate(group_a, group_b);
+    for (size_t i = 1; i < in.x.size(); ++i)
+        if (in.x[i] == in.x[i - 1])
+            require(group_a[i] == group_a[i - 1] && group_b[i] == group_b[i - 1],
+                    "duplicate coordinates must share potentials");
     if (marginal) {
         auto gain = gains<F>(in);
         for (size_t i = 0; i < e.size(); ++i)
@@ -192,6 +203,12 @@ int main(int argc, char **argv) {
     check<TreePLF>(minimal);
     check<AugmentedPLF>(minimal);
     check<PLF>(make({}, {}, {}, 0));
+    // Zero-capacity coordinates still need feasible potentials for future cuts;
+    // cover empty sides, zero reward, and distinct real peaks rounded to a tie.
+    check<PLF>(make({0, 0, 1, 1, 2}, {5, 0, 0, 0, 0}, {0, 0, 0, 0, 0}));
+    check<PLF>(make({0, 0, 1, 1, 2}, {0, 0, 0, 0, 0}, {0, 0, 3, 0, 0}));
+    check<PLF>(make({0, 0, 1, 1, 2}, {5, 0, 0, 0, 0}, {0, 0, 3, 0, 0}, 0));
+    check<PLF>(make({0, .0001, .0002, 1}, {0, 5, 0, 0}, {3, 0, 1, 0}));
     check<PLF>(make({0, 1, 2}, {1000000000, 0, 0}, {0, 0, 1000000000}, 1000000));
     // An integer gain of one on top of an optimum beyond double precision.
     auto large = make({0, 0, 1}, {5000000000000001LL, 0, 0}, {0, 5000000000000000LL, 0}, 2);
