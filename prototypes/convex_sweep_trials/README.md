@@ -189,3 +189,20 @@ pair budget per component and rejects rather than truncates. Small fixtures
 use one warmup and three measured calls; heavy full-data attempts use one
 measured call without warmup. Timers include grouping, graph/moment setup and
 per-call work; fixture loading and cost-model construction are excluded.
+
+`virtual-cached` and `quadratic-cached` refine the lazy union by caching
+endpoint and iterator values and using scalar interpolation for exact integral
+slopes. Their `-checkpoint256` combinations are also available. The original
+uncached variants remain selectable for controlled comparisons. All cached
+variants participate in the same independent tests and curve enumeration.
+
+`nmr_census fixture.cst` counts profitable positive-target and probe-target
+pairs using the model's exact integer radius without constructing arcs.
+`nmr_run.py --stage refinement --binary <bench-v2>` compares cached views with
+fresh production controls. `--stage heavy` runs that refinement first and then
+full perfumes checkpoint/flow comparisons, sequentially on the same CPU.
+The heavy matrix omits lazy-view combinations after the ordinary-solve
+regressions; they remain covered by full hemoglobin timings and oracle tests.
+Completed refinement/heavy runs also record GNU time's peak RSS; censored runs
+retain sampled RSS/VmHWM lower bounds. Keep each timed source snapshot and its
+binary together when comparing refinements.

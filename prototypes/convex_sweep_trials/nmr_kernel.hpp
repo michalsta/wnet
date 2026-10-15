@@ -671,6 +671,16 @@ struct QuadraticPolicy : VirtualPolicy {
         return out;
     }
 };
+struct CachedVirtualPolicy : VirtualPolicy {
+    template <class F, class Curve> static auto combine(const F &f, const Curve &t) {
+        return nmr_views::Sum<F, Curve, true>(f, t);
+    }
+};
+struct CachedQuadraticPolicy : QuadraticPolicy {
+    template <class F, class Curve> static auto combine(const F &f, const Curve &t) {
+        return nmr_views::Sum<F, Curve, true>(f, t);
+    }
+};
 template <bool Traceback = false, class Policy = MaterialPolicy, class F, typename ProfitFn>
 void sweep_step(BasicSideState<F> &own, BasicSideState<F> &opp, double z, i64 q, ProfitFn profit,
                 double radius, BasicTraceRecord<F> *trace = nullptr, int own_side = 0) {

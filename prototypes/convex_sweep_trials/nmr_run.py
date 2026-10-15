@@ -13,7 +13,10 @@ import time
 p = argparse.ArgumentParser()
 p.add_argument("--work", type=Path, required=True)
 p.add_argument("--fixtures", type=Path, required=True)
-p.add_argument("--stage", choices=["small", "ordinary", "heavy"], required=True)
+p.add_argument(
+    "--stage", choices=["small", "ordinary", "heavy", "refinement"], required=True
+)
+p.add_argument("--binary", type=Path)
 p.add_argument("--rss-gib", type=float, default=8)
 p.add_argument("--pair-limit", type=int, default=8_000_000)
 p.add_argument("--cpu", type=int, default=4)
@@ -86,24 +89,29 @@ elif a.stage == "ordinary":
                     90 if fixture.startswith("perfumes") else 30,
                 )
             )
+elif a.stage == "refinement":
+    for fixture in ["hemoglobin-p2-matched", "hemoglobin-p2-auto"]:
+        for phase in ["solve", "dual", "gains"]:
+            for v in ["baseline", "virtual-cached", "quadratic-cached"]:
+                cases.append((fixture, v, phase, 3, 1, 20))
+    for v in ["baseline", "virtual-cached", "quadratic-cached"]:
+        cases.append(("perfumes-p2-matched", v, "solve", 1, 0, 90))
 else:
     fixture = "perfumes-p2-matched"
     for v, phase, timeout in [
         ("baseline", "dual", 120),
         ("checkpoint256-groupdual", "dual-compare", 180),
-        ("virtual-checkpoint256", "dual", 180),
-        ("quadratic-checkpoint256", "dual", 180),
         ("flow", "dual", 90),
         ("baseline", "gains", 120),
         ("checkpoint256", "gains", 180),
-        ("virtual-checkpoint256", "gains", 180),
-        ("quadratic-checkpoint256", "gains", 180),
         ("flow", "gains", 90),
         ("flow", "both", 90),
     ]:
         cases.append((fixture, v, phase, 1, 0, timeout))
 # Reproducible ordering, avoiding a systematic optimization-last bias.
-random.Random(1251 + ["small", "ordinary", "heavy"].index(a.stage)).shuffle(cases)
+random.Random(
+    1251 + ["small", "ordinary", "heavy", "refinement"].index(a.stage)
+).shuffle(cases)
 
 
 def child_setup():
@@ -111,6 +119,36 @@ def child_setup():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     os.sched_setaffinity(0, {a.cpu})
 
+
+# Run cached-view follow-ups before the costly full tracebacks, on the same
+# CPU and sequentially. Refinement resumes completed rows on subsequent runs.
+if a.stage == "heavy":
+    import sys
+
+    with (root / "progress-refinement.log").open("w") as progress:
+        subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--work",
+                str(root),
+                "--fixtures",
+                str(a.fixtures),
+                "--stage",
+                "refinement",
+                "--binary",
+                str(root / "bench-v2"),
+                "--rss-gib",
+                str(a.rss_gib),
+                "--pair-limit",
+                str(a.pair_limit),
+                "--cpu",
+                str(a.cpu),
+            ],
+            stdout=progress,
+            stderr=subprocess.STDOUT,
+            check=True,
+        )
 
 for fixture, v, phase, reps, warmup, budget in cases:
     if (fixture, v, phase) in done:
@@ -129,7 +167,7 @@ for fixture, v, phase, reps, warmup, budget in cases:
         pair_limit=a.pair_limit,
     )
     args = [
-        str(root / "bench"),
+        str(a.binary or (root / "bench")),
         str(a.fixtures / (fixture + ".cst")),
         v,
         phase,
@@ -137,6 +175,8 @@ for fixture, v, phase, reps, warmup, budget in cases:
         str(a.pair_limit),
         str(warmup),
     ]
+    rssfile = logs / (stem + ".rss")
+    args = ["/usr/bin/time", "-f", "%M", "-o", str(rssfile)] + args
     started = time.monotonic()
     with (
         (logs / (stem + ".jsonl")).open("w") as out,
@@ -161,7 +201,13 @@ for fixture, v, phase, reps, warmup, budget in cases:
         last_size = 0
         while child.poll() is None:
             try:
-                status = Path(f"/proc/{child.pid}/status").read_text()
+                offspring = (
+                    Path(f"/proc/{child.pid}/task/{child.pid}/children")
+                    .read_text()
+                    .split()
+                )
+                monitored = int(offspring[0]) if offspring else child.pid
+                status = Path(f"/proc/{monitored}/status").read_text()
                 fields = {
                     s.split(":", 1)[0]: s.split(":", 1)[1].strip()
                     for s in status.splitlines()
@@ -203,6 +249,13 @@ for fixture, v, phase, reps, warmup, budget in cases:
         peak_rss_kib=rss,
         peak_virtual_kib=virtual,
     )
+    row["rss_method"] = "sampled VmRSS/VmHWM"
+    try:
+        exact = int(rssfile.read_text().splitlines()[-1])
+        row["peak_rss_kib"] = max(row["peak_rss_kib"], exact)
+        row["rss_method"] = "GNU time peak RSS"
+    except (FileNotFoundError, ValueError, IndexError):
+        pass
     error = (logs / (stem + ".err")).read_text()
     if "profitable-pair budget exceeded" in error:
         row["status"] = "pair_budget"

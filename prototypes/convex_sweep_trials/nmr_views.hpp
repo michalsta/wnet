@@ -59,10 +59,11 @@ template <class C> struct Cursor {
 // Read-only union of two knot streams. No array of V+T values is constructed.
 // The iterator keeps its position in both source streams, making its vertex
 // evaluation O(1); random crossing queries delegate to the underlying curves.
-template <class F, class C> struct Sum {
+template <class F, class C, bool Fast = false> struct Sum {
     using V = typename F::V;
     const F &f;
     const C &c;
+    V first{}, last{};
     struct Iterator {
         using iterator_category = std::forward_iterator_tag;
         using value_type = V;
@@ -72,6 +73,7 @@ template <class F, class C> struct Sum {
         const Sum *owner = nullptr;
         size_t a = 0, b = 0;
         mutable V cache{};
+        mutable bool valid = false;
         I current() const {
             return std::min(a < count(owner->f) ? key(owner->f, a) : INT64_MAX,
                             b < count(owner->c) ? key(owner->c, b) : INT64_MAX);
@@ -82,11 +84,23 @@ template <class F, class C> struct Sum {
             if (key(curve, j) == k)
                 return value(curve, j);
             const I l = key(curve, j - 1), r = key(curve, j), v = value(curve, j - 1);
-            return v + wide_int::mul_div_trunc(value(curve, j) - v, k - l, r - l);
+            const I delta = value(curve, j) - v, span = r - l;
+            if constexpr (Fast)
+                if (delta % span == 0)
+                    return v + (delta / span) * (k - l);
+            return v + wide_int::mul_div_trunc(delta, k - l, span);
         }
         V operator*() const {
+            if constexpr (Fast)
+                if (valid)
+                    return cache;
             I k = current();
-            return {k, at(owner->f, a, k) + at(owner->c, b, k)};
+            V out{k, at(owner->f, a, k) + at(owner->c, b, k)};
+            if constexpr (Fast) {
+                cache = out;
+                valid = true;
+            }
+            return out;
         }
         pointer operator->() const {
             cache = operator*();
@@ -94,6 +108,7 @@ template <class F, class C> struct Sum {
         }
         Iterator &operator++() {
             I k = current();
+            valid = false;
             if (a < count(owner->f) && key(owner->f, a) == k)
                 ++a;
             if (b < count(owner->c) && key(owner->c, b) == k)
@@ -117,11 +132,25 @@ template <class F, class C> struct Sum {
         V front() const { return {0, owner->eval(0)}; }
         V back() const { return {owner->K(), owner->eval(owner->K())}; }
     } vs;
-    Sum(const F &f, const C &c) : f(f), c(c), vs{this} {}
-    Sum(const Sum &o) : f(o.f), c(o.c), vs{this} {}
-    Sum(Sum &&o) : f(o.f), c(o.c), vs{this} {}
+    Sum(const F &f, const C &c) : f(f), c(c), vs{this} {
+        if constexpr (Fast) {
+            first = {0, f.eval(0) + c.eval(0)};
+            I end = K();
+            last = {end, f.eval(end) + c.eval(end)};
+        }
+    }
+    Sum(const Sum &o) : f(o.f), c(o.c), first(o.first), last(o.last), vs{this} {}
+    Sum(Sum &&o) : f(o.f), c(o.c), first(o.first), last(o.last), vs{this} {}
     I K() const { return std::max(f.K(), c.K()); }
-    I eval(I k) const { return f.eval(k) + c.eval(k); }
+    I eval(I k) const {
+        if constexpr (Fast) {
+            if (k <= 0)
+                return first.v;
+            if (k >= K())
+                return last.v;
+        }
+        return f.eval(k) + c.eval(k);
+    }
 };
 } // namespace nmr_views
 #endif

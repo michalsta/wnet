@@ -19,7 +19,7 @@ template <class Policy> struct Engine {
     double radius;
     Engine(const Input &in, const std::vector<k::Event> &ev)
         : profit{&in.model, in.tau}, radius(in.model.radius(in.tau)) {
-        if constexpr (std::is_same_v<Policy, k::QuadraticPolicy>) {
+        if constexpr (std::is_base_of_v<k::QuadraticPolicy, Policy>) {
             if (in.p != 2)
                 throw std::invalid_argument("quadratic requires p=2");
             bank = std::make_unique<sweep_trials::MomentBank>(ev);

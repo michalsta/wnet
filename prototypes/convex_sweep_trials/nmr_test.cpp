@@ -92,9 +92,10 @@ void check(const Input &in, size_t seed) {
             ++more.t[i];
             gain[i] = oracle(more) - expected;
         }
-    for (auto name :
-         {"baseline", "flow", "virtual", "quadratic", "groupdual", "checkpoint64",
-          "checkpoint256-groupdual", "virtual-checkpoint256", "quadratic-checkpoint256"}) {
+    for (auto name : {"baseline", "flow", "virtual", "quadratic", "groupdual", "checkpoint64",
+                      "checkpoint256-groupdual", "virtual-checkpoint256", "quadratic-checkpoint256",
+                      "virtual-cached", "quadratic-cached", "virtual-cached-checkpoint256",
+                      "quadratic-cached-checkpoint256"}) {
         auto v = variant(name);
         if (v.quadratic && in.p != 2)
             continue;
@@ -174,11 +175,14 @@ void view_tests() {
         }
         require(j == keys.size(), "virtual union size");
         auto out = k::window_sub_view<k::PLF>(sum, q, t);
+        nmr_views::Sum<k::PLF, std::remove_cvref_t<decltype(t)>, true> cached(f, t);
+        auto cached_out = k::window_sub_view<k::PLF>(cached, q, t);
         for (I x = 0; x <= K; ++x) {
             I best = k::NEG_INF;
             for (I y = x; y <= std::min(K, x + q); ++y)
                 best = std::max(best, f.eval(y) + t.eval(y));
             require(out.eval(x) == best - t.eval(x), "virtual window brute force");
+            require(cached_out.eval(x) == best - t.eval(x), "cached virtual brute force");
         }
     }
     for (size_t test = 0; test < 1000; ++test) {
@@ -202,11 +206,14 @@ void view_tests() {
         nmr_views::Sum sum(f, t);
         I q = rng() % (mass + 5);
         auto out = k::window_sub_view<k::PLF>(sum, q, t);
+        nmr_views::Sum<k::PLF, std::remove_cvref_t<decltype(t)>, true> cached(f, t);
+        auto cached_out = k::window_sub_view<k::PLF>(cached, q, t);
         for (I x = 0; x <= mass; ++x) {
             I best = k::NEG_INF;
             for (I y = x; y <= std::min(mass, x + q); ++y)
                 best = std::max(best, f.eval(y) + t.eval(y));
             require(out.eval(x) == best - t.eval(x), "quadratic view brute force");
+            require(cached_out.eval(x) == best - t.eval(x), "cached quadratic brute force");
         }
     }
 }
@@ -279,8 +286,9 @@ int main(int argc, char **argv) {
     require(baseline.profit == 2200 && baseline.gains.back() == 2, "long reference");
     for (size_t stride :
          {size_t(1), size_t(2), size_t(7), size_t(64), size_t(256), size_t(1024), size_t(10000)})
-        for (auto name :
-             {"checkpoint256-groupdual", "virtual-checkpoint256", "quadratic-checkpoint256"}) {
+        for (auto name : {"checkpoint256-groupdual", "virtual-checkpoint256",
+                          "quadratic-checkpoint256", "virtual-cached", "quadratic-cached",
+                          "virtual-cached-checkpoint256", "quadratic-cached-checkpoint256"}) {
             auto v = variant(name);
             v.stride = stride;
             auto out = run(longin, v, "both");

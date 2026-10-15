@@ -7,13 +7,23 @@ namespace nmr_trials {
 struct Variant {
     std::string name;
     size_t stride = 0;
-    bool grouped_dual = false, virt = false, quadratic = false, costflow = false;
+    bool grouped_dual = false, virt = false, quadratic = false, costflow = false, cached = false;
 };
 inline Variant variant(std::string name) {
     Variant v{name};
     if (name == "baseline")
         return v;
-    if (name == "virtual")
+    if (name == "virtual-cached") {
+        v.virt = v.cached = true;
+    } else if (name == "quadratic-cached") {
+        v.virt = v.quadratic = v.cached = true;
+    } else if (name == "virtual-cached-checkpoint256") {
+        v.virt = v.cached = v.grouped_dual = true;
+        v.stride = 256;
+    } else if (name == "quadratic-cached-checkpoint256") {
+        v.virt = v.quadratic = v.cached = v.grouped_dual = true;
+        v.stride = 256;
+    } else if (name == "virtual")
         v.virt = true;
     else if (name == "quadratic")
         v.virt = v.quadratic = true;
@@ -96,7 +106,11 @@ inline Result run(const Input &in, const Variant &v, std::string phase,
     if (phase == "solve") {
         auto g = events<false>(in);
         I profit;
-        if (v.quadratic)
+        if (v.quadratic && v.cached)
+            profit = ordinary<k::CachedQuadraticPolicy>(in, g.events);
+        else if (v.virt && v.cached)
+            profit = ordinary<k::CachedVirtualPolicy>(in, g.events);
+        else if (v.quadratic)
             profit = ordinary<k::QuadraticPolicy>(in, g.events);
         else if (v.virt)
             profit = ordinary<k::VirtualPolicy>(in, g.events);
@@ -106,6 +120,10 @@ inline Result run(const Input &in, const Variant &v, std::string phase,
                 in.model.radius(in.tau));
         return {profit};
     }
+    if (v.quadratic && v.cached)
+        return run_sweep<k::CachedQuadraticPolicy>(in, v, phase);
+    if (v.virt && v.cached)
+        return run_sweep<k::CachedVirtualPolicy>(in, v, phase);
     if (v.quadratic)
         return run_sweep<k::QuadraticPolicy>(in, v, phase);
     if (v.virt)
