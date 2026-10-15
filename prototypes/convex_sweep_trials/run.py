@@ -106,7 +106,16 @@ for phase in a.phases:
         variants = [
             v
             for v in a.variants
-            if order == 2 or v not in ["moments", "all", "moment-stream", "all-stream"]
+            if order == 2
+            or v
+            not in [
+                "moments",
+                "all",
+                "moment-stream",
+                "all-stream",
+                "moment-cursor",
+                "all-cursor",
+            ]
         ]
         # Baseline first, then reproducibly shuffle variants to spread order effects.
         random.Random(fixture).shuffle(variants)

@@ -9,7 +9,7 @@ namespace k = sweep_trials_kernel;
 using W = wide_int::wide_t;
 struct Variant {
   bool group = false, linear = false, fused = false, moments = false,
-       stream = false;
+       stream = false, cursor = false;
 };
 inline Variant variant(const std::string &name) {
   if (name == "baseline")
@@ -44,6 +44,14 @@ inline Variant variant(const std::string &name) {
     return {true, true, true, false, true};
   if (name == "all-stream")
     return {true, true, true, true, true};
+  if (name == "stream-cursor")
+    return {false, false, true, false, true, true};
+  if (name == "moment-cursor")
+    return {false, false, true, true, true, true};
+  if (name == "group-linear-cursor")
+    return {true, true, true, false, true, true};
+  if (name == "all-cursor")
+    return {true, true, true, true, true, true};
   throw std::invalid_argument("unknown trial variant");
 }
 struct Input {
@@ -170,11 +178,15 @@ Result solve_policy(const Input &in, const Variant &v) {
   if (v.moments) {
     if (in.p != 2)
       throw std::invalid_argument("moment policy requires p=2");
+    if (v.cursor)
+      return solve_impl<F, k::CursorMomentPolicy, Trace>(in, v);
     if (v.stream)
       return solve_impl<F, k::FastMomentPolicy, Trace>(in, v);
     return solve_impl<F, k::MomentPolicy, Trace>(in, v);
   }
   if (v.fused) {
+    if (v.cursor)
+      return solve_impl<F, k::CursorStreamPolicy, Trace>(in, v);
     if (v.stream)
       return solve_impl<F, k::StreamPolicy, Trace>(in, v);
     return solve_impl<F, k::FusedPolicy, Trace>(in, v);
@@ -217,11 +229,15 @@ std::vector<I> gains_impl(const Input &in, const Variant &v) {
 template <class F>
 std::vector<I> gains_policy(const Input &in, const Variant &v) {
   if (v.moments) {
+    if (v.cursor)
+      return gains_impl<F, k::CursorMomentPolicy>(in, v);
     if (v.stream)
       return gains_impl<F, k::FastMomentPolicy>(in, v);
     return gains_impl<F, k::MomentPolicy>(in, v);
   }
   if (v.fused) {
+    if (v.cursor)
+      return gains_impl<F, k::CursorStreamPolicy>(in, v);
     if (v.stream)
       return gains_impl<F, k::StreamPolicy>(in, v);
     return gains_impl<F, k::FusedPolicy>(in, v);

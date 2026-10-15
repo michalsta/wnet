@@ -67,11 +67,26 @@ int main(int argc, char **argv) {
     const double p = std::vector<double>{1, 1.5, 2, 3}[(test / 2) % 4];
     in.grid(real, 1 + random() % 1000000, p, random() % 1000000);
     const I expected = oracle(in);
-    for (auto name :
-         {"baseline", "group", "linear", "fused", "group-linear", "group-fused",
-          "linear-fused", "group-linear-fused", "moments", "all", "stream",
-          "moment-stream", "linear-stream", "group-stream",
-          "group-linear-stream", "all-stream"}) {
+    for (auto name : {"baseline",
+                      "group",
+                      "linear",
+                      "fused",
+                      "group-linear",
+                      "group-fused",
+                      "linear-fused",
+                      "group-linear-fused",
+                      "moments",
+                      "all",
+                      "stream",
+                      "moment-stream",
+                      "linear-stream",
+                      "group-stream",
+                      "group-linear-stream",
+                      "all-stream",
+                      "stream-cursor",
+                      "moment-cursor",
+                      "group-linear-cursor",
+                      "all-cursor"}) {
       const auto v = variant(name);
       if (v.moments && p != 2)
         continue;

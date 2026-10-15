@@ -125,3 +125,10 @@ Use `--variants`, `--bench`, `--results-name`, `--phases`, `--datasets`,
 follow-ups. Build a separate binary with `-DSWEEP_TRIAL_STATS` for untimed
 work counters; timed builds omit counter updates. Keep fixtures, executables,
 logs, plots and the generated comparison report outside the repository.
+
+The final cursor refinement is selectable as `stream-cursor`,
+`moment-cursor`, `group-linear-cursor` and `all-cursor` (the two moment modes
+require p=2). It keeps a monotone evaluator over profit knots, reuses endpoint
+values and uses a cached integer segment slope when exact. This preserves the
+unfused subtraction's amortized access pattern instead of introducing repeated
+binary searches during fusion. The same ungrouped marginal safeguard applies.

@@ -18,7 +18,11 @@ const std::vector<std::string> variants{"baseline",
                                         "linear-stream",
                                         "group-stream",
                                         "group-linear-stream",
-                                        "all-stream"};
+                                        "all-stream",
+                                        "stream-cursor",
+                                        "moment-cursor",
+                                        "group-linear-cursor",
+                                        "all-cursor"};
 I oracle(const Input &in) {
   std::vector<size_t> emp, theo;
   for (size_t i = 0; i < in.pos.size(); ++i) {

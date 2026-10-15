@@ -196,9 +196,40 @@ template <class Curve> i64 curve_value(const Curve &t, size_t i) {
   else
     return t.eval(curve_key(t, i));
 }
+// Monotone profit evaluator. Profit-curve segments have integer slopes;
+// cache their endpoints and slope rather than searching for every query.
+template <class Curve> struct CurveCursor {
+  const Curve &curve;
+  size_t segment = 0;
+  bool cached = false, integral = false;
+  i64 left = 0, right = 0, vl = 0, vr = 0, slope = 0;
+  explicit CurveCursor(const Curve &c) : curve(c) {}
+  i64 eval(i64 k) {
+    if (k <= 0)
+      return curve_value(curve, 0);
+    if (k >= curve.K())
+      return curve_value(curve, curve_size(curve) - 1);
+    size_t next = segment;
+    while (next + 1 < curve_size(curve) && curve_key(curve, next + 1) <= k)
+      ++next;
+    if (!cached || next != segment) {
+      vl = cached && next == segment + 1 ? vr : curve_value(curve, next);
+      vr = curve_value(curve, next + 1);
+      segment = next;
+      left = curve_key(curve, next);
+      right = curve_key(curve, next + 1);
+      const i64 delta = vr - vl, span = right - left;
+      integral = delta % span == 0;
+      slope = delta / span;
+      cached = true;
+    }
+    return vl + (integral ? slope * (k - left)
+                          : mul_div_trunc(vr - vl, k - left, right - left));
+  }
+};
 // Stream the existing window operation into the subtraction merge. T's knots
 // are inserted by interpolation, rather than redoing window work at each one.
-template <class F, class Curve>
+template <class F, class Curve, bool CachedCursor = false>
 F stream_window_sub(const F &f, i64 q, const Curve &t) {
   if constexpr (F::exact_window)
     return exact_window_sub(f, q, t);
@@ -222,10 +253,17 @@ F stream_window_sub(const F &f, i64 q, const Curve &t) {
   F out;
   out.vs.reserve(keys.size() + curve_size(t));
   size_t cursor = 0;
+  CurveCursor<Curve> profit_cursor(t);
+  auto profit_value = [&](i64 k) {
+    if constexpr (CachedCursor)
+      return profit_cursor.eval(k);
+    else
+      return t.eval(k);
+  };
   i64 previous = -1, previous_value = 0;
   auto emit = [&](i64 key, i64 value) {
     if (key == previous) {
-      out.vs.back().v = std::max(out.vs.back().v, value - t.eval(key));
+      out.vs.back().v = std::max(out.vs.back().v, value - profit_value(key));
       previous_value = std::max(previous_value, value);
       return;
     }
@@ -243,7 +281,7 @@ F stream_window_sub(const F &f, i64 q, const Curve &t) {
     if (cursor < curve_size(t) && curve_key(t, cursor) == key)
       tv = curve_value(t, cursor++);
     else
-      tv = t.eval(key);
+      tv = profit_value(key);
     out.vs.push_back({key, value - tv});
     previous = key;
     previous_value = value;
@@ -332,6 +370,39 @@ struct FastMomentPolicy : StreamPolicy {
       if (kb == k)
         ++b;
       out.vs.push_back({k, walk.eval(k) + tv});
+    }
+    out.normalize();
+    return out;
+  }
+};
+
+struct CursorStreamPolicy : StreamPolicy {
+  template <class F, class Curve>
+  static F window(const F &f, i64 q, const Curve &t) {
+    return stream_window_sub<F, Curve, true>(f, q, t);
+  }
+};
+struct CursorMomentPolicy : FastMomentPolicy {
+  template <class F, class Curve>
+  static F window(const F &f, i64 q, const Curve &t) {
+    return stream_window_sub<F, Curve, true>(f, q, t);
+  }
+  template <class F>
+  static F combine(const F &f, const sweep_trials::FastMomentCurve &t) {
+    F out;
+    out.vs.reserve(f.vs.size() + t.knot_count());
+    size_t a = 0, b = 0;
+    Walker<F> fv(f);
+    CurveCursor tv(t);
+    while (a < f.vs.size() || b < t.knot_count()) {
+      const i64 ka = a < f.vs.size() ? f.vs[a].k : INT64_MAX,
+                kb = b < t.knot_count() ? t.knot(b) : INT64_MAX,
+                k = std::min(ka, kb);
+      if (ka == k)
+        ++a;
+      if (kb == k)
+        ++b;
+      out.vs.push_back({k, fv.eval(k) + tv.eval(k)});
     }
     out.normalize();
     return out;
