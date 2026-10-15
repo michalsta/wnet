@@ -337,9 +337,14 @@ def test_grouped_grid_ties_keep_exact_marginals_and_peak_mapping(storage, with_d
     emp = d1([100.0, 100.0 + 2e-12], [2.0, 3.0])
     theos = [d1([100.0 - 1e-12], [1.0]), d1([100.0 + 3e-12], [1.0])]
     graph = WassersteinNetwork(
-        emp, theos, DistanceMetric.LINF, split_distance=4.0,
-        solver=ConvexSweep(storage=storage), p=2,
-        round_max_distance=False, intensity_scale=64,
+        emp,
+        theos,
+        DistanceMetric.LINF,
+        split_distance=4.0,
+        solver=ConvexSweep(storage=storage),
+        p=2,
+        round_max_distance=False,
+        intensity_scale=64,
     )
     graph.set_cost_scaling(0)
     graph.add_independent_asymmetric_trash(C_EXP, C_THEO)
@@ -365,5 +370,6 @@ def test_grouped_grid_ties_keep_exact_marginals_and_peak_mapping(storage, with_d
             more[j] += 1 / 64
             graph.solve(more)
             assert (graph.total_cost() - original) * 64 == pytest.approx(
-                gradients[j], abs=1e-10,
+                gradients[j],
+                abs=1e-10,
             )

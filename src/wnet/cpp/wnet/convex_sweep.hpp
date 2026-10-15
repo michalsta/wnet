@@ -206,7 +206,8 @@ struct BasicPLF {
             static thread_local std::vector<V> out;
             keys.clear();
             out.clear();
-            auto a = vs.begin(), b = other.vs.begin();
+            auto a = vs.begin();
+            auto b = other.vs.begin();
             while (a != vs.end() || b != other.vs.end()) {
                 i64 k;
                 if (b == other.vs.end() || (a != vs.end() && a->k < b->k))
