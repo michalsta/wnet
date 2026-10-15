@@ -132,3 +132,9 @@ require p=2). It keeps a monotone evaluator over profit knots, reuses endpoint
 values and uses a cached integer segment slope when exact. This preserves the
 unfused subtraction's amortized access pattern instead of introducing repeated
 binary searches during fusion. The same ungrouped marginal safeguard applies.
+
+`test_full.cpp` optionally verifies an entire fixture with an independent LEMON
+CostScaling model. It enumerates every profitable pair (default cap: 8 million;
+exceeding the cap aborts rather than truncating). Build with the same include
+paths as `test_weighted.cpp`, then run `test_full dataset.cst [pair_limit]`.
+This is a correctness oracle, not a proposed production backend.
