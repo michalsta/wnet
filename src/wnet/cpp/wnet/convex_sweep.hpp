@@ -76,6 +76,23 @@ struct BasicPLF {
     }
 
     void normalize() {
+        if constexpr (std::is_same_v<Storage, breakpoint_storage::FlatProfileStorage>) {
+            size_t n = 0;
+            for (size_t i = 0; i < vs.size(); ++i) {
+                auto x = vs[i];
+                if (n && vs[n - 1].k == x.k) {
+                    vs[n - 1].v = std::max(vs[n - 1].v, x.v);
+                    continue;
+                }
+                while (n >= 2 && products_equal(vs[n - 1].v - vs[n - 2].v, x.k - vs[n - 1].k,
+                                                x.v - vs[n - 1].v, vs[n - 1].k - vs[n - 2].k))
+                    --n;
+                vs[n++] = x;
+            }
+            vs.resize(n);
+            return;
+        }
+
         std::vector<V> out;
         out.reserve(vs.size());
         for (const V& x : vs) {
@@ -132,6 +149,17 @@ struct BasicPLF {
     // suffix_max() when free drops are intended.
     void shift_append(i64 q) {
         if (q <= 0) return;
+        if constexpr (std::is_same_v<Storage, breakpoint_storage::FlatProfileStorage>) {
+            const i64 value = vs.front().v;
+            for (auto &x : vs)
+                x.k += q;
+            vs.insert(vs.begin(), {0, value});
+            normalize();
+            return;
+        }
+
+        if (q <= 0)
+            return;
         if constexpr (requires { vs.shift_append(q); }) { vs.shift_append(q); return; }
         std::vector<V> out;
         out.reserve(vs.size() + 2);
@@ -146,6 +174,17 @@ struct BasicPLF {
     // Restrict the domain to [0, K_new].
     void truncate(i64 K_new) {
         if (K_new >= K()) return;
+        if constexpr (std::is_same_v<Storage, breakpoint_storage::FlatProfileStorage>) {
+            const i64 value = eval(K_new);
+            auto it = vs.lower_bound(K_new);
+            vs.resize(static_cast<size_t>(it - vs.begin()));
+            vs.push_back({K_new, value});
+            normalize();
+            return;
+        }
+
+        if (K_new >= K())
+            return;
         if constexpr (requires { vs.truncate(K_new); }) { vs.truncate(K_new); return; }
         i64 vK = eval(K_new);
         std::vector<V> out;
@@ -162,6 +201,65 @@ struct BasicPLF {
     // In-place pointwise max with `other` (domains may differ; outside its
     // domain a function does not contribute).
     void pointwise_max(const PLF& other) {
+        if constexpr (std::is_same_v<Storage, breakpoint_storage::FlatProfileStorage>) {
+            static thread_local std::vector<i64> keys;
+            static thread_local std::vector<V> out;
+            keys.clear();
+            out.clear();
+            auto a = vs.begin(), b = other.vs.begin();
+            while (a != vs.end() || b != other.vs.end()) {
+                i64 k;
+                if (b == other.vs.end() || (a != vs.end() && a->k < b->k))
+                    k = (a++)->k;
+                else if (a == vs.end() || b->k < a->k)
+                    k = (b++)->k;
+                else {
+                    k = a->k;
+                    ++a;
+                    ++b;
+                }
+                keys.push_back(k);
+            }
+            size_t ia = 0, ib = 0;
+            auto value = [](const auto &data, size_t cursor, i64 k) {
+                if (k > data.back().k)
+                    return NEG_INF;
+                if (k == data.back().k)
+                    return data.back().v;
+                const auto &x = data[cursor];
+                const auto &y = data[cursor + 1];
+                return x.v + mul_div_trunc(y.v - x.v, k - x.k, y.k - x.k);
+            };
+            for (size_t i = 0; i < keys.size(); ++i) {
+                const i64 k = keys[i];
+                while (ia + 1 < vs.size() && vs[ia + 1].k <= k)
+                    ++ia;
+                while (ib + 1 < other.vs.size() && other.vs[ib + 1].k <= k)
+                    ++ib;
+                auto fa = [&](i64 q) { return value(vs, ia, q); };
+                auto fb = [&](i64 q) { return value(other.vs, ib, q); };
+                out.push_back({k, std::max(fa(k), fb(k))});
+                if (i + 1 == keys.size() || keys[i + 1] - k <= 1)
+                    continue;
+                const i64 end = keys[i + 1], d1 = fa(k) - fb(k), d2 = fa(end) - fb(end);
+                if ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) {
+                    i64 lo = k, hi = end;
+                    while (hi - lo > 1) {
+                        const i64 mid = lo + (hi - lo) / 2, d = fa(mid) - fb(mid);
+                        if (d1 > 0 ? d > 0 : d < 0)
+                            lo = mid;
+                        else
+                            hi = mid;
+                    }
+                    out.push_back({lo, std::max(fa(lo), fb(lo))});
+                    out.push_back({hi, std::max(fa(hi), fb(hi))});
+                }
+            }
+            vs.swap(out);
+            normalize();
+            return;
+        }
+
         if constexpr (requires { vs.pointwise_max(other.vs); }) { vs.pointwise_max(other.vs); return; }
         std::vector<i64> ks;
         ks.reserve(vs.size() + other.vs.size());
@@ -265,89 +363,153 @@ inline F sub_pl(const F& a, const F& b) { return addsub_pl<true>(a, b); }
 // Monotone-deque sliding max over candidate breakpoints (vertices and
 // their -q images), with adjacent-integer inserts where the window-edge
 // lines cross between candidates.  O(n log n).
-template<class F>
-inline F windowed_max(const F& f, i64 q) {
+// Emit window-max vertices in order. Between input/shifted knots the only
+// possible winners are the two moving edges and a constant interior maximum.
+// All three crossings matter: an edge can cross an interior plateau without
+// crossing the other edge. Bracket crossings by adjacent integers.
+template <class F, class Emit> inline void window_vertices(const F &f, i64 q, Emit emit) {
     const i64 K = f.K();
-    std::vector<i64> ks;
-    ks.reserve(2 * f.vs.size() + 2);
-    for (auto& x : f.vs) {
-        ks.push_back(x.k);
-        if (x.k - q >= 0) ks.push_back(x.k - q);
-    }
-    ks.push_back(0);
-    ks.push_back(K);
-    std::sort(ks.begin(), ks.end());
-    ks.erase(std::unique(ks.begin(), ks.end()), ks.end());
-    while (!ks.empty() && ks.back() > K) ks.pop_back();
-
-    // Sliding max of interior vertex values over windows (g, g+q):
-    // process candidates in ascending g with a monotone deque of vertex
-    // iterators whose k lies in the open window.  Edge evaluations use
-    // monotone walkers (g and g+q are both ascending).
-    std::deque<decltype(f.vs.begin())> dq;  // vertex iterators, values decreasing
-    auto next_v = f.vs.begin();          // next vertex to admit
-    Walker w_lo(f), w_hi(f);
-    auto win_val = [&](i64 g) -> i64 {
-        i64 hi = std::min(K, g + q);
-        while (next_v != f.vs.end() && next_v->k < hi) {
-            // admit only vertices strictly inside (g, hi); ones at <= g are
-            // evicted below
-            while (!dq.empty() && dq.back()->v <= next_v->v)
+    auto a = f.vs.begin(), b = f.vs.begin();
+    while (b != f.vs.end() && b->k < q)
+        ++b;
+    std::deque<decltype(f.vs.begin())> dq;
+    auto next = f.vs.begin();
+    Walker<F> wl(f), wr(f);
+    i64 prev = -1, pl = 0, pr = 0;
+    while (a != f.vs.end() || b != f.vs.end()) {
+        const i64 ka = a == f.vs.end() ? std::numeric_limits<i64>::max() : a->k;
+        const i64 kb = b == f.vs.end() ? std::numeric_limits<i64>::max() : b->k - q;
+        const i64 g = std::min(ka, kb);
+        if (ka == g)
+            ++a;
+        if (kb == g)
+            ++b;
+        const i64 hi = q >= K - g ? K : g + q;
+        while (next != f.vs.end() && next->k < hi) {
+            while (!dq.empty() && dq.back()->v <= next->v)
                 dq.pop_back();
-            dq.push_back(next_v);
-            ++next_v;
+            dq.push_back(next++);
         }
-        while (!dq.empty() && dq.front()->k <= g) dq.pop_front();
-        i64 m = std::max(w_lo.eval(g), w_hi.eval(hi));
-        if (!dq.empty()) m = std::max(m, dq.front()->v);
-        return m;
-    };
-
-    F out;
-    out.vs.reserve(ks.size() * 2);
-    std::vector<typename F::V> extra;
-    Walker w_c1(f), w_c2(f), w_c3(f), w_c4(f);
-    i64 prev_g = -1, prev_val = 0;
-    for (i64 g : ks) {
-        i64 val = win_val(g);
-        if (prev_g >= 0 && g - prev_g > 1) {
-            // Between candidates the result is the max of the two window
-            // edge lines (interior vertex max is constant between
-            // candidates); insert the integer pair around a crossing.
-            i64 dl = 0, dr = 0;
-            dl = w_c1.eval(prev_g) - w_c2.eval(std::min(K, prev_g + q));
-            dr = w_c3.eval(g) - w_c4.eval(std::min(K, g + q));
-            if ((dl > 0 && dr < 0) || (dl < 0 && dr > 0)) {
-                i64 lo = prev_g, hi2 = g;
-                while (hi2 - lo > 1) {
-                    i64 mid = lo + (hi2 - lo) / 2;
-                    i64 dm = f.eval(mid) - f.eval(std::min(K, mid + q));
-                    if ((dl > 0) ? (dm > 0) : (dm < 0)) lo = mid;
-                    else hi2 = mid;
-                }
-                // evaluate exactly with a fresh scan (rare path)
-                auto exact_at = [&](i64 gg) -> i64 {
-                    i64 hh = std::min(K, gg + q);
-                    if constexpr (requires { f.vs.vertex_argmax(gg,hh); })
-                        return std::max({f.eval(gg),f.eval(hh),f.vs.vertex_argmax(gg,hh).second});
-                    i64 m = std::max(f.eval(gg), f.eval(hh));
-                    for (const auto& x : f.vs) {
-                        if (x.k > gg && x.k < hh) m = std::max(m, x.v);
-                        if (x.k >= hh) break;
-                    }
-                    return m;
+        while (!dq.empty() && dq.front()->k <= prev)
+            dq.pop_front();
+        const i64 interior = dq.empty() ? NEG_INF : dq.front()->v;
+        const i64 left = wl.eval(g), right = wr.eval(hi);
+        if (prev >= 0 && g - prev > 1) {
+            const i64 first[3] = {pl, pr, interior}, last[3] = {left, right, interior};
+            const auto winner = [](const i64 *v) { return size_t(std::max_element(v, v + 3) - v); };
+            if (winner(first) != winner(last)) {
+                i64 extra[6];
+                size_t count = 0;
+                auto value = [&](size_t side, i64 k) {
+                    return side == 2 ? interior : f.eval(side == 0 ? k : (q >= K - k ? K : k + q));
                 };
-                extra.push_back({lo, exact_at(lo)});
-                extra.push_back({hi2, exact_at(hi2)});
+                for (size_t u = 0; u < 3; ++u)
+                    for (size_t v = u + 1; v < 3; ++v) {
+                        const i64 dl = first[u] - first[v], dr = last[u] - last[v];
+                        if (!((dl > 0 && dr < 0) || (dl < 0 && dr > 0)))
+                            continue;
+                        i64 lo = prev, hi2 = g;
+                        while (hi2 - lo > 1) {
+                            const i64 mid = lo + (hi2 - lo) / 2, d = value(u, mid) - value(v, mid);
+                            if (dl > 0 ? d > 0 : d < 0)
+                                lo = mid;
+                            else
+                                hi2 = mid;
+                        }
+                        extra[count++] = lo;
+                        extra[count++] = hi2;
+                    }
+                // At most six keys; insertion sort avoids an allocation.
+                for (size_t j = 1; j < count; ++j) {
+                    const i64 key = extra[j];
+                    size_t at = j;
+                    while (at && extra[at-1] > key) { extra[at] = extra[at-1]; --at; }
+                    extra[at] = key;
+                }
+                for (size_t j = 0; j < count; ++j) {
+                    const i64 k = extra[j];
+                    if ((j && k == extra[j - 1]) || k == prev || k == g)
+                        continue;
+                    emit(k, std::max({value(0, k), value(1, k), interior}));
+                }
             }
         }
-        out.vs.push_back({g, val});
-        prev_g = g;
-        prev_val = val;
+        while (!dq.empty() && dq.front()->k <= g) dq.pop_front();
+        i64 value = std::max(left, right);
+        if (!dq.empty())
+            value = std::max(value, dq.front()->v);
+        emit(g, value);
+        prev = g;
+        pl = left;
+        pr = right;
     }
-    (void)prev_val;
-    for (const auto& x : extra) out.vs.push_back(x);
-    out.vs.sort();
+}
+
+template <class F> inline F windowed_max(const F &f, i64 q) {
+    F out;
+    out.vs.reserve(2 * f.vs.size());
+    window_vertices(f, q, [&](i64 k, i64 v) { out.vs.push_back({k, v}); });
+    out.normalize();
+    return out;
+}
+
+// Monotone evaluator for profit profiles. Their long segments have integral
+// slopes; caching the slope avoids a search and wide division per query.
+// The fallback also supports adjacent-integer crossing segments.
+template <class F> struct ProfitCursor {
+    const F &f;
+    decltype(std::declval<const F &>().vs.begin()) segment;
+    bool cached = false, integral = false;
+    i64 left = 0, right = 0, vl = 0, vr = 0, slope = 0;
+    explicit ProfitCursor(const F &f) : f(f), segment(f.vs.begin()) {}
+    i64 eval(i64 k) {
+        if (k <= 0)
+            return f.vs.front().v;
+        if (k >= f.K())
+            return f.vs.back().v;
+        auto next = segment;
+        while (std::next(next)->k <= k)
+            ++next;
+        if (!cached || next != segment) {
+            segment = next;
+            auto after = std::next(segment);
+            left = segment->k;
+            vl = segment->v;
+            right = after->k;
+            vr = after->v;
+            const i64 delta = vr - vl, span = right - left;
+            integral = delta % span == 0;
+            slope = delta / span;
+            cached = true;
+        }
+        return vl +
+               (integral ? slope * (k - left) : mul_div_trunc(vr - vl, k - left, right - left));
+    }
+};
+
+// Fuse the window envelope and profit subtraction, inserting profit knots
+// by interpolation as the envelope is emitted. No intermediate PLF or copy.
+template <class F> inline F window_sub(const F &f, i64 q, const F &t) {
+    F out;
+    out.vs.reserve(2 * f.vs.size() + t.vs.size());
+    auto knot = t.vs.begin();
+    ProfitCursor<F> cursor(t);
+    i64 prev = -1, pv = 0;
+    window_vertices(f, q, [&](i64 k, i64 v) {
+        while (knot != t.vs.end() && knot->k < k) {
+            const i64 x = knot->k;
+            out.vs.push_back({x, pv + mul_div_trunc(v - pv, x - prev, k - prev) - knot->v});
+            ++knot;
+        }
+        i64 tv;
+        if (knot != t.vs.end() && knot->k == k)
+            tv = (knot++)->v;
+        else
+            tv = cursor.eval(k);
+        out.vs.push_back({k, v - tv});
+        prev = k;
+        pv = v;
+    });
     out.normalize();
     return out;
 }
@@ -455,7 +617,7 @@ void sweep_step(BasicSideState<F>& own, BasicSideState<F>& opp, double z, i64 q,
         trace->own_limit = own.V.K();
     }
     F VT = add_pl(opp.V, T);
-    F newVopp = sub_pl(windowed_max(VT, q), T);
+    F newVopp = window_sub(VT, q, T);
 
     // Flip: match exactly j pendings (all remaining), keep m = q - j fresh
     // units pending on own: flip(m) = VT(j), m = q - j, 0 <= j <= min(K,q).
@@ -489,7 +651,7 @@ void sweep_step(BasicSideState<F>& own, BasicSideState<F>& opp, double z, i64 q,
     {
         // Extend flip to own's domain with an adjacent-integer drop to
         // NEG_INF so interpolation never manufactures values.
-        F fe = flip;
+        F fe = std::move(flip);
         i64 Ko = own.V.K();
         if (fe.K() < Ko) {
             if (fe.K() + 1 <= Ko) fe.vs.push_back({fe.K() + 1, NEG_INF});
@@ -724,6 +886,8 @@ i64 forward_store(const std::vector<Event>& events, ProfitFn profit,
     return std::max<i64>(best, 0);
 }
 
+// Events must be ordered by position, empirical before theoretical at ties,
+// in both orientations when querying one-unit gains. See GroupedEvents.
 // Backward completion pass; composes the extra-unit value at every
 // theoretical event and records it into `composed` (same length as events,
 // NEG_INF elsewhere).  C[side] entering iteration i is the completion
