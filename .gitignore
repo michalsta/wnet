@@ -217,3 +217,12 @@ _skbuild*/
 !/prototypes/*.cpp
 !/prototypes/*.hpp
 !/prototypes/*.py
+
+# Reviewable ConvexSweep experiments; binaries/results remain outside Git.
+!/prototypes/convex_sweep_trials/
+/prototypes/convex_sweep_trials/*
+!/prototypes/convex_sweep_trials/*.hpp
+!/prototypes/convex_sweep_trials/*.cpp
+!/prototypes/convex_sweep_trials/*.inc
+!/prototypes/convex_sweep_trials/*.py
+!/prototypes/convex_sweep_trials/README.md
