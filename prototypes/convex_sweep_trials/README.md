@@ -114,7 +114,7 @@ The same fixture and scale are shared by every variant. The additional
 hemoglobin p=2 auto-scale fixture checks high precision separately.
 
 Use `--variants`, `--bench`, `--results-name`, `--phases`, `--datasets`,
-`--sample-seconds`, and `--repetitions` for isolated refinements or longer
+`--sample-seconds`, `--orders`, and `--repetitions` for isolated refinements or longer
 follow-ups. Build a separate binary with `-DSWEEP_TRIAL_STATS` for untimed
 work counters; timed builds omit counter updates. Keep fixtures, executables,
 logs, plots and the generated comparison report outside the repository.

@@ -12,6 +12,8 @@ int main(int argc, char **argv) {
   const auto v = variant(argv[2]);
   const std::string phase = argv[3];
   const int repeats = argc > 4 ? std::stoi(argv[4]) : 3;
+  if (repeats < 1)
+    throw std::invalid_argument("at least one measured repetition is required");
   if (v.moments && fixture.p != 2)
     throw std::invalid_argument("moments requires quadratic model");
   std::cout << std::setprecision(17)
@@ -65,7 +67,8 @@ int main(int argc, char **argv) {
     if (sample)
       samples.push_back(ms);
     std::cout << "{\"event\":\"sample_done\",\"sample\":" << sample
-              << ",\"ms\":" << ms << ",\"profit\":" << result
+              << ",\"ms\":" << ms << ",\"profit\":"
+              << (phase == "gains" ? "null" : std::to_string(result))
               << ",\"gain_hash\":" << hash
               << ",\"trace_vertices\":" << trace_vertices
 #ifdef SWEEP_TRIAL_STATS
@@ -81,9 +84,13 @@ int main(int argc, char **argv) {
   std::sort(samples.begin(), samples.end());
   std::cout << "{\"event\":\"result\",\"median_ms\":"
             << samples[samples.size() / 2] << ",\"min_ms\":" << samples.front()
-            << ",\"max_ms\":" << samples.back() << ",\"profit\":" << reference
-            << ",\"gain_hash\":" << reference_hash << ",\"real_cost\":"
-            << (fixture.base - reference) /
-                   (double(fixture.scale) * fixture.intensity)
-            << "}\n";
+            << ",\"max_ms\":" << samples.back() << ",\"profit\":"
+            << (phase == "gains" ? "null" : std::to_string(reference))
+            << ",\"gain_hash\":" << reference_hash << ",\"real_cost\":";
+  if (phase == "gains")
+    std::cout << "null";
+  else
+    std::cout << (fixture.base - reference) /
+                     (double(fixture.scale) * fixture.intensity);
+  std::cout << "}\n";
 }
