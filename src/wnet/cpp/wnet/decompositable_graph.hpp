@@ -249,10 +249,11 @@ struct ConvexPL {
 }  // namespace slopedp_detail
 
 //#include "pylmcf/py_support.h"
-#include "graph_elements.hpp"
 #include "convex_sweep.hpp"
-#include "distribution.hpp"
+#include "convex_sweep_events.hpp"
 #include "distances.hpp"
+#include "distribution.hpp"
+#include "graph_elements.hpp"
 
 #include <iostream>
 #include <cstdint>
@@ -1576,16 +1577,20 @@ public:
         VALUE_TYPE profit = 0;
         std::conditional_t<WithDuals, std::vector<convex_sweep::Match>, convex_sweep::NoTraceStorage> matching;
         if (tau > 0 && chained && E > 0 && T > 0) {
-            std::vector<convex_sweep::Event> ev;
-            ev.reserve(2 * P);
+            convex_sweep::GroupedEvents<WithDuals> grouped;
+            grouped.events.reserve(2 * P);
             for (size_t p = 0; p < P; ++p) {
-                if (e[p] > 0) ev.push_back({_sweep_grid_pos[p], 0, e[p], p});
-                if (t[p] > 0) ev.push_back({_sweep_grid_pos[p], 1, t[p], p});
+                if (e[p] > 0)
+                    grouped.add(_sweep_grid_pos[p], 0, e[p], p);
+                if (t[p] > 0)
+                    grouped.add(_sweep_grid_pos[p], 1, t[p], p);
             }
+            grouped.finish();
+            const auto &ev = grouped.events;
             if constexpr (WithDuals) {
                 auto result = convex_sweep::sweep_solve<true, Profile>(ev, profit_fn, radius);
                 profit = result.profit;
-                matching = std::move(result.matches);
+                matching = grouped.expand(result.matches);
                 _sweep_trace_records = result.records;
                 _sweep_trace_vertices = result.vertices;
                 _sweep_matched_pairs = matching.size();
@@ -1692,39 +1697,43 @@ public:
         };
 
         // Events with zero-count theoretical probes at every theo-hosting
-        // position; theo_event_pos[i] = chain position of theo event i.
-        auto run_orientation = [&](bool mirror,
-                                   std::vector<VALUE_TYPE>& gains) {
-            std::vector<convex_sweep::Event> ev;
-            std::vector<size_t> theo_pos_of_event;
-            ev.reserve(2 * P);
-            theo_pos_of_event.reserve(2 * P);
+        // position, grouped after integer quantization. Keep zero-capacity
+        // targets in the mapping so they can receive first-unit gains.
+        auto run_orientation = [&](bool mirror, std::vector<VALUE_TYPE> &gains) {
+            convex_sweep::GroupedEvents<true> grouped;
+            grouped.events.reserve(2 * P);
             auto emit = [&](size_t p) {
                 const double z =
                     mirror ? -_sweep_grid_pos[p] : _sweep_grid_pos[p];
                 if (e[p] > 0) {
-                    ev.push_back({z, 0, e[p]});
-                    theo_pos_of_event.push_back(SIZE_MAX);
+                    grouped.add(z, 0, e[p], p);
                 }
                 if (_sdp_sink_arc[p] >= 0) {
-                    ev.push_back({z, 1, t[p]});
-                    theo_pos_of_event.push_back(p);
+                    grouped.add(z, 1, t[p], p);
                 }
             };
             if (mirror)
-                for (size_t p = P; p-- > 0;) emit(p);
+                for (size_t p = P; p-- > 0;)
+                    emit(p);
             else
-                for (size_t p = 0; p < P; ++p) emit(p);
+                for (size_t p = 0; p < P; ++p)
+                    emit(p);
+            grouped.finish();
+            const auto &ev = grouped.events;
             std::vector<convex_sweep::BasicSnapshot<Profile>> snaps;
             const convex_sweep::i64 opt =
                 convex_sweep::forward_store(ev, profit_fn, radius, snaps);
             std::vector<convex_sweep::i64> composed;
             convex_sweep::adjoint_compose(ev, profit_fn, snaps, composed);
             for (size_t i = 0; i < ev.size(); ++i) {
-                if (theo_pos_of_event[i] == SIZE_MAX) continue;
+                if (ev[i].side != 1)
+                    continue;
                 const convex_sweep::i64 g = composed[i] - opt;
-                VALUE_TYPE& slot = gains[theo_pos_of_event[i]];
-                if ((VALUE_TYPE)g > slot) slot = (VALUE_TYPE)g;
+                for (const auto &part : grouped.parts[i]) {
+                    VALUE_TYPE &slot = gains[part.index];
+                    if ((VALUE_TYPE)g > slot)
+                        slot = (VALUE_TYPE)g;
+                }
             }
         };
         std::vector<VALUE_TYPE> gains(P, 0);

@@ -326,3 +326,44 @@ def test_update_positions_and_get_gradient_not_implemented():
     W.solve()
     with pytest.raises(NotImplementedError, match="ConvexSweep"):
         W.update_positions_and_get_gradient(emp, theos)
+
+
+@pytest.mark.parametrize("storage", ["flat", "tree", "augmented"])
+@pytest.mark.parametrize("with_duals", [False, True])
+def test_grouped_grid_ties_keep_exact_marginals_and_peak_mapping(storage, with_duals):
+    # Different native positions collapse onto one cost-grid coordinate. The
+    # target peaks bracket empirical peaks in the original tie order; reversing
+    # that order alone cannot ensure a leftward partner for the extra unit.
+    emp = d1([100.0, 100.0 + 2e-12], [2.0, 3.0])
+    theos = [d1([100.0 - 1e-12], [1.0]), d1([100.0 + 3e-12], [1.0])]
+    graph = WassersteinNetwork(
+        emp, theos, DistanceMetric.LINF, split_distance=4.0,
+        solver=ConvexSweep(storage=storage), p=2,
+        round_max_distance=False, intensity_scale=64,
+    )
+    graph.set_cost_scaling(0)
+    graph.add_independent_asymmetric_trash(C_EXP, C_THEO)
+    graph.build()
+    # Exercise invalidation, disappearance and reactivation of grouped supply.
+    for weights in ([3.0, 1.0], [0.0, 0.0], [0.0, 4.0], [4.0, 0.0], [3.0, 1.0]):
+        graph.solve(weights, with_duals=with_duals)
+        original = graph.total_cost()
+        gradients = np.asarray(graph.spectrum_proportion_derivatives())
+        np.testing.assert_allclose(gradients, [-C_EXP, -C_EXP], atol=1e-12)
+        signals = graph.signal_part_derivatives()
+        assert set(signals) == {0, 1}
+        for spectrum in signals.values():
+            assert set(spectrum) == {0}
+            assert spectrum[0] == pytest.approx(-C_EXP, abs=1e-12)
+        if with_duals:
+            cut = graph.dual_cut()
+            assert cut["intercept"] + cut["gradient"] @ weights <= original + 1e-12
+            assert cut["upper_bound"] >= original - 1e-12
+        # Exactly one integer capacity unit, avoiding finite-difference tolerance.
+        for j in range(2):
+            more = list(weights)
+            more[j] += 1 / 64
+            graph.solve(more)
+            assert (graph.total_cost() - original) * 64 == pytest.approx(
+                gradients[j], abs=1e-10,
+            )

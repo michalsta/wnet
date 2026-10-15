@@ -23,6 +23,36 @@ constant-factor work is allocation churn in the PL engine (buffer reuse,
 op fusion), plus optional windowed-max output slimming.  Written 2026-08-29;
 the sections below are the original design plus resolved-risk annotations.
 
+## Event and profile invariants
+
+The production sweep aggregates integer supplies by grid coordinate and side.
+Empirical and theoretical supplies remain separate. Traced aggregate matches
+are expanded to the original peak capacities before recovering a dual; a
+cost-only solve does not allocate the expansion map.
+
+At every coordinate, empirical events precede theoretical events in **both**
+orientations. The marginal composition queries an extra theoretical unit that
+matches an already-seen empirical block. The reverse sweep covers a strictly
+rightward partner; zero-distance partners must be available in the forward
+composition at ties. Reversing the original peak order alone is insufficient:
+`T(3), E(5), T(1)` at one coordinate becomes `T(4), E(5)` in both directions
+under first-seen grouping, hiding a profitable fifth match. Canonical ordering
+fixes this without changing the adjoint recurrence or adding re-solves.
+Zero-capacity theoretical locations remain probes and receive the group's
+one-unit gain, including when other members of the group carry positive mass.
+
+Flat profiles normalize, shift and truncate in place; maxima merge sorted
+knots with reusable thread-local scratch storage. A common window-vertex
+emitter accounts for both moving edges **and** the interior plateau. The fused
+transition subtracts the profit curve as vertices are emitted, interpolating
+at intervening profit knots and caching its monotone segment cursor.
+
+`tests/test_convex_sweep_native.py` compiles the production headers and checks
+these contracts against an independent all-pairs capacitated-flow oracle and
+integer enumeration of the PL operations. No installed extension is needed
+for those checks. The Python sweep and certificate suites cover dispatch,
+trash regimes, peak mapping, quantization collisions and cache invalidation.
+
 ## 1. Problem
 
 For 1-D data with `p == 1`, wnet solves the inner transport problem with the
