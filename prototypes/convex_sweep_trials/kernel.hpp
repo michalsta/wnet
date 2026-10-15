@@ -54,10 +54,11 @@ constexpr i64 NEG_INF = std::numeric_limits<i64>::min() / 4;
 // Piecewise-linear function on integer domain [0, K].
 // ---------------------------------------------------------------------- //
 template <class Storage = breakpoint_storage::FlatProfileStorage,
-          bool Linear = false>
+          bool Linear = false, bool ExactWindow = false>
 struct BasicPLF {
   using PLF = BasicPLF;
   static constexpr bool linear = Linear;
+  static constexpr bool exact_window = ExactWindow;
   struct V {
     i64 k;
     i64 v;
@@ -348,6 +349,9 @@ struct BasicPLF {
 
 using PLF = BasicPLF<>;
 using LinearPLF = BasicPLF<breakpoint_storage::FlatProfileStorage, true>;
+using ExactPLF = BasicPLF<breakpoint_storage::FlatProfileStorage, false, true>;
+using ExactLinearPLF =
+    BasicPLF<breakpoint_storage::FlatProfileStorage, true, true>;
 using TreePLF = BasicPLF<breakpoint_storage::MapStorage>;
 using AugmentedPLF = BasicPLF<breakpoint_storage::AugmentedStorage<>>;
 
@@ -414,7 +418,80 @@ template <class F> inline F sub_pl(const F &a, const F &b) {
 // Monotone-deque sliding max over candidate breakpoints (vertices and
 // their -q images), with adjacent-integer inserts where the window-edge
 // lines cross between candidates.  O(n log n).
+// Correct all three possible winners: lower edge, upper edge and the
+// maximum interior vertex. The inherited primitive only brackets edge-edge
+// crossings. Kept as an explicit dependency of grouped marginal experiments.
+template <class F> F exact_window(const F &f, i64 q) {
+  const i64 K = f.K();
+  std::vector<i64> keys;
+  for (const auto &x : f.vs) {
+    keys.push_back(x.k);
+    if (x.k >= q)
+      keys.push_back(x.k - q);
+  }
+  std::sort(keys.begin(), keys.end());
+  keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+  F out;
+  std::deque<size_t> dq;
+  size_t next = 0;
+  i64 prev = -1;
+  for (i64 g : keys) {
+    const i64 hi = std::min(K, g + q);
+    while (next < f.vs.size() && f.vs[next].k < hi) {
+      while (!dq.empty() && f.vs[dq.back()].v <= f.vs[next].v)
+        dq.pop_back();
+      dq.push_back(next++);
+    }
+    while (!dq.empty() && f.vs[dq.front()].k <= prev)
+      dq.pop_front();
+    const i64 interior = dq.empty() ? NEG_INF : f.vs[dq.front()].v;
+    auto values = [&](i64 k) {
+      return std::array<i64, 3>{f.eval(k), f.eval(std::min(K, k + q)),
+                                interior};
+    };
+    if (prev >= 0 && g - prev > 1) {
+      const auto a = values(prev), b = values(g);
+      std::vector<i64> extra;
+      for (size_t u = 0; u < 3; ++u)
+        for (size_t v = u + 1; v < 3; ++v) {
+          const i64 first = a[u] - a[v], last = b[u] - b[v];
+          if (!((first > 0 && last < 0) || (first < 0 && last > 0)))
+            continue;
+          i64 lo = prev, right = g;
+          while (right - lo > 1) {
+            const i64 mid = lo + (right - lo) / 2;
+            const auto at = values(mid);
+            const i64 d = at[u] - at[v];
+            if (first > 0 ? d > 0 : d < 0)
+              lo = mid;
+            else
+              right = mid;
+          }
+          extra.push_back(lo);
+          extra.push_back(right);
+        }
+      std::sort(extra.begin(), extra.end());
+      extra.erase(std::unique(extra.begin(), extra.end()), extra.end());
+      for (i64 k : extra) {
+        const auto v = values(k);
+        out.vs.push_back({k, *std::max_element(v.begin(), v.end())});
+      }
+    }
+    while (!dq.empty() && f.vs[dq.front()].k <= g)
+      dq.pop_front();
+    i64 value = std::max(f.eval(g), f.eval(hi));
+    if (!dq.empty())
+      value = std::max(value, f.vs[dq.front()].v);
+    out.vs.push_back({g, value});
+    prev = g;
+  }
+  out.normalize();
+  return out;
+}
+
 template <class F> inline F windowed_max(const F &f, i64 q) {
+  if constexpr (F::exact_window)
+    return exact_window(f, q);
   TRIAL_COUNT(window_passes, 1);
   const i64 K = f.K();
   std::vector<i64> ks;
@@ -696,6 +773,9 @@ void sweep_step(BasicSideState<F> &own, BasicSideState<F> &opp, double z, i64 q,
   }
 
   opp.V = newVopp;
+  TRIAL_MAX(largest_state, std::max(own.V.vs.size(), opp.V.vs.size()));
+  TRIAL_MAX(largest_pending_blocks,
+            std::max(own.blocks.size(), opp.blocks.size()));
 
   // Neutral-state sync: V_own(0) and V_opp(0) are the same logical state.
   i64 best0 = std::max(own.V.eval(0), opp.V.eval(0));

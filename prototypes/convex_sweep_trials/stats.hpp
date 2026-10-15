@@ -6,7 +6,7 @@ namespace sweep_trials {
 struct Stats {
   uint64_t normalized_vertices = 0, normalizations = 0, pointwise_merges = 0,
            window_passes = 0, profit_knots = 0, moment_queries = 0,
-           largest_profile = 0;
+           largest_profile = 0, largest_state = 0, largest_pending_blocks = 0;
 };
 inline thread_local Stats stats;
 } // namespace sweep_trials

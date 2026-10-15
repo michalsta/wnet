@@ -77,6 +77,8 @@ int main(int argc, char **argv) {
               << ",\"profit_knots\":" << stats.profit_knots
               << ",\"moment_queries\":" << stats.moment_queries
               << ",\"largest_profile\":" << stats.largest_profile
+              << ",\"largest_state\":" << stats.largest_state
+              << ",\"largest_pending_blocks\":" << stats.largest_pending_blocks
 #endif
               << "}\n"
               << std::flush;

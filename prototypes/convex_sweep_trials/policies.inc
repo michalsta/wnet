@@ -41,7 +41,28 @@ template <class Curve> i64 curve_key(const Curve &t, size_t i) {
 // A single window pass emits max-window(f)-T directly. Candidate keys include
 // T's knots, so subtracting a non-affine T never loses a required breakpoint.
 template <class F, class Curve>
+F exact_window_sub(const F &f, i64 q, const Curve &t) {
+  auto w = exact_window(f, q);
+  F out;
+  size_t a = 0, b = 0;
+  Walker<F> walk(w);
+  while (a < w.vs.size() || b < curve_size(t)) {
+    const i64 ka = a < w.vs.size() ? w.vs[a].k : INT64_MAX,
+              kb = b < curve_size(t) ? curve_key(t, b) : INT64_MAX,
+              k = std::min(ka, kb);
+    if (ka == k)
+      ++a;
+    if (kb == k)
+      ++b;
+    out.vs.push_back({k, walk.eval(k) - t.eval(k)});
+  }
+  out.normalize();
+  return out;
+}
+template <class F, class Curve>
 F fused_window_sub(const F &f, i64 q, const Curve &t) {
+  if constexpr (F::exact_window)
+    return exact_window_sub(f, q, t);
   TRIAL_COUNT(window_passes, 1);
   static thread_local std::vector<i64> keys;
   keys.clear();
@@ -179,6 +200,8 @@ template <class Curve> i64 curve_value(const Curve &t, size_t i) {
 // are inserted by interpolation, rather than redoing window work at each one.
 template <class F, class Curve>
 F stream_window_sub(const F &f, i64 q, const Curve &t) {
+  if constexpr (F::exact_window)
+    return exact_window_sub(f, q, t);
   TRIAL_COUNT(window_passes, 1);
   static thread_local std::vector<i64> keys;
   keys.clear();
