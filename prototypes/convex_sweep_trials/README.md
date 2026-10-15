@@ -206,3 +206,17 @@ regressions; they remain covered by full hemoglobin timings and oracle tests.
 Completed refinement/heavy runs also record GNU time's peak RSS; censored runs
 retain sampled RSS/VmHWM lower bounds. Keep each timed source snapshot and its
 binary together when comparing refinements.
+
+`--stage auto` accepts freshly exported `*-p2-auto.cst` fixtures and checks the
+current automatic scale separately from historical matched-scale comparisons.
+It measures perfumes ordinary solves, flow certificates/cost-and-gains, and
+checkpointed certificates/gains; it also checks the other NMR flow pair guards.
+Use `export ... 2 0` to obtain that scale without backend-specific rescaling.
+`nmr_verify fixture.cst [probes_per_component=4]` independently checks the flow
+residual gains against fresh +1 capacity solves on selected original peaks.
+Its verification time is not a benchmark result.
+
+For a fresh checkout, the latest `nmr_bench.cpp` contains both original and
+cached policy variants: compile it as `bench` and copy that executable to
+`bench-v2` before using the combined heavy stage. Historical timed source
+snapshots are retained separately in the external benchmark artifacts.

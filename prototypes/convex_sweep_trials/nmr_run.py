@@ -14,7 +14,9 @@ p = argparse.ArgumentParser()
 p.add_argument("--work", type=Path, required=True)
 p.add_argument("--fixtures", type=Path, required=True)
 p.add_argument(
-    "--stage", choices=["small", "ordinary", "heavy", "refinement"], required=True
+    "--stage",
+    choices=["small", "ordinary", "heavy", "refinement", "auto"],
+    required=True,
 )
 p.add_argument("--binary", type=Path)
 p.add_argument("--rss-gib", type=float, default=8)
@@ -89,6 +91,18 @@ elif a.stage == "ordinary":
                     90 if fixture.startswith("perfumes") else 30,
                 )
             )
+elif a.stage == "auto":
+    for v, phase, budget in [
+        ("baseline", "solve", 90),
+        ("flow", "solve", 90),
+        ("flow", "dual", 90),
+        ("flow", "both", 90),
+        ("checkpoint256-groupdual", "dual-compare", 180),
+        ("checkpoint256", "gains", 240),
+    ]:
+        cases.append(("perfumes-p2-auto", v, phase, 1, 0, budget))
+    for ds in ["shim", "pinene", "benzyl-anisaldehyde"]:
+        cases.append((ds + "-p2-auto", "flow", "solve", 1, 0, 30))
 elif a.stage == "refinement":
     for fixture in ["hemoglobin-p2-matched", "hemoglobin-p2-auto"]:
         for phase in ["solve", "dual", "gains"]:
@@ -110,7 +124,7 @@ else:
         cases.append((fixture, v, phase, 1, 0, timeout))
 # Reproducible ordering, avoiding a systematic optimization-last bias.
 random.Random(
-    1251 + ["small", "ordinary", "heavy", "refinement"].index(a.stage)
+    1251 + ["small", "ordinary", "heavy", "refinement", "auto"].index(a.stage)
 ).shuffle(cases)
 
 
