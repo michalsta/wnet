@@ -39,6 +39,8 @@ template <class F> void test(std::mt19937_64 &rng, size_t trials) {
         shifted.shift_append(q);
         auto maxed = f;
         maxed.pointwise_max(t);
+        auto self = f;
+        self.pointwise_max(self);
         ProfitCursor cursor(t);
         for (i64 x = 0; x <= k; ++x) {
             i64 expected = NEG_INF, suf = NEG_INF;
@@ -53,6 +55,7 @@ template <class F> void test(std::mt19937_64 &rng, size_t trials) {
             require(fused.eval(x) == separate.eval(x), "fusion parity");
             require(cursor.eval(x) == t.eval(x), "profit cursor");
             require(maxed.eval(x) == std::max(f.eval(x), t.eval(x)), "pointwise max");
+            require(self.eval(x) == f.eval(x), "self-aliased max");
             if (x <= cut)
                 require(truncate.eval(x) == f.eval(x), "truncate");
         }
@@ -75,17 +78,27 @@ int main(int argc, char **argv) {
     require(windowed_max(f, 10).eval(1) == 191, "plateau regression");
     // Cursor fallback for nonintegral slopes, and exact wide interpolation.
     for (i64 end : {i64(3), i64(-3)}) {
-        PLF f; f.vs = {{0, 0}, {10, end}};
+        PLF f;
+        f.vs = {{0, 0}, {10, end}};
         ProfitCursor cursor(f);
-        for (i64 k = 0; k <= 10; ++k) require(cursor.eval(k) == f.eval(k), "fractional cursor");
+        for (i64 k = 0; k <= 10; ++k)
+            require(cursor.eval(k) == f.eval(k), "fractional cursor");
     }
-    PLF wide; wide.vs = {{0, 0}, {1000000000000LL, 3000000000000000000LL}};
+    PLF wide;
+    wide.vs = {{0, 0}, {1000000000000LL, 3000000000000000000LL}};
     ProfitCursor cursor(wide);
     for (i64 k : {i64(0), i64(1), i64(999999999999LL), i64(1000000000000LL)})
         require(cursor.eval(k) == wide.eval(k), "wide cursor");
-    std::thread a([] { std::mt19937_64 r(1); test<PLF>(r, 200); });
-    std::thread b([] { std::mt19937_64 r(2); test<PLF>(r, 200); });
-    a.join(); b.join();
+    std::thread a([] {
+        std::mt19937_64 r(1);
+        test<PLF>(r, 200);
+    });
+    std::thread b([] {
+        std::mt19937_64 r(2);
+        test<PLF>(r, 200);
+    });
+    a.join();
+    b.join();
     test<PLF>(rng, n);
     test<TreePLF>(rng, n / 10);
     test<AugmentedPLF>(rng, n / 10);
