@@ -193,6 +193,13 @@ int main(int argc, char **argv) {
     check<AugmentedPLF>(minimal);
     check<PLF>(make({}, {}, {}, 0));
     check<PLF>(make({0, 1, 2}, {1000000000, 0, 0}, {0, 0, 1000000000}, 1000000));
+    // An integer gain of one on top of an optimum beyond double precision.
+    auto large = make({0, 0, 1}, {5000000000000001LL, 0, 0}, {0, 5000000000000000LL, 0}, 2);
+    require(oracle(large) == 10000000000000000LL, "large baseline");
+    require(gains<PLF>(large)[2] == 1, "unit gain beyond double precision");
+    check<PLF>(large);
+    check<TreePLF>(large);
+    check<AugmentedPLF>(large);
     check<PLF>(regression);
     check<TreePLF>(regression);
     check<AugmentedPLF>(regression);
