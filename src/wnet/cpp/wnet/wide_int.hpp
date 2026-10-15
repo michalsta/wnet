@@ -18,11 +18,15 @@
 //                                  quotient assumed to fit in int64.
 //   * products_equal(a, b, c, d) - exact a * b == c * d.
 //
+// Clang targeting the MSVC ABI defines __int128 but links no compiler-rt
+// builtins by default, so 128-bit division (__divti3) fails to link; the
+// fallback is used there as well.
+//
 // Define WNET_FORCE_SOFT_INT128 to build the fallback on a compiler that has
 // __int128, which is how the test suite exercises it off Windows.
 namespace wide_int {
 
-#if defined(__SIZEOF_INT128__) && !defined(WNET_FORCE_SOFT_INT128)
+#if defined(__SIZEOF_INT128__) && !defined(_MSC_VER) && !defined(WNET_FORCE_SOFT_INT128)
 #define WNET_NATIVE_INT128 1
 #else
 #define WNET_NATIVE_INT128 0

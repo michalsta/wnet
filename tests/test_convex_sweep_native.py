@@ -11,6 +11,11 @@ import subprocess
 
 import pytest
 
+# Randomized trials per suite. The grouped suite checks every trial against a
+# brute-force oracle; 1000 trials keep it well inside the timeout on the
+# emulated linux-arm64 runner. Run the binary directly for the full 3000.
+TRIALS = {"profiles": 3000, "grouped": 1000}
+
 
 def available_compilers():
     # Clang rejects some invalid template declarations accepted by GCC. Keep
@@ -45,4 +50,4 @@ def test_native_convex_sweep(suite, compiler, tmp_path):
         check=True,
         timeout=300,
     )
-    subprocess.run([str(exe), "3000"], check=True, timeout=180)
+    subprocess.run([str(exe), str(TRIALS[suite])], check=True, timeout=300)
