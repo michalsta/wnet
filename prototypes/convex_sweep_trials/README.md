@@ -138,3 +138,54 @@ CostScaling model. It enumerates every profitable pair (default cap: 8 million;
 exceeding the cap aborts rather than truncating). Build with the same include
 paths as `test_weighted.cpp`, then run `test_full dataset.cst [pair_limit]`.
 This is a correctness oracle, not a proposed production backend.
+
+## Further NMR prototypes (2026-10-15)
+
+The `nmr_*` files are a second isolated series based on production `a88135e`.
+They do not change production dispatch or defaults. `nmr_kernel.hpp` is a
+namespaced copy of that production kernel with curve policies and an adjoint
+range entry point; `nmr_replay.hpp` adds replay without changing production.
+
+- `flow`: LEMON CostScaling on every profitable pair of aggregated coordinates.
+  Duals come directly from flow potentials. Exact discrete gains use one
+  Dijkstra pass through the optimal residual graph; zero-supply theoretical
+  locations and sufficient residual pair capacity are retained.
+- `checkpoint64`, `checkpoint256`, `checkpoint1024`: save full states at that
+  spacing and replay each block in reverse order for traceback or the adjoint.
+  The final replay snapshot includes the next event's prune. Both orientations
+  retain the production empirical-before-theoretical tie ordering.
+- `virtual`: feed a read-only `V+T` knot-union view directly into the window
+  operation and flip, eliminating its intermediate profile allocation.
+- `groupdual`: recover on all unique grid coordinates and broadcast potentials
+  to original peaks, retaining zero-supply coordinates for future weights.
+- `quadratic`: use prefix mass/position/squared-position moments as a lazy T
+  curve, then feed the virtual sum into window/flip. Intermediate moments use
+  128 or 256 bits as needed. The final DP envelopes remain materialized.
+- `checkpoint256-groupdual`, `virtual-checkpoint256`,
+  `quadratic-checkpoint256`: combinations. The latter two use grouped duals.
+
+Build `nmr_test.cpp` (asserts enabled) and `nmr_bench.cpp` (-O3 -DNDEBUG) with
+`-std=c++20 -Isrc/wnet/cpp -Isrc/wnet/cpp/wnet -I<installed-pylmcf>/cpp`.
+The test uses its own all-pairs capacitated-flow oracle, explicit +1 re-solves,
+all-pair dual checks, virtual-curve enumeration, wide moments, split events,
+empty sides, and small plus >1024-event replay boundaries.
+
+`nmr_bench fixture.cst variant solve|dual|gains|both [reps=3] [pair_limit=8000000]
+[warmup=1]` prints readiness, per-sample values and a final median. `both`
+measures a complete cost-and-gain evaluation; flow reuses its one solved flow,
+whereas the sweep runs its ordinary solve and two marginal orientations.
+A flow `gains` call includes constructing/solving its primal (conservative
+relative to sweep gains, which excludes the preceding ordinary solve).
+`dual-compare` on a checkpoint variant reuses one traceback to measure original
+and grouped dual recovery separately. Its overall time includes BOTH recovery
+calls and is not an ordinary dual timing.
+
+`nmr_run.py --work <dir> --fixtures <dir> --stage small|ordinary|heavy` runs
+sequentially on CPU 4. This series sets **no address-space cap**. It samples
+VmRSS/VmHWM and VmSize every 20 ms, terminates above an 8 GiB sampled resident
+budget, and records censored outcomes. Very short processes may have
+under-sampled memory peaks. Explicit flow graph construction has an 8-million
+pair budget per component and rejects rather than truncates. Small fixtures
+use one warmup and three measured calls; heavy full-data attempts use one
+measured call without warmup. Timers include grouping, graph/moment setup and
+per-call work; fixture loading and cost-model construction are excluded.
