@@ -231,8 +231,13 @@ std::vector<I> gains_policy(const Input &in, const Variant &v) {
 inline std::vector<I> gains(const Input &in, const Variant &v) {
   if (v.moments && in.p != 2)
     throw std::invalid_argument("moment policy requires p=2");
-  return v.linear ? gains_policy<k::LinearPLF>(in, v)
-                  : gains_policy<k::PLF>(in, v);
+  // The existing adjoint is not invariant under merged event blocks on
+  // real data. Preserve its original event sequence until that dependency
+  // is resolved; grouping remains enabled for cost and certificate solves.
+  Variant derivative = v;
+  derivative.group = false;
+  return v.linear ? gains_policy<k::LinearPLF>(in, derivative)
+                  : gains_policy<k::PLF>(in, derivative);
 }
 } // namespace sweep_trials
 #endif

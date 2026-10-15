@@ -55,8 +55,16 @@ int main(int argc, char **argv) {
       real[i] = (i ? real[i - 1] : 0) + (random() % 7) * .03;
       in.e[i] = random() % 100000000;
       in.t[i] = random() % 100000000;
+      if (test % 2) {
+        const bool theoretical = random() % 2;
+        in.theo[i] = theoretical;
+        if (theoretical)
+          in.e[i] = 0;
+        else
+          in.t[i] = 0;
+      }
     }
-    const double p = std::vector<double>{1, 1.5, 2, 3}[test % 4];
+    const double p = std::vector<double>{1, 1.5, 2, 3}[(test / 2) % 4];
     in.grid(real, 1 + random() % 1000000, p, random() % 1000000);
     const I expected = oracle(in);
     for (auto name :
@@ -78,12 +86,13 @@ int main(int argc, char **argv) {
         dual(in, trace);
         if (test < 40) {
           const auto g = gains(in, v);
-          for (size_t i = 0; i < n; ++i) {
-            auto more = in;
-            ++more.t[i];
-            if (g[i] != oracle(more) - expected)
-              throw std::runtime_error("weighted marginal mismatch");
-          }
+          for (size_t i = 0; i < n; ++i)
+            if (in.theo[i]) {
+              auto more = in;
+              ++more.t[i];
+              if (g[i] != oracle(more) - expected)
+                throw std::runtime_error("weighted marginal mismatch");
+            }
         }
       } catch (const std::exception &e) {
         std::cerr << "case=" << test << " variant=" << name << " p=" << p

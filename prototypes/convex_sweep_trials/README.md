@@ -17,9 +17,12 @@ checked there; these files are not a drop-in patch to merge wholesale.
   experimental namespace. Tests compare it with the production kernel too.
 - `group`: aggregate supplies with identical grid coordinate and side, after
   integer quantization. Do not cancel empirical against theoretical supply.
-  Grouping includes zero-count theoretical events for marginal probes. Traces
-  expand aggregate matches back to original peak capacities before recovering
-  production dual potentials.
+  Traces expand aggregate matches back to original peak capacities before
+  recovering production dual potentials. The existing adjoint is not invariant
+  to merged event blocks on full hemoglobin data: an initial grouped marginal
+  reported 0 where a direct one-unit re-solve gives 1. Therefore the final
+  marginal dispatcher preserves the original ungrouped event sequence. Grouping
+  is enabled only for ordinary/certified solves, not for discrete marginals.
 - `linear`: merge sorted breakpoint streams, use segment cursors for maxima,
   normalize in place, reuse pointwise-max buffers, and shift/truncate arrays in
   place. Generic integer crossing searches are retained.
@@ -72,10 +75,14 @@ the software-wide production arithmetic too. Do not define NDEBUG for tests.
 `diagnose_window.cpp` is a separate diagnostic: the existing production generic
 window operation can overestimate the maximum of an arbitrary PL profile when
 an edge crosses an interior plateau. It prints a small counterexample. This
-is shared baseline behavior, not evidence of non-Monge costs; none of the
-reachable-state oracle suites has reproduced an objective discrepancy. This
-experiment does not repair production's generic window implementation. Keep
-that limitation distinct from the optimization test results.
+is shared baseline behavior, not evidence of non-Monge costs. No tested
+ordinary matching objective has disagreed with its oracle. The separate
+merged-adjoint discrepancy is reproducible with
+`diagnose_grouped_marginals.cpp full-data.cst`; that diagnostic deliberately
+bypasses the safe ungrouped marginal dispatcher. The `ExactPLF`/`ExactLinearPLF` diagnostic types and `test_window.cpp` check a
+three-winner window implementation against direct enumeration. That isolated
+correction does not resolve the merged-adjoint discrepancy, and is not enabled
+in the benchmark dispatcher or production. Keep these findings distinct.
 
 ## Full-data benchmarking
 

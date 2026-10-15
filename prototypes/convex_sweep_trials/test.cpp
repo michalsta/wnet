@@ -120,6 +120,14 @@ int main(int argc, char **argv) {
       real[i] = (i ? real[i - 1] : 0) + (random() % 5) * .031;
       in.e[i] = random() % 3;
       in.t[i] = random() % 2;
+      if (trial % 2) {
+        const bool theoretical = random() % 2;
+        in.theo[i] = theoretical;
+        if (theoretical)
+          in.e[i] = 0;
+        else
+          in.t[i] = 0;
+      }
     }
     in.grid(real, 1 + random() % 1000, p, random() % 200);
     check(in, trial < 150);
