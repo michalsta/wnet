@@ -1,5 +1,31 @@
 # Release notes
 
+## Unreleased
+
+### New APIs
+
+- `dual_cut()` reports allowances for cost quantization alongside its
+  quantized-cost certificate (whose values are unchanged):
+  `cost_rounding_error` (how far the current solution's real cost can exceed
+  its quantized cost), `cost_round_up_ratio` and `cost_lower_slack`. Together
+  they turn the cut into one for the real-cost problem; see
+  [Dual cuts](docs/dual_cuts.md#cost-quantization). A coarse cost grid now shows
+  up as a large `cost_rounding_error` instead of passing unnoticed.
+- `NetworkSimplex.repair_max_nodes` gates warm dual repair by subgraph size:
+  subgraphs with more nodes restart cold when the cheap tree patch fails
+  (as `warm_violation_limit = 0`); smaller ones keep `warm_violation_limit`.
+  Default -1 (disabled). On large connected components a repair can cost tens
+  of cold solves; measured on 2-D LC-MS alignment once components percolate:
+  302 s with repair vs 16 s gated.
+
+### Changed
+
+- With pylmcf's deterministic warm-repair budget (work units instead of wall
+  time), a solve sequence no longer depends on timing: previously an interrupt
+  during a microsecond-scale repair on a tiny subgraph could trip the budget,
+  return a different optimal basis, and steer an outer optimizer to a
+  different answer from run to run.
+
 ## 1.5.0
 
 ### New APIs

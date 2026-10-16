@@ -115,6 +115,41 @@ windows repeatedly; it does not guarantee linear recovery time. Mapping and
 broadcasting use `O(P + U + M)` temporary storage for `P` original position
 blocks. Only `O(P)` dual coefficients remain cached for cut queries.
 
+## Cost quantization
+
+The certificate above is exact for the network's quantized costs: each
+matching, chain or trash cost `c` is priced as `q = quantize_cost(c)` on the
+cost grid `S`. To certify the real-cost problem instead, `dual_cut()` also
+returns, in real units:
+
+- `cost_rounding_error`: how far the current solution's real cost can exceed
+  its quantized cost — the flow-weighted `|S c - q| / S` over the matching and
+  chain arcs it uses, plus the trash-price rounding paid at most once per unit
+  of mass. ConvexSweep reports no arc flows; it uses its pair-cost model's
+  per-unit bound (`convex_sweep_cost_quantization_error()`) on the matchable
+  mass.
+- `cost_round_up_ratio` (rho): every quantized cost is at most `(1 + rho)`
+  times its real cost, so the quantized optimum, and any cut below it, is at
+  most `(1 + rho)` times the real optimum (real costs are nonnegative). Costs
+  below half a grid unit round down, so `0 <= rho <= 1`.
+- `cost_lower_slack`: ConvexSweep's absolute counterpart of rho, to subtract
+  from the intercept.
+
+A real-cost certificate at the evaluated weights is then
+
+```python
+lower_at_y = (cut["intercept"] + cut["gradient"] @ y) / (1 + cut["cost_round_up_ratio"]) \
+             - cut["cost_lower_slack"]
+upper = cut["upper_bound"] + cut["cost_rounding_error"]
+```
+
+On a fine cost grid these allowances are negligible. They matter when the grid
+is coarse: one-grid-step gaps that round to zero make every transport look
+free, and the quantized certificate then "proves" points optimal whose real
+cost is far from optimal. `tests/test_cost_quantization_bounds.py` checks the
+widened bounds against continuous LPs on real costs, and that the unwidened
+ones fail there.
+
 ## Supply error and precision
 
 For dropped rounding mass dE,dT, a conservative bound is

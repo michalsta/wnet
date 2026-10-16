@@ -2762,6 +2762,64 @@ public:
         }
     }
 
+    // Cost-quantization bounds for dual_cut().  The solvers price matching,
+    // chain and trash arcs at q = quantize_cost(c), not at the real cost c,
+    // so a certificate built from the quantized problem must allow for the
+    // difference before it says anything about the real one.
+    //
+    // Upper slack: sum over flow-carrying matching/chain arcs of
+    // flow * |S c - q|, in scaled units (cost scale x intensity scale).  It
+    // bounds how far the current solution's real cost can exceed its
+    // quantized cost.  Trash arcs are left to the caller, which bounds them
+    // per unit of mass (SlopeDP prices trash analytically, off the arcs).
+    // ConvexSweep reports no arc flows; its pair-cost model carries its own
+    // per-unit error bound, charged on the matchable mass.
+    long double cost_rounding_slack_scaled() const {
+        if (_use_sweep()) {
+            _sweep_build_grid();
+            const long double matchable = std::min(lemon_empirical_intensity, lemon_theoretical_intensity);
+            return (long double)_sweep_cost_model.error() * _scale * matchable;
+        }
+        long double acc = 0;
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            const double c = std::visit([](const auto& arg) -> double {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, MatchingEdge> || std::is_same_v<T, ChainEdge>)
+                    return arg.get_cost();
+                else return -1.0;
+            }, edges[ii].get_type());
+            if (c < 0) continue;
+            const VALUE_TYPE f = _solver_flow(lemon_graph.arcFromId(ii));
+            if (f <= 0) continue;
+            const long double exact = _p_is_one ? (long double)c : (long double)_scale * c;
+            const long double q = (long double)quantize_cost<VALUE_TYPE>(c, _scale, _p_is_one);
+            acc += (long double)f * std::fabs(exact - q);
+        }
+        return acc;
+    }
+
+    // Largest relative round-UP of a positive matching/chain arc cost,
+    // max (q - S c) / (S c).  Every quantized arc cost is then at most
+    // (1 + rho) times its real cost, so the quantized optimum is at most
+    // (1 + rho) times the real one.  Costs below half a unit round down, so
+    // rho <= 1 always.  Not used for ConvexSweep (no per-arc costs).
+    double cost_round_up_ratio() const {
+        double rho = 0;
+        for (const auto& edge : edges) {
+            const double c = std::visit([](const auto& arg) -> double {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, MatchingEdge> || std::is_same_v<T, ChainEdge>)
+                    return arg.get_cost();
+                else return -1.0;
+            }, edge.get_type());
+            if (c <= 0) continue;
+            const long double exact = _p_is_one ? (long double)c : (long double)_scale * c;
+            const long double q = (long double)quantize_cost<VALUE_TYPE>(c, _scale, _p_is_one);
+            if (q > exact) rho = std::max(rho, (double)((q - exact) / exact));
+        }
+        return rho;
+    }
+
     // The matching problem has costs d-tau, nonnegative flows, and upper
     // bounds E_i/T_j. Its dual is alpha_i,beta_j <= 0 with
     // alpha_i + beta_j <= d_ij-tau. Build one common feasible dual from the
@@ -4018,6 +4076,51 @@ public:
         return _spectrum_proportion_derivatives(/*fast=*/true);
     }
 
+    // Allowances for cost quantization, for callers that need a certificate
+    // for the REAL-cost problem rather than for dual_cut()'s fixed quantized
+    // costs.  The solvers price matching, chain and trash arcs at
+    // q = quantize_cost(c), not at the real cost c.  Returns, in real units:
+    //   upper slack: how far the current solution's real cost can exceed its
+    //     quantized cost -- the per-subgraph arc slack (matching/chain arcs)
+    //     plus the trash-price rounding, paid at most once per unit of mass;
+    //   rho: every quantized arc/trash cost is at most (1 + rho) x its real
+    //     cost, so the quantized optimum -- and any cut below it -- is at most
+    //     (1 + rho) x the real optimum (all real costs are nonnegative);
+    //   lower slack: ConvexSweep has no per-arc costs; its pair-cost model's
+    //     absolute per-unit bound times the matchable mass, to subtract from a
+    //     cut's intercept instead.
+    // A real-cost certificate at the current point is therefore
+    //   lower(y) = (intercept + gradient . y) / (1 + rho) - lower_slack,
+    //   upper    = upper_bound + upper_slack.
+    // A coarse cost grid (e.g. one-grid-step gaps rounding to zero) shows up
+    // here as a large upper slack instead of as a falsely tight certificate.
+    std::tuple<double, double, double> cost_quantization_bounds() const {
+        require_valid_position_update(_position_update_invalid);
+        if (_last_point.size() != _no_theoretical_spectra)
+            throw std::runtime_error("solve() must be called before cost_quantization_bounds()");
+        const bool sweep = std::holds_alternative<ConvexSweepConfig>(_built_config);
+        long double arc_slack = 0;
+        double rho = 0;
+        for (const auto& sg : flow_subgraphs) {
+            arc_slack += sg->cost_rounding_slack_scaled();
+            if (!sweep) rho = std::max(rho, sg->cost_round_up_ratio());
+        }
+        long double trash_dev = 0;
+        for (double c_real : {_isolated_exp_trash_cost, _isolated_theo_trash_cost}) {
+            if (!(c_real > 0)) continue;
+            const long double exact = _costs_truncated() ? (long double)c_real : (long double)_scale * c_real;
+            const long double q = (long double)quantize_cost<VALUE_TYPE>(c_real, _scale, _costs_truncated());
+            trash_dev = std::max(trash_dev, std::fabs(exact - q));
+            if (q > exact) rho = std::max(rho, (double)((q - exact) / exact));
+        }
+        long double T = 0;
+        for (size_t k = 0; k < _theo_flow_totals.size(); ++k) T += _theo_flow_totals[k] * _last_point[k];
+        const long double arc_slack_real = arc_slack / ((long double)_scale * _intensity_scale);
+        const long double upper = arc_slack_real + ((long double)_emp_flow_total + T) * trash_dev / _scale;
+        const long double lower = sweep ? arc_slack_real : 0;
+        return {(double)upper, rho, (double)lower};
+    }
+
     // Supporting cut for continuous supplies with the network's fixed,
     // quantized costs. Transport solves retain the selected integer backend.
     // Returns intercept, slopes, continuous upper bound, rounding bound and rounded cost.
@@ -4059,6 +4162,7 @@ public:
         const long double loss_e = std::max((long double)0, E - Eq / _intensity_scale);
         const long double loss_t = std::max((long double)0, T - Tq / _intensity_scale);
         long double error = ((ce + (long double)tau) * loss_e + (ct + (long double)tau) * loss_t) / _scale;
+
         intercept /= _scale;
         std::vector<double> slopes(gradient.size());
         for (size_t k = 0; k < slopes.size(); ++k) slopes[k] = gradient[k] / _scale;

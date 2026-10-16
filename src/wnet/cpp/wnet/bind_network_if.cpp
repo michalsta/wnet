@@ -24,6 +24,10 @@ nb::class_<WNetIF> bind_network_if(nb::module_& m) {
             out["gradient"] = vector_to_numpy<double>(slopes);
             out["upper_bound"] = upper; out["rounding_error"] = error;
             out["rounded_cost"] = rounded_cost;
+            auto [cost_err, rho, lower_slack] = self.cost_quantization_bounds();
+            out["cost_rounding_error"] = cost_err;
+            out["cost_round_up_ratio"] = rho;
+            out["cost_lower_slack"] = lower_slack;
             return out;
         })
         .def("scale_factor", &WassersteinNetwork<int64_t, double>::scale_factor)
