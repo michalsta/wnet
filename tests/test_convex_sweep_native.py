@@ -48,6 +48,10 @@ def test_native_convex_sweep(suite, compiler, tmp_path):
             str(exe),
         ],
         check=True,
-        timeout=300,
+        # Compiling is the slow part on the emulated linux-arm64 runner (about
+        # four minutes on a quiet host) and it stretches with the load the
+        # sanitizer and valgrind jobs put on the same machine; the run itself
+        # keeps the tight limit below.
+        timeout=1800,
     )
     subprocess.run([str(exe), str(TRIALS[suite])], check=True, timeout=300)
