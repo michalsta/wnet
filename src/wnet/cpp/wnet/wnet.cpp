@@ -74,7 +74,9 @@ NB_MODULE(wnet_cpp, m) {
         .def_rw("pivot", &NetworkSimplexConfig::pivot)
         .def_rw("warm",  &NetworkSimplexConfig::warm)
         .def_rw("warm_violation_limit",
-                &NetworkSimplexConfig::warm_violation_limit);
+                &NetworkSimplexConfig::warm_violation_limit)
+        .def_rw("repair_max_nodes",
+                &NetworkSimplexConfig::repair_max_nodes);
 
     nb::class_<CostScalingConfig>(m, "CostScaling")
         .def(nb::init<>())

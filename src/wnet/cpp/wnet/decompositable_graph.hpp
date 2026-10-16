@@ -76,6 +76,16 @@ struct NetworkSimplexConfig {
     //   >0 — max violated basic arcs before skipping repair (see the
     //       trajectory-instability note in network_simplex.h).
     long warm_violation_limit = -2;
+    // Size gate on simplex repair, per subgraph: a subgraph with more than
+    // this many nodes behaves as warm_violation_limit = 0 (a failed tree
+    // patch goes straight to a cold start); smaller subgraphs keep
+    // warm_violation_limit.  -1 (default) disables the gate.  Dual repair on
+    // a large connected component can cost tens of cold solves (long
+    // bound-flip walks), while on small components it stays cheap; e.g.
+    // 2-D LC-MS alignment once its components percolate into one giant
+    // component: 302 s with repair vs 16 s gated, against +25% when the
+    // components stay small and every repair is cheap.
+    long repair_max_nodes = -1;
 };
 struct CostScalingConfig {
     CSMethod method = CSMethod::PARTIAL_AUGMENT;
@@ -685,7 +695,9 @@ class WassersteinNetworkSubgraph {
                     ns_solver->upperMap(capacities_map);
                     ns_solver->supplyMap(node_supply_map);
                     if (costs_changed) ns_solver->costMap(costs_map);
-                    ns_solver->setWarmViolationLimit(cfg.warm_violation_limit);
+                    ns_solver->setWarmViolationLimit(
+                        cfg.repair_max_nodes >= 0 && (long)nodes.size() > cfg.repair_max_nodes
+                            ? 0 : cfg.warm_violation_limit);
                     // costs_changed disables the "repair == optimal" fast
                     // path inside warmRun (stale potentials); the basis is
                     // still reused and start() reoptimizes.
