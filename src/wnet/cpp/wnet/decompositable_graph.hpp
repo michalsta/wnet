@@ -1407,7 +1407,8 @@ public:
             // backward recovery of inter-cluster flows and cluster totals
             std::vector<VALUE_TYPE> uc(C), yc(C), sc(C > 0 ? C - 1 : 0, 0);
             VALUE_TYPE s_cur = 0;
-            for (size_t cr = C; cr-- > 0; ) {
+            for (size_t cr = C; cr > 0;) {
+                --cr;
                 VALUE_TYPE want = s_cur - vv[cr];
                 VALUE_TYPE s_prev = std::min(std::max(want, lo[cr]), hi[cr]);
                 if (s_cur - s_prev < -ct[cr]) s_prev = s_cur + ct[cr];  // absorb wall
@@ -1772,8 +1773,8 @@ public:
                 }
             };
             if (mirror)
-                for (size_t p = P; p-- > 0;)
-                    emit(p);
+                for (size_t p = P; p > 0; --p)
+                    emit(p - 1);
             else
                 for (size_t p = 0; p < P; ++p)
                     emit(p);

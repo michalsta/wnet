@@ -239,6 +239,10 @@ public:
         double max_dist;
         size_t current_index;
         size_t other_current_index;
+        // Next other-side index to examine.  Tracked separately so that
+        // neither the start of the sweep nor a window starting at 0 needs an
+        // index of -1 (an unsigned wraparound).
+        size_t next_other_index;
         size_t last_window_start_index;
         double current_distance;
     public:
@@ -250,18 +254,19 @@ public:
             other_distribution(other_distribution_),
             max_dist(max_dist_),
             current_index(0),
-            other_current_index(std::numeric_limits<size_t>::max()),
+            other_current_index(0),
+            next_other_index(0),
             last_window_start_index(0)
         {}
         inline bool advance() {
             while (true) {
-                other_current_index++;
+                other_current_index = next_other_index++;
                 if(other_current_index >= other_distribution.size())
                 {
                     current_index++;
                     if(current_index >= distribution.size())
                         return false;
-                    other_current_index = last_window_start_index - 1;
+                    next_other_index = last_window_start_index;
                     continue;
                 }
                 position_type other_pos0 = other_distribution.get_point(other_distribution.sorted_indices[other_current_index])[0];
@@ -276,7 +281,7 @@ public:
                     current_index++;
                     if(current_index >= distribution.size())
                         return false;
-                    other_current_index = last_window_start_index - 1;
+                    next_other_index = last_window_start_index;
                     continue;
                 }
                 current_distance = DistMetric::dist(

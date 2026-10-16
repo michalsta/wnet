@@ -82,8 +82,8 @@ template <bool Mapping> auto events(const Input &in, bool mirror = false, bool p
             g.add(x, 1, in.t[i], i);
     };
     if (mirror)
-        for (size_t i = in.x.size(); i-- > 0;)
-            emit(i);
+        for (size_t i = in.x.size(); i > 0; --i)
+            emit(i - 1);
     else
         for (size_t i = 0; i < in.x.size(); ++i)
             emit(i);

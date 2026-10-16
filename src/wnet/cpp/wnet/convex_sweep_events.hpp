@@ -18,9 +18,9 @@ template <bool Mapping> struct GroupedEvents {
 
     void add(double pos, int side, i64 count, size_t index) {
         size_t found = events.size();
-        for (size_t j = events.size(); j-- > 0 && events[j].pos == pos;)
-            if (events[j].side == side) {
-                found = j;
+        for (size_t j = events.size(); j > 0 && events[j - 1].pos == pos; --j)
+            if (events[j - 1].side == side) {
+                found = j - 1;
                 break;
             }
         if (found == events.size()) {

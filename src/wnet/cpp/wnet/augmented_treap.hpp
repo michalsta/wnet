@@ -44,6 +44,11 @@ private:
         }
     };
     Ptr root;
+    // splitmix64: wraparound is the algorithm, so clang's opt-in
+    // unsigned-overflow check is off for this function only.
+#if defined(__clang__)
+    __attribute__((no_sanitize("unsigned-integer-overflow")))
+#endif
     static uint64_t priority() {
         static thread_local uint64_t sequence = 0x9e3779b97f4a7c15ULL;
         uint64_t z = (sequence += 0x9e3779b97f4a7c15ULL);

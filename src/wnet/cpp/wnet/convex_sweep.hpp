@@ -577,7 +577,8 @@ F rank_prefix_profits(const BasicSideState<F>& st, double z, ProfitFn profit) {
     F T;
     T.vs.push_back({0, 0});
     i64 k = 0, acc = 0;
-    for (size_t i = st.blocks.size(); i-- > 0;) {
+    for (size_t i = st.blocks.size(); i > 0;) {
+        --i;
         const auto& [pos, cnt] = st.blocks[i];
         i64 pi = profit(pos, z);
         acc += pi * cnt;
@@ -714,7 +715,8 @@ auto sweep_solve(const std::vector<Event>& events, ProfitFn profit,
                 ++it;
             }
         };
-        for (size_t i = events.size(); i-- > 0;) {
+        for (size_t i = events.size(); i > 0;) {
+            --i;
             const auto& e = events[i];
             if (e.count <= 0) continue;
             const auto& r = trace.records[i];
@@ -901,7 +903,8 @@ void adjoint_compose(const std::vector<Event>& events, ProfitFn profit,
     composed.assign(n, NEG_INF);
     F C[2] = {F::constant(snaps[n].sides[0].V.K(), 0),
                 F::constant(snaps[n].sides[1].V.K(), 0)};
-    for (size_t i = n; i-- > 0;) {
+    for (size_t i = n; i > 0;) {
+        --i;
         const Event& e = events[i];
         const int own_s = e.side, opp_s = 1 - e.side;
         const i64 q = e.count;
