@@ -117,9 +117,11 @@ blocks. Only `O(P)` dual coefficients remain cached for cut queries.
 
 ## Cost quantization
 
-The certificate above is exact for the network's quantized costs: each
-matching, chain or trash cost `c` is priced as `q = quantize_cost(c)` on the
-cost grid `S`. To certify the real-cost problem instead, `dual_cut()` also
+The certificate above is exact for the network's quantized costs. Matching
+and trash costs use `q = quantize_cost(c)` on the cost grid `S`; scaled p=1
+chain costs are differences of rounded coordinates, so paths retain their
+length across arbitrarily fine intermediate samples. To certify the real-cost
+problem instead, `dual_cut()` also
 returns, in real units:
 
 - `cost_rounding_error`: how far the current solution's real cost can exceed
@@ -127,13 +129,20 @@ returns, in real units:
   chain arcs it uses, plus the trash-price rounding paid at most once per unit
   of mass. ConvexSweep reports no arc flows; it uses its pair-cost model's
   per-unit bound (`convex_sweep_cost_quantization_error()`) on the matchable
-  mass.
+  mass. Scaled p=1 chains use their endpoint-distance bound of `1/S` per
+  unit of real matchable mass (plus floating-point allowance), avoiding a
+  sum of hop errors that would grow with profile sampling density.
 - `cost_round_up_ratio` (rho): every quantized cost is at most `(1 + rho)`
   times its real cost, so the quantized optimum, and any cut below it, is at
   most `(1 + rho)` times the real optimum (real costs are nonnegative). Costs
-  below half a grid unit round down, so `0 <= rho <= 1`.
-- `cost_lower_slack`: ConvexSweep's absolute counterpart of rho, to subtract
-  from the intercept.
+  below half a grid unit round down under independent arc rounding, giving
+  `0 <= rho <= 1` there. Scaled p=1 chains use an absolute allowance instead
+  of an arc-wise ratio, which could be arbitrarily large on a tiny gap.
+- `cost_lower_slack`: the absolute counterpart of rho for ConvexSweep and
+  scaled p=1 chains, to subtract from the intercept. The p=1 allowance uses
+  the fixed empirical mass, so the cut stays valid at other mixture weights
+  even when more mass can match there. Chain allowances use the current real
+  gaps, including after position updates and refinement.
 
 A real-cost certificate at the evaluated weights is then
 

@@ -476,6 +476,7 @@ class WassersteinNetworkSubgraph {
         std::vector<LEMON_INDEX> right_arc_ids;
         std::vector<LEMON_INDEX> left_arc_ids;
         std::vector<VALUE_TYPE>  gap_cost;
+        std::vector<double> real_gap;
         std::vector<size_t> node_to_pos;
     };
     std::optional<ChainTopology> _chain_topo;
@@ -589,12 +590,54 @@ class WassersteinNetworkSubgraph {
             topo.right_arc_ids.push_back(out_arc);
             topo.left_arc_ids.push_back(in_arc);
             topo.gap_cost.push_back(costs_map[lemon_graph.arcFromId(out_arc)]);
+            topo.real_gap.push_back(std::get<ChainEdge>(edges[out_arc].get_type()).get_cost());
             prev = curr; curr = next;
         }
         topo.node_to_pos.assign(nodes.size(), std::numeric_limits<size_t>::max());
         for (size_t i = 0; i < topo.order.size(); ++i)
             topo.node_to_pos[topo.order[i]] = i;
         _chain_topo = std::move(topo);
+    }
+
+    // Quantize coordinates, not individual gaps: the price of any path then
+    // telescopes to the difference of its rounded endpoints. In particular,
+    // adding zero-supply intermediate nodes cannot make a distance vanish.
+    // Legacy unscaled p=1 keeps its historical per-gap truncation; p>1 uses
+    // ConvexSweep's convex pair-cost model instead of these hop costs.
+    void _refresh_chain_costs(const std::vector<double>* positions = nullptr) {
+        if (!_chain_topo) return;
+        auto& topo = *_chain_topo;
+        if (positions && positions->size() != topo.order.size())
+            throw std::invalid_argument("Chain position count must match chain topology");
+        const bool coordinate_costs = _p_order == 1 && !_p_is_one;
+        long double position = 0;
+        VALUE_TYPE previous = 0;
+        for (size_t g = 0; g < topo.gap_cost.size(); ++g) {
+            if (positions)
+                topo.real_gap[g] = std::abs((*positions)[g + 1] - (*positions)[g]);
+            const auto right = lemon_graph.arcFromId(topo.right_arc_ids[g]);
+            const auto left = lemon_graph.arcFromId(topo.left_arc_ids[g]);
+            if (coordinate_costs) {
+                position += topo.real_gap[g];
+                // Use the same real coordinates as _sweep_build_pos/GridPower.
+                const long double q = std::round(
+                    static_cast<long double>(static_cast<double>(position)) * _scale);
+                if (!std::isfinite(q) || q < 0
+                    || q >= static_cast<long double>(std::numeric_limits<VALUE_TYPE>::max()))
+                    throw std::overflow_error("Chain coordinate exceeds integer cost range");
+                const VALUE_TYPE current = static_cast<VALUE_TYPE>(q);
+                costs_map[right] = costs_map[left] = current - previous;
+                previous = current;
+            }
+            topo.gap_cost[g] = costs_map[right];
+        }
+    }
+
+    double _chain_arc_real_cost(const FlowEdge<intensity_type>& edge) const {
+        const auto& topo = *_chain_topo;
+        const size_t a = topo.node_to_pos[edge.get_start_node_id()];
+        const size_t b = topo.node_to_pos[edge.get_end_node_id()];
+        return topo.real_gap[std::min(a, b)];
     }
 
     // Append this solve's inputs to the capture stream (see _dump_stream).
@@ -1035,6 +1078,7 @@ public:
         _sweep_pos_built = false;
         _chain_arc_cache_built = false;
         _build_chain_topology();
+        _refresh_chain_costs();
         _matching_edge_cache.clear();
         _theo_sink_edge_cache.clear();
         _unlimited_arc.assign(edges.size(), false);
@@ -1487,10 +1531,10 @@ public:
         _sweep_real_pos.assign(P, 0.0);
         if (_chain_topo.has_value()) {
             const auto& topo = *_chain_topo;
+            long double position = 0;
             for (size_t g = 0; g + 1 < P; ++g) {
-                const auto& et = edges[topo.right_arc_ids[g]].get_type();
-                _sweep_real_pos[g + 1] =
-                    _sweep_real_pos[g] + std::get<ChainEdge>(et).get_cost();
+                position += topo.real_gap[g];
+                _sweep_real_pos[g + 1] = static_cast<double>(position);
             }
         }
         _sweep_pos_built = true;
@@ -2436,8 +2480,7 @@ public:
     // chain order — one per get_chain_order() entry, which is the same indexing
     // _sdp_build_cache() assigns.  The ConvexSweep backend requires them: it
     // prices pairs from the real positions in _sweep_real_pos, and
-    // _sweep_build_pos() reconstructs those from the ChainEdge cost members,
-    // which are const and so cannot be refreshed in place by a position update.
+    // _sweep_build_pos() reconstructs those from the current real chain gaps.
     void apply_new_costs(const std::vector<VALUE_TYPE>& new_costs_per_edge_idx,
                          const std::vector<double>* new_chain_positions = nullptr) {
         if (!built)
@@ -2456,11 +2499,9 @@ public:
             } else if (std::holds_alternative<ChainEdge>(etype))
                 costs_map[lemon_graph.arcFromId(ii)] = new_costs_per_edge_idx[ii];
         }
-        // Re-sync gap_cost from costs_map so chain_residual_distances stays correct.
-        if (_chain_topo.has_value()) {
-            for (size_t g = 0; g < _chain_topo->right_arc_ids.size(); ++g)
-                _chain_topo->gap_cost[g] = costs_map[lemon_graph.arcFromId(_chain_topo->right_arc_ids[g])];
-        }
+        // Recompute the common coordinate grid and synchronize both directed
+        // arc costs, SlopeDP positions, and residual-distance gap costs.
+        _refresh_chain_costs(new_chain_positions);
         if (_use_slopedp()) {
             // positions cache derives from gap_cost — rebuild it, then re-solve
             // with the supplies of the last set_point()
@@ -2484,10 +2525,9 @@ public:
         _run_solver(/*costs_changed=*/true);
     }
 
-    // Rebuild _sweep_real_pos from caller-supplied real positions rather than
-    // from the immutable ChainEdge costs.  Keeps the build-time representation
-    // exactly — the prefix sum of |gap| from an origin of 0, so a descending
-    // chain is stored ascending just as _sweep_build_pos() would store it.
+    // Rebuild from the real gaps refreshed by _refresh_chain_costs(), using
+    // the same origin and accumulation as graph construction. A descending
+    // chain is represented by increasing distances from its first endpoint.
     void _refresh_sweep_positions(const std::vector<double>* chain_pos) {
         _sweep_grid_built = false;
         const size_t P = _sdp_emp_cap.size();
@@ -2502,11 +2542,7 @@ public:
             throw std::runtime_error(
                 "ConvexSweep position update requires the new chain positions, "
                 "one per chain node; none were supplied.");
-        _sweep_real_pos.assign(P, 0.0);
-        for (size_t i = 1; i < P; ++i)
-            _sweep_real_pos[i] =
-                _sweep_real_pos[i - 1] + std::abs((*chain_pos)[i] - (*chain_pos)[i - 1]);
-        _sweep_pos_built = true;
+        _sweep_build_pos();
     }
 
     // Dijkstra variant of residual shortest-path using NetworkSimplex potentials.
@@ -2767,6 +2803,17 @@ public:
     // so a certificate built from the quantized problem must allow for the
     // difference before it says anything about the real one.
     //
+    // Scaled p=1 paths differ from their real lengths by at most one grid
+    // unit, independent of intermediate nodes. The network charges this on
+    // real matchable mass, including supplies lost to integer rounding.
+    double chain_coordinate_quantization_error() const {
+        if (_p_order != 1 || _p_is_one || !_chain_topo) return 0;
+        long double span = 0;
+        for (double gap : _chain_topo->real_gap) span += gap;
+        return static_cast<double>(1.0L / _scale
+            + 128 * std::numeric_limits<double>::epsilon() * std::max(1.0L, span));
+    }
+
     // Upper slack: sum over flow-carrying matching/chain arcs of
     // flow * |S c - q|, in scaled units (cost scale x intensity scale).  It
     // bounds how far the current solution's real cost can exceed its
@@ -2782,7 +2829,8 @@ public:
         }
         long double acc = 0;
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
-            const double c = std::visit([](const auto& arg) -> double {
+            const double c = std::holds_alternative<ChainEdge>(edges[ii].get_type())
+                ? _chain_arc_real_cost(edges[ii]) : std::visit([](const auto& arg) -> double {
                 using T = std::decay_t<decltype(arg)>;
                 if constexpr (std::is_same_v<T, MatchingEdge> || std::is_same_v<T, ChainEdge>)
                     return arg.get_cost();
@@ -2792,8 +2840,13 @@ public:
             const VALUE_TYPE f = _solver_flow(lemon_graph.arcFromId(ii));
             if (f <= 0) continue;
             const long double exact = _p_is_one ? (long double)c : (long double)_scale * c;
-            const long double q = (long double)quantize_cost<VALUE_TYPE>(c, _scale, _p_is_one);
-            acc += (long double)f * std::fabs(exact - q);
+            const long double q = costs_map[lemon_graph.arcFromId(ii)];
+            // Independent dense matching costs include a position-independent
+            // trash-price shift, which is not part of the ground-cost error.
+            const long double ground_q = q + (independent_trash
+                && std::holds_alternative<MatchingEdge>(edges[ii].get_type())
+                    ? (long double)_ind_c_exp_q + _ind_c_theo_q : 0);
+            acc += (long double)f * std::fabs(exact - ground_q);
         }
         return acc;
     }
@@ -2801,12 +2854,18 @@ public:
     // Largest relative round-UP of a positive matching/chain arc cost,
     // max (q - S c) / (S c).  Every quantized arc cost is then at most
     // (1 + rho) times its real cost, so the quantized optimum is at most
-    // (1 + rho) times the real one.  Costs below half a unit round down, so
-    // rho <= 1 always.  Not used for ConvexSweep (no per-arc costs).
+    // (1 + rho) times the real one. Coordinate-derived chain gaps can round
+    // up by more than their own length, so rho need not be <= 1.
+    // Not used for ConvexSweep (no arc flows).
     double cost_round_up_ratio() const {
+        // Coordinate costs have an absolute pair-wise allowance instead;
+        // an arc-wise relative ratio can be arbitrarily large on tiny gaps.
+        if (_p_order == 1 && !_p_is_one && _chain_topo) return 0;
         double rho = 0;
-        for (const auto& edge : edges) {
-            const double c = std::visit([](const auto& arg) -> double {
+        for (size_t ii = 0; ii < edges.size(); ++ii) {
+            const auto& edge = edges[ii];
+            const double c = std::holds_alternative<ChainEdge>(edge.get_type())
+                ? _chain_arc_real_cost(edge) : std::visit([](const auto& arg) -> double {
                 using T = std::decay_t<decltype(arg)>;
                 if constexpr (std::is_same_v<T, MatchingEdge> || std::is_same_v<T, ChainEdge>)
                     return arg.get_cost();
@@ -2814,7 +2873,9 @@ public:
             }, edge.get_type());
             if (c <= 0) continue;
             const long double exact = _p_is_one ? (long double)c : (long double)_scale * c;
-            const long double q = (long double)quantize_cost<VALUE_TYPE>(c, _scale, _p_is_one);
+            const long double q = (long double)costs_map[lemon_graph.arcFromId(ii)]
+                + (independent_trash && std::holds_alternative<MatchingEdge>(edge.get_type())
+                    ? (long double)_ind_c_exp_q + _ind_c_theo_q : 0);
             if (q > exact) rho = std::max(rho, (double)((q - exact) / exact));
         }
         return rho;
@@ -4078,17 +4139,17 @@ public:
 
     // Allowances for cost quantization, for callers that need a certificate
     // for the REAL-cost problem rather than for dual_cut()'s fixed quantized
-    // costs.  The solvers price matching, chain and trash arcs at
-    // q = quantize_cost(c), not at the real cost c.  Returns, in real units:
+    // costs. Matching/trash arcs round independently; scaled p=1 chains use
+    // differences of rounded coordinates. Returns, in real units:
     //   upper slack: how far the current solution's real cost can exceed its
     //     quantized cost -- the per-subgraph arc slack (matching/chain arcs)
     //     plus the trash-price rounding, paid at most once per unit of mass;
     //   rho: every quantized arc/trash cost is at most (1 + rho) x its real
     //     cost, so the quantized optimum -- and any cut below it -- is at most
     //     (1 + rho) x the real optimum (all real costs are nonnegative);
-    //   lower slack: ConvexSweep has no per-arc costs; its pair-cost model's
-    //     absolute per-unit bound times the matchable mass, to subtract from a
-    //     cut's intercept instead.
+    //   lower slack: absolute pair-cost allowances for coordinate models, to
+    //     subtract from the cut's intercept instead. For p=1 use fixed
+    //     empirical mass, so the allowance remains valid at every probe w.
     // A real-cost certificate at the current point is therefore
     //   lower(y) = (intercept + gradient . y) / (1 + rho) - lower_slack,
     //   upper    = upper_bound + upper_slack.
@@ -4100,9 +4161,12 @@ public:
             throw std::runtime_error("solve() must be called before cost_quantization_bounds()");
         const bool sweep = std::holds_alternative<ConvexSweepConfig>(_built_config);
         long double arc_slack = 0;
+        double coordinate_error = 0;
         double rho = 0;
         for (const auto& sg : flow_subgraphs) {
-            arc_slack += sg->cost_rounding_slack_scaled();
+            const double chain_error = sg->chain_coordinate_quantization_error();
+            if (chain_error > 0) coordinate_error = std::max(coordinate_error, chain_error);
+            else arc_slack += sg->cost_rounding_slack_scaled();
             if (!sweep) rho = std::max(rho, sg->cost_round_up_ratio());
         }
         long double trash_dev = 0;
@@ -4116,8 +4180,11 @@ public:
         long double T = 0;
         for (size_t k = 0; k < _theo_flow_totals.size(); ++k) T += _theo_flow_totals[k] * _last_point[k];
         const long double arc_slack_real = arc_slack / ((long double)_scale * _intensity_scale);
-        const long double upper = arc_slack_real + ((long double)_emp_flow_total + T) * trash_dev / _scale;
-        const long double lower = sweep ? arc_slack_real : 0;
+        const long double coordinate_slack = coordinate_error * std::min((long double)_emp_flow_total, T);
+        const long double upper = arc_slack_real + coordinate_slack
+            + ((long double)_emp_flow_total + T) * trash_dev / _scale;
+        const long double lower = (sweep ? arc_slack_real : 0)
+            + coordinate_error * (long double)_emp_flow_total;
         return {(double)upper, rho, (double)lower};
     }
 

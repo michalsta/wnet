@@ -22,8 +22,18 @@ Grid coordinates and chain-gap maps retain separate range checks. This avoids
 making the coordinate grid coarse just because a component contains distant
 peaks. Explicit cost scales and trash quantization retain their existing units;
 M need not be an integer for grid coordinates and squared costs to be integers.
-Legacy unscaled p=1 uses a unit coordinate grid, rather than truncating
-individual distances. Other solvers keep their existing cost quantization.
+Scaled p=1 chains use the same coordinate-difference costs for SlopeDP and
+the graph backends: each hop costs the difference of its rounded endpoints.
+A path therefore telescopes to a single endpoint difference, with at most
+`1/S` pair-distance error, regardless of how many intermediate nodes it has.
+Rounding every tiny gap separately can collapse an entire densely sampled
+profile to zero distance, even though the resulting matrix is still Monge.
+The grid is reconstructed from real gaps after position or scale changes;
+residual searches and dual recovery read the same integer hop costs.
+
+Legacy unscaled p=1 ConvexSweep uses a unit coordinate grid, rather than
+truncating individual distances. Other unscaled p=1 backends retain legacy
+per-gap truncation. Dense graph backends retain per-pair quantization.
 
 To control the precision/performance tradeoff without selecting a dataset's
 scale manually, pass `cost_precision_bits=24` to `WassersteinNetwork`, or call
