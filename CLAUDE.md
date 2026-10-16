@@ -104,6 +104,23 @@ the reasoning behind it, now lives in `ci_matrix.py` rather than in YAML.
 cancels superseded branch runs but never a tag run, under *distinct* group names
 — `publish.yml` calls both, and a shared group would serialise them.
 
+### C++ checking: `tests_cpp`, `sanitize`, `valgrind`
+
+The standalone C++ suites (`tests/cpp/suites.txt`: the network oracle suite `test_network.cpp`, the ConvexSweep suites and the `prototypes/` checks that target production headers) run in the `tests_cpp` job on every
+push, under ten lanes defined once in `.github/scripts/cpp_lane.sh` (shared
+byte-identical with pylmcf and wnetalign; `cpp_lane.sh <lane> tests/cpp/run_all.sh` reproduces one
+locally): ASan+UBSan, the hardened libstdc++ mode (`_GLIBCXX_DEBUG`,
+FORTIFY=3, stack protector, CET, pattern init), TSan and valgrind memcheck,
+each under gcc and clang; strict UBSan (`integer`, `implicit-conversion`, ...),
+libc++ hardening + ASan and MSan (against an MSan-instrumented libc++ built by
+`build_msan_libcxx.sh`, cached) under clang. Clang lanes use LLVM 22 from
+apt.llvm.org. The strict lane forbids unsigned wraparound outside
+`.github/scripts/ubsan-system-headers.ignorelist`, so write reverse loops as
+`for (size_t i = n; i > 0;) { --i; ... }`, not `i-- > 0`.
+The `sanitize` job (lanes in `ci_matrix.py`) builds the extension (and pylmcf, from its sdist with the same flags) with
+ASan/UBSan or the hardened modes and runs pytest against it; the `valgrind`
+job runs pytest under memcheck (`.github/scripts/valgrind_pytest.sh`, Tier B).
+
 ## Architecture
 
 ### Layers

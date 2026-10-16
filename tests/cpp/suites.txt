@@ -1,0 +1,12 @@
+# Standalone C++ suites, run by tests/cpp/run_all.sh (format documented in
+# .github/scripts/run_cpp_suites.sh). The randomized suites shrink their trial
+# counts on the slow lanes (SUITE_LIGHT: valgrind, MSan, TSan).
+test_network               | tests/cpp/test_network.cpp               |                         |
+test_convex_sweep_profiles | tests/cpp/test_convex_sweep_profiles.cpp |                         | ${SUITE_LIGHT:+1000}
+test_convex_sweep_grouped  | tests/cpp/test_convex_sweep_grouped.cpp  |                         | ${SUITE_LIGHT:+150}
+test_monge_cost            | prototypes/test_monge_cost.cpp           |                         |
+test_tree_breakpoints      | prototypes/test_tree_breakpoints.cpp     |                         |
+test_convex_sweep_kernel   | prototypes/test_convex_sweep_kernel.cpp  |                         |
+test_augmented_treap       | prototypes/test_augmented_treap.cpp      |                         |
+test_convex_sweep_dual     | prototypes/test_convex_sweep_dual.cpp    |                         |
+test_wide_int_soft         | prototypes/test_wide_int.cpp             | -DWNET_FORCE_SOFT_INT128 |
