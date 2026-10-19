@@ -2882,6 +2882,45 @@ public:
         return rho;
     }
 
+    // Largest relative round-DOWN of a positive matching/chain arc cost,
+    // max (S c - q) / (S c): every quantized arc cost is then at least
+    // (1 - sigma) times its real cost.  The counterpart of
+    // cost_round_up_ratio(), and zero in the same coordinate-cost cases.
+    double cost_round_down_ratio() const {
+        if (_p_order == 1 && !_p_is_one && _chain_topo) return 0;
+        double sigma = 0;
+        for (size_t ii = 0; ii < edges.size(); ++ii) {
+            const auto& edge = edges[ii];
+            const double c = std::holds_alternative<ChainEdge>(edge.get_type())
+                ? _chain_arc_real_cost(edge) : std::visit([](const auto& arg) -> double {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, MatchingEdge> || std::is_same_v<T, ChainEdge>)
+                    return arg.get_cost();
+                else return -1.0;
+            }, edge.get_type());
+            if (c <= 0) continue;
+            const long double exact = _p_is_one ? (long double)c : (long double)_scale * c;
+            const long double q = (long double)costs_map[lemon_graph.arcFromId(ii)]
+                + (independent_trash && std::holds_alternative<MatchingEdge>(edge.get_type())
+                    ? (long double)_ind_c_exp_q + _ind_c_theo_q : 0);
+            if (q < exact) sigma = std::max(sigma, (double)((exact - q) / exact));
+        }
+        return sigma;
+    }
+
+    // Absolute per-unit pair-cost error of the coordinate cost models, in
+    // real units: every quantized pair cost differs from its real cost by at
+    // most this much per unit of matched mass.  Scaled p=1 chains and the
+    // ConvexSweep grid model; zero for arc-wise costs.
+    double coordinate_pair_cost_error() const {
+        double err = chain_coordinate_quantization_error();
+        if (_use_sweep()) {
+            _sweep_build_grid();
+            err = std::max(err, _sweep_cost_model.error());
+        }
+        return err;
+    }
+
     // The matching problem has costs d-tau, nonnegative flows, and upper
     // bounds E_i/T_j. Its dual is alpha_i,beta_j <= 0 with
     // alpha_i + beta_j <= d_ij-tau. Build one common feasible dual from the
@@ -4187,6 +4226,37 @@ public:
         const long double lower = (sweep ? arc_slack_real : 0)
             + coordinate_error * (long double)_emp_flow_total;
         return {(double)upper, rho, (double)lower};
+    }
+
+    // Point-independent bounds relating this network's quantized-cost
+    // objective Q to the real-cost objective R, valid at every proportion
+    // vector w (all real costs are nonnegative, matched mass is at most E):
+    //   (1 - sigma) R(w) - A  <=  Q(w)  <=  (1 + rho) R(w) + A,
+    // rho/sigma: largest relative round-up/round-down of an arc-wise or trash
+    //   cost (coordinate pair costs excluded);
+    // A: largest coordinate pair-cost error times the empirical mass E.
+    // A cut valid for one quantization therefore transfers to another:
+    //   Q_new(w) >= (1 - sigma_new) (cut_old(w) - A_old) / (1 + rho_old) - A_new.
+    // Returns {rho, sigma, A}.
+    std::tuple<double, double, double> cost_transfer_bounds() const {
+        require_valid_position_update(_position_update_invalid);
+        const bool sweep = std::holds_alternative<ConvexSweepConfig>(_built_config);
+        double rho = 0, sigma = 0, pair_error = 0;
+        for (const auto& sg : flow_subgraphs) {
+            pair_error = std::max(pair_error, sg->coordinate_pair_cost_error());
+            if (!sweep) {
+                rho = std::max(rho, sg->cost_round_up_ratio());
+                sigma = std::max(sigma, sg->cost_round_down_ratio());
+            }
+        }
+        for (double c_real : {_isolated_exp_trash_cost, _isolated_theo_trash_cost}) {
+            if (!(c_real > 0)) continue;
+            const long double exact = _costs_truncated() ? (long double)c_real : (long double)_scale * c_real;
+            const long double q = (long double)quantize_cost<VALUE_TYPE>(c_real, _scale, _costs_truncated());
+            if (q > exact) rho = std::max(rho, (double)((q - exact) / exact));
+            if (q < exact) sigma = std::max(sigma, (double)((exact - q) / exact));
+        }
+        return {rho, sigma, pair_error * (double)_emp_flow_total};
     }
 
     // Supporting cut for continuous supplies with the network's fixed,

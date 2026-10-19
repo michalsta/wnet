@@ -28,6 +28,10 @@ nb::class_<WNetIF> bind_network_if(nb::module_& m) {
             out["cost_rounding_error"] = cost_err;
             out["cost_round_up_ratio"] = rho;
             out["cost_lower_slack"] = lower_slack;
+            auto [t_rho, t_sigma, t_abs] = self.cost_transfer_bounds();
+            out["transfer_round_up_ratio"] = t_rho;
+            out["transfer_round_down_ratio"] = t_sigma;
+            out["transfer_absolute_error"] = t_abs;
             return out;
         })
         .def("scale_factor", &WassersteinNetwork<int64_t, double>::scale_factor)

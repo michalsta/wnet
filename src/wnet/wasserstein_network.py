@@ -566,6 +566,13 @@ class WassersteinNetwork:
         SlopeDP recovers matching potentials from its chain flow. ConvexSweep
         requires ``solve(..., with_duals=True)`` to trace the DP and recover
         a validated dual eagerly. Cut queries reuse the cached coefficients.
+
+        ``transfer_round_up_ratio`` (rho), ``transfer_round_down_ratio``
+        (sigma) and ``transfer_absolute_error`` (A) relate the quantized
+        objective Q to the real-cost objective R at every point:
+        ``(1 - sigma) R - A <= Q <= (1 + rho) R + A``.  They carry a cut from
+        one quantization to another (e.g. across ``refine_intensity_precision``):
+        ``Q_new >= (1 - sigma_new) (cut_old - A_old) / (1 + rho_old) - A_new``.
         """
         return self.wnet.dual_cut()
 
