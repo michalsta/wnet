@@ -22,6 +22,10 @@ NB_MODULE(wnet_cpp, m) {
     // (pylmcf after 1.3.0); without it the mass-gate config fields are inert.
     m.attr("HAS_WARM_MASS_GATE") = ns_has_mass_gate<
         lemon::NetworkSimplex<lemon::StaticDigraph, int64_t, int64_t>>;
+    // Whether the vendored NetworkSimplex can crash-start (pylmcf after 1.3.0);
+    // without it StartMode.Trash falls back to the artificial start.
+    m.attr("HAS_CRASH_START") = ns_has_crash_start<
+        lemon::NetworkSimplex<lemon::StaticDigraph, int64_t, int64_t>>;
 
     m.doc() = "WNet C++ imlementation module";
     // Surface C++ InfeasibleException as wnet_cpp.InfeasibleError, derived

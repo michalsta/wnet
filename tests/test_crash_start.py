@@ -10,6 +10,11 @@ import pytest
 from wnet import Distribution, WassersteinNetwork
 from wnet.distances import DistanceMetric
 from wnet.wnet_cpp import NetworkSimplex, StartMode, WarmMode
+import wnet.wnet_cpp as _wnet_cpp
+
+# Built against a pylmcf without crashRun (e.g. the 1.3.0 wheel), StartMode.Trash
+# falls back to the artificial start: answers are identical, counters stay 0.
+HAS_CRASH_START = getattr(_wnet_cpp, "HAS_CRASH_START", False)
 
 MODELS = ["simple", "both", "independent", "experimental", "theoretical"]
 
@@ -101,6 +106,9 @@ def test_crash_start_counters(warm):
         a.solve(list(w))
         b.solve(list(w))
     assert a.crash_start_count() == 0
+    if not HAS_CRASH_START:
+        assert b.crash_start_count() == 0
+        return
     assert b.crash_start_count() >= 1
     if warm == WarmMode.NONE:
         # every solve of every subgraph starts cold, hence from the all-trash flow
@@ -161,3 +169,7 @@ def test_top_level_exports():
     for name in ("NetworkSimplex", "NSPivotRule", "WarmMode", "StartMode", "CostScaling",
                  "CycleCanceling", "CapacityScaling", "SlopeDP", "ConvexSweep"):
         assert getattr(wnet, name) is getattr(wnet.wnet_cpp, name)
+
+
+def test_has_crash_start_flag_is_bool():
+    assert isinstance(HAS_CRASH_START, bool)
