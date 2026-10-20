@@ -70,6 +70,13 @@ nb::class_<WNetIF> bind_network_if(nb::module_& m) {
         .def("signal_part_derivatives_fast_approx", &WassersteinNetwork<int64_t, double>::signal_part_derivatives_fast_approx)
         .def("spectrum_proportion_derivatives_fast_approx", &WassersteinNetwork<int64_t, double>::spectrum_proportion_derivatives_fast_approx)
         .def("warm_start_count", &WassersteinNetwork<int64_t, double>::warm_start_count)
+        .def("set_warm_policy", &WassersteinNetwork<int64_t, double>::set_warm_policy, nb::arg("policy"))
+        .def("ns_stats", [](const WassersteinNetwork<int64_t, double>& self) {
+            auto [work, policy_cold, viol, mass, supply] = self.ns_stats();
+            nb::dict out; out["work_units"] = work; out["policy_cold"] = policy_cold;
+            out["violations"] = viol; out["violation_mass"] = mass; out["positive_supply"] = supply;
+            return out;
+        })
         .def("cold_start_count", &WassersteinNetwork<int64_t, double>::cold_start_count)
         .def("dual_repair_count", &WassersteinNetwork<int64_t, double>::dual_repair_count)
         .def("primal_repair_count", &WassersteinNetwork<int64_t, double>::primal_repair_count);

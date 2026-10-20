@@ -119,6 +119,10 @@ class WassersteinNetwork:
             "count_chain_edges",
             "no_theoretical_spectra",
             "theoretical_spectra_sizes",
+            # NetworkSimplex warm/cold policy, changeable between solves, and
+            # its counters.
+            "set_warm_policy",
+            "ns_stats",
         }
     )
 

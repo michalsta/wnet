@@ -86,6 +86,21 @@ struct NetworkSimplexConfig {
     // component: 302 s with repair vs 16 s gated, against +25% when the
     // components stay small and every repair is cheap.
     long repair_max_nodes = -1;
+    // Mass-based repair gate, forwarded to
+    // NetworkSimplex::setWarmViolationMassFraction(): when >= 0, a failed tree
+    // patch whose violated basic-arc mass exceeds this fraction of the total
+    // positive supply goes straight to a cold start.  < 0 (default) disables.
+    double warm_violation_mass_fraction = -1.0;
+    // In-flight repair work budget as a multiple of the last cold solve's
+    // work, forwarded to NetworkSimplex::setWarmRepairBudget(); < 0 (default)
+    // keeps the solver's own default (a catastrophe tripwire).
+    double warm_repair_budget = -1.0;
+    // Repair gate for subgraphs above repair_max_nodes.  < 0 (default): such
+    // a subgraph never repairs (behaves as warm_violation_limit = 0).  >= 0:
+    // it repairs only while the violated basic-arc mass left by the tree
+    // patch is at most this fraction of its positive supply, and goes cold
+    // otherwise.
+    double large_repair_mass_fraction = -1.0;
 };
 struct CostScalingConfig {
     CSMethod method = CSMethod::PARTIAL_AUGMENT;
@@ -323,6 +338,18 @@ inline int64_t pick_cost_scale(double c_max, double total_flow, bool p_is_one,
 
 // Quantise a real edge cost to the solver's integer cost type.
 // p == 1: truncate the raw value (legacy, exact).  p != 1: round(S * real).
+// pylmcf after 1.3.0 adds the violated-mass repair gate and its counters to
+// NetworkSimplex.  Older pylmcf headers lack them: the mass-gate config fields
+// then have no effect and ns_stats() reports zeros.
+template <typename Solver>
+inline constexpr bool ns_has_mass_gate = requires(Solver& s, const Solver& cs) {
+    s.setWarmViolationMassFraction(0.0);
+    cs.workUnits();
+    cs.lastViolationCount();
+    cs.lastViolationMass();
+    cs.lastPositiveSupply();
+};
+
 template <typename VALUE_TYPE>
 inline VALUE_TYPE quantize_cost(double real_cost, int64_t scale, bool p_is_one) {
     const double scaled = p_is_one ? real_cost : static_cast<double>(scale) * real_cost;
@@ -738,9 +765,22 @@ class WassersteinNetworkSubgraph {
                     ns_solver->upperMap(capacities_map);
                     ns_solver->supplyMap(node_supply_map);
                     if (costs_changed) ns_solver->costMap(costs_map);
-                    ns_solver->setWarmViolationLimit(
-                        cfg.repair_max_nodes >= 0 && (long)nodes.size() > cfg.repair_max_nodes
-                            ? 0 : cfg.warm_violation_limit);
+                    const bool large = cfg.repair_max_nodes >= 0
+                        && (long)nodes.size() > cfg.repair_max_nodes;
+                    using NSType = std::decay_t<decltype(*ns_solver)>;
+                    if constexpr (ns_has_mass_gate<NSType>) {
+                        if (large && cfg.large_repair_mass_fraction >= 0) {
+                            ns_solver->setWarmViolationLimit(-1);
+                            ns_solver->setWarmViolationMassFraction(cfg.large_repair_mass_fraction);
+                        } else {
+                            ns_solver->setWarmViolationLimit(large ? 0 : cfg.warm_violation_limit);
+                            ns_solver->setWarmViolationMassFraction(cfg.warm_violation_mass_fraction);
+                        }
+                    } else {
+                        ns_solver->setWarmViolationLimit(large ? 0 : cfg.warm_violation_limit);
+                    }
+                    if (cfg.warm_repair_budget >= 0)
+                        ns_solver->setWarmRepairBudget(cfg.warm_repair_budget);
                     // costs_changed disables the "repair == optimal" fast
                     // path inside warmRun (stale potentials); the basis is
                     // still reused and start() reoptimizes.
@@ -1874,6 +1914,32 @@ public:
     void accumulate_real_theoretical_intensity(std::vector<double>& out) const {
         for (const auto& e : _theo_sink_edge_cache)
             out[e.spectrum_id] += static_cast<double>(e.theo_intensity);
+    }
+
+    // Replace the warm/cold policy fields of a NetworkSimplex config between
+    // solves, keeping the solver and its basis.  Structural fields (pivot
+    // rule, warm mode) are left as built.  No-op for other backends.
+    void set_warm_policy(const NetworkSimplexConfig& policy) {
+        if (auto* cfg = std::get_if<NetworkSimplexConfig>(&_config)) {
+            cfg->warm_violation_limit = policy.warm_violation_limit;
+            cfg->repair_max_nodes = policy.repair_max_nodes;
+            cfg->warm_violation_mass_fraction = policy.warm_violation_mass_fraction;
+            cfg->warm_repair_budget = policy.warm_repair_budget;
+            cfg->large_repair_mass_fraction = policy.large_repair_mass_fraction;
+        }
+    }
+
+    // NetworkSimplex counters: {work units, policy-forced cold starts, last
+    // violated-arc count, last violated mass, last positive supply}.
+    std::tuple<long long, int, int, double, double> ns_stats() const {
+        if (_use_lct() || !ns_solver.has_value()) return {0, 0, -1, 0.0, 0.0};
+        using NSType = std::decay_t<decltype(*ns_solver)>;
+        if constexpr (ns_has_mass_gate<NSType>)
+            return {ns_solver->workUnits(), ns_solver->policyColdCount(),
+                    ns_solver->lastViolationCount(), ns_solver->lastViolationMass(),
+                    ns_solver->lastPositiveSupply()};
+        else
+            return {0, ns_solver->policyColdCount(), -1, 0.0, 0.0};
     }
 
     int warm_start_count() const {
@@ -3981,6 +4047,33 @@ public:
                 "set_flow_budget() before build().");
         return cost;
     };
+
+    // Change the warm/cold policy of every NetworkSimplex subgraph without
+    // rebuilding (the basis is kept); later refined copies inherit it.
+    void set_warm_policy(const NetworkSimplexConfig& policy) {
+        if (auto* cfg = std::get_if<NetworkSimplexConfig>(&_built_config)) {
+            cfg->warm_violation_limit = policy.warm_violation_limit;
+            cfg->repair_max_nodes = policy.repair_max_nodes;
+            cfg->warm_violation_mass_fraction = policy.warm_violation_mass_fraction;
+            cfg->warm_repair_budget = policy.warm_repair_budget;
+            cfg->large_repair_mass_fraction = policy.large_repair_mass_fraction;
+        }
+        for (auto& sg : flow_subgraphs) sg->set_warm_policy(policy);
+    }
+
+    // Aggregated NetworkSimplex counters over all subgraphs: total work units,
+    // total policy-forced cold starts, and for the last warm solves the summed
+    // violated-arc count (over subgraphs that measured one), violated mass and
+    // positive supply.
+    std::tuple<long long, int, int, double, double> ns_stats() const {
+        long long work = 0; int policy_cold = 0, viol = 0; double mass = 0, supply = 0;
+        for (const auto& sg : flow_subgraphs) {
+            auto [w, pc, vc, vm, ps] = sg->ns_stats();
+            work += w; policy_cold += pc;
+            if (vc >= 0) { viol += vc; mass += vm; supply += ps; }
+        }
+        return {work, policy_cold, viol, mass, supply};
+    }
 
     int warm_start_count() const {
         int total = 0;

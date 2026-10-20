@@ -18,6 +18,10 @@ NB_MODULE(wnet_cpp, m) {
 #else
     m.attr("nanobind_split") = false;
 #endif
+    // Whether the vendored NetworkSimplex has the violated-mass repair gate
+    // (pylmcf after 1.3.0); without it the mass-gate config fields are inert.
+    m.attr("HAS_WARM_MASS_GATE") = ns_has_mass_gate<
+        lemon::NetworkSimplex<lemon::StaticDigraph, int64_t, int64_t>>;
 
     m.doc() = "WNet C++ imlementation module";
     // Surface C++ InfeasibleException as wnet_cpp.InfeasibleError, derived
@@ -76,7 +80,13 @@ NB_MODULE(wnet_cpp, m) {
         .def_rw("warm_violation_limit",
                 &NetworkSimplexConfig::warm_violation_limit)
         .def_rw("repair_max_nodes",
-                &NetworkSimplexConfig::repair_max_nodes);
+                &NetworkSimplexConfig::repair_max_nodes)
+        .def_rw("warm_violation_mass_fraction",
+                &NetworkSimplexConfig::warm_violation_mass_fraction)
+        .def_rw("warm_repair_budget",
+                &NetworkSimplexConfig::warm_repair_budget)
+        .def_rw("large_repair_mass_fraction",
+                &NetworkSimplexConfig::large_repair_mass_fraction);
 
     nb::class_<CostScalingConfig>(m, "CostScaling")
         .def(nb::init<>())

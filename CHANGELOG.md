@@ -11,6 +11,22 @@
   they turn the cut into one for the real-cost problem; see
   [Dual cuts](docs/dual_cuts.md#cost-quantization). A coarse cost grid now shows
   up as a large `cost_rounding_error` instead of passing unnoticed.
+- Violated-mass warm/cold gates on `NetworkSimplex` (need a pylmcf with
+  `setWarmViolationMassFraction`, reported as `wnet_cpp.HAS_WARM_MASS_GATE`;
+  inert otherwise): `warm_violation_mass_fraction` sends every subgraph cold
+  when the violated basic-arc mass left by the tree patch exceeds that
+  fraction of its positive supply, and `large_repair_mass_fraction` applies
+  the same gate only to subgraphs above `repair_max_nodes` (which otherwise
+  never repair). `warm_repair_budget` forwards the in-flight repair budget.
+  All default to -1 (unchanged behaviour). `set_warm_policy(config)` changes
+  these fields between solves without a rebuild (refined copies inherit
+  them), and `ns_stats()` reports work units, policy cold starts and the
+  last violation measurements.
+- `dual_cut()` reports `transfer_round_up_ratio`, `transfer_round_down_ratio`
+  and `transfer_absolute_error`: point-independent bounds
+  `(1 - sigma) R - A <= Q <= (1 + rho) R + A` between the quantized and the
+  real-cost objective, which carry a cut from one cost quantization to
+  another (e.g. across `refine_intensity_precision()`).
 - `NetworkSimplex.repair_max_nodes` gates warm dual repair by subgraph size:
   subgraphs with more nodes restart cold when the cheap tree patch fails
   (as `warm_violation_limit = 0`); smaller ones keep `warm_violation_limit`.
