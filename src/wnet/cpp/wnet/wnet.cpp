@@ -72,11 +72,16 @@ NB_MODULE(wnet_cpp, m) {
         .value("DualGreedy", NSWarmMode::DualGreedy)
         .value("LinkCut", NSWarmMode::LinkCut);
 
+    nb::enum_<NSStart>(m, "StartMode")
+        .value("Artificial", NSStart::Artificial)
+        .value("Trash", NSStart::Trash);
+
 
     nb::class_<NetworkSimplexConfig>(m, "NetworkSimplex")
         .def(nb::init<>())
         .def_rw("pivot", &NetworkSimplexConfig::pivot)
         .def_rw("warm",  &NetworkSimplexConfig::warm)
+        .def_rw("start", &NetworkSimplexConfig::start)
         .def_rw("warm_violation_limit",
                 &NetworkSimplexConfig::warm_violation_limit)
         .def_rw("repair_max_nodes",

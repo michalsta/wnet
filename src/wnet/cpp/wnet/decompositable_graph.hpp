@@ -61,9 +61,18 @@ enum class CCMethod {
 //                a different solver implementation, not a repair strategy.
 enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio, DualGreedy, LinkCut };
 
+// How NetworkSimplex starts whenever it starts cold (first solve, warm=None,
+// and the cold fallback of a failed warm repair):
+//   Artificial - LEMON's artificial-arc basis (one ART_COST arc per node)
+//   Trash      - crash start from the all-trash flow (no matching flow; every
+//                unit of the flow budget leaves through its trash arcs).
+//                Falls back to Artificial when the subgraph has no trash.
+enum class NSStart { Artificial, Trash };
+
 struct NetworkSimplexConfig {
     NSPivotRule pivot = NSPivotRule::BLOCK_SEARCH;
     NSWarmMode warm = NSWarmMode::DualRatio;
+    NSStart start = NSStart::Artificial;
     // Warm/cold repair policy, forwarded to
     // NetworkSimplex::setWarmViolationLimit() before each warmRun():
     //   -2 (default) — auto/unset: same as -1 unless a caller that knows the
@@ -350,6 +359,13 @@ inline constexpr bool ns_has_mass_gate = requires(Solver& s, const Solver& cs) {
     cs.lastPositiveSupply();
 };
 
+// pylmcf after 1.3.0 also adds crash starts from a given flow.
+template <typename Solver>
+inline constexpr bool ns_has_crash_start = requires(Solver& s, const std::vector<typename Solver::Value>& f) {
+    s.crashRun(f);
+    s.setColdStartFlow(&f);
+};
+
 template <typename VALUE_TYPE>
 inline VALUE_TYPE quantize_cost(double real_cost, int64_t scale, bool p_is_one) {
     const double scaled = p_is_one ? real_cost : static_cast<double>(scale) * real_cost;
@@ -385,7 +401,7 @@ class WassersteinNetworkSubgraph {
     std::optional<lemon::CostScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cs_solver;
     std::optional<lemon::CapacityScaling<lemon::StaticDigraph, VALUE_TYPE, VALUE_TYPE>> cap_solver;
     SolverConfig _config = NetworkSimplexConfig{};
-    LEMON_INDEX simple_trash_idx;
+    LEMON_INDEX simple_trash_idx = -1;
     bool simple_trash_added = false;
     bool experimental_trash_added = false;
     bool theoretical_trash_added = false;
@@ -415,6 +431,11 @@ class WassersteinNetworkSubgraph {
     mutable std::vector<VALUE_TYPE> _dual_pi, _dual_caps;
     mutable std::vector<long double> _dual_matched, _dual_alpha, _dual_beta;
     std::vector<LEMON_INDEX> _dual_anchor_arc, _dual_trash_arc;
+    // All-trash starting flow (NSStart::Trash), indexed by edge/arc id.
+    std::vector<VALUE_TYPE> _crash_flow;
+    // Arcs the crash start may use to join components left by the all-trash
+    // flow: the Source->Emp and Theo->Sink anchors, then the trash arcs.
+    std::vector<int> _crash_prefer;
     int _cold_starts_via_run = 0;
 
     // Warm-sequence capture (WNET_DUMP_WARMSEQ): when the env var holds a
@@ -698,6 +719,40 @@ class WassersteinNetworkSubgraph {
         _dump_stream->flush();
     }
 
+    // Fill _crash_flow with the all-trash flow for the current supplies and
+    // capacities: no matching flow, the whole budget F routed through trash
+    // arcs (simple trash: Source->Sink; otherwise every empirical unit
+    // Source->Emp->Sink, or every theoretical unit Source->Theo->Sink, on the
+    // side whose total equals F).  Returns false when there is no trash route
+    // (the caller then starts from LEMON's artificial basis).
+    bool _fill_crash_flow() {
+        const VALUE_TYPE F = node_supply_map[lemon_graph.nodeFromId(0)];
+        _crash_flow.assign(edges.size(), VALUE_TYPE(0));
+        if (simple_trash_added) {
+            if (simple_trash_idx < 0) return false;
+            _crash_flow[simple_trash_idx] = F;
+            return true;
+        }
+        bool emp_side;
+        if (experimental_trash_added && theoretical_trash_added)
+            emp_side = lemon_empirical_intensity >= lemon_theoretical_intensity;
+        else if (experimental_trash_added) emp_side = true;
+        else if (theoretical_trash_added) emp_side = false;
+        else return false;
+        VALUE_TYPE routed = 0;
+        for (size_t n = 2; n < nodes.size(); ++n) {
+            const bool is_emp = std::holds_alternative<EmpiricalNode<intensity_type>>(nodes[n].get_type());
+            if (is_emp != emp_side) continue;
+            const LEMON_INDEX a = _dual_anchor_arc[n], t = _dual_trash_arc[n];
+            if (a < 0 || t < 0) return false;
+            const VALUE_TYPE cap = capacities_map[lemon_graph.arcFromId(a)];
+            _crash_flow[a] = cap;
+            _crash_flow[t] = cap;
+            routed += cap;
+        }
+        return routed == F;
+    }
+
     // Run (or warm-restart) the configured solver using the current
     // capacities_map, costs_map and node_supply_map.
     // costs_changed=true: costs were updated since the last solve (e.g.
@@ -784,16 +839,33 @@ class WassersteinNetworkSubgraph {
                     // costs_changed disables the "repair == optimal" fast
                     // path inside warmRun (stale potentials); the basis is
                     // still reused and start() reoptimizes.
-                    require_optimal(ns_solver->warmRun(pivot, strategy, costs_changed),
-                                    "NetworkSimplex::warmRun()");
+                    if constexpr (ns_has_crash_start<NSType>) {
+                        const bool crash = cfg.start == NSStart::Trash && _fill_crash_flow();
+                        ns_solver->setColdStartFlow(crash ? &_crash_flow : nullptr,
+                                                    crash ? &_crash_prefer : nullptr);
+                        const auto status = ns_solver->warmRun(pivot, strategy, costs_changed);
+                        ns_solver->setColdStartFlow(nullptr);
+                        require_optimal(status, "NetworkSimplex::warmRun()");
+                    } else {
+                        require_optimal(ns_solver->warmRun(pivot, strategy, costs_changed),
+                                        "NetworkSimplex::warmRun()");
+                    }
                 } else {
                     ++_cold_starts_via_run;
                     ns_solver.emplace(lemon_graph);
                     ns_solver->upperMap(capacities_map);
                     ns_solver->costMap(costs_map);
                     ns_solver->supplyMap(node_supply_map);
-                    require_optimal(ns_solver->run(pivot),
-                                    "NetworkSimplex::run()");
+                    using NSType = std::decay_t<decltype(*ns_solver)>;
+                    if constexpr (ns_has_crash_start<NSType>) {
+                        if (cfg.start == NSStart::Trash && _fill_crash_flow())
+                            require_optimal(ns_solver->crashRun(_crash_flow, pivot, &_crash_prefer),
+                                            "NetworkSimplex::crashRun()");
+                        else
+                            require_optimal(ns_solver->run(pivot), "NetworkSimplex::run()");
+                    } else {
+                        require_optimal(ns_solver->run(pivot), "NetworkSimplex::run()");
+                    }
                 }
               }
             } else if constexpr (std::is_same_v<T, CycleCancelingConfig>) {
@@ -1153,6 +1225,20 @@ public:
                     _dual_trash_arc[edges[e].get_end_node_id()] = e;
             }, edges[e].get_type());
         }
+        _crash_prefer.clear();
+        for (size_t e = 0; e < edges.size(); ++e)
+            std::visit([&](const auto& type) {
+                using T = std::decay_t<decltype(type)>;
+                if constexpr (std::is_same_v<T, SrcToEmpiricalEdge> || std::is_same_v<T, TheoreticalToSinkEdge>)
+                    _crash_prefer.push_back(int(e));
+            }, edges[e].get_type());
+        for (size_t e = 0; e < edges.size(); ++e)
+            std::visit([&](const auto& type) {
+                using T = std::decay_t<decltype(type)>;
+                if constexpr (std::is_same_v<T, SimpleTrashEdge> || std::is_same_v<T, EmpiricalTrashEdge> ||
+                              std::is_same_v<T, TheoreticalTrashEdge>)
+                    _crash_prefer.push_back(int(e));
+            }, edges[e].get_type());
         _costs_buf.assign(edges.size(), VALUE_TYPE(0));
         if (_chain_topo.has_value()) {
             const size_t K = _chain_topo->order.size();
@@ -1921,6 +2007,7 @@ public:
     // rule, warm mode) are left as built.  No-op for other backends.
     void set_warm_policy(const NetworkSimplexConfig& policy) {
         if (auto* cfg = std::get_if<NetworkSimplexConfig>(&_config)) {
+            cfg->start = policy.start;
             cfg->warm_violation_limit = policy.warm_violation_limit;
             cfg->repair_max_nodes = policy.repair_max_nodes;
             cfg->warm_violation_mass_fraction = policy.warm_violation_mass_fraction;
@@ -4052,6 +4139,7 @@ public:
     // rebuilding (the basis is kept); later refined copies inherit it.
     void set_warm_policy(const NetworkSimplexConfig& policy) {
         if (auto* cfg = std::get_if<NetworkSimplexConfig>(&_built_config)) {
+            cfg->start = policy.start;
             cfg->warm_violation_limit = policy.warm_violation_limit;
             cfg->repair_max_nodes = policy.repair_max_nodes;
             cfg->warm_violation_mass_fraction = policy.warm_violation_mass_fraction;
