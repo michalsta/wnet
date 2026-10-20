@@ -67,12 +67,16 @@ enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio, DualGreedy, LinkC
 //   Trash      - crash start from the all-trash flow (no matching flow; every
 //                unit of the flow budget leaves through its trash arcs).
 //                Falls back to Artificial when the subgraph has no trash.
+// Trash is the default: measured on x86-64-v3 (i5-12500, 2026-10-20) it never
+// lost more than 6% (on ~1 ms solves) and won up to 10x alone, up to 100x
+// together with the repair_max_nodes gate below, whose cold fallbacks it
+// makes cheap (with the Artificial start that gate loses up to 3.5x).
 enum class NSStart { Artificial, Trash };
 
 struct NetworkSimplexConfig {
     NSPivotRule pivot = NSPivotRule::BLOCK_SEARCH;
     NSWarmMode warm = NSWarmMode::DualRatio;
-    NSStart start = NSStart::Artificial;
+    NSStart start = NSStart::Trash;
     // Warm/cold repair policy, forwarded to
     // NetworkSimplex::setWarmViolationLimit() before each warmRun():
     //   -2 (default) — auto/unset: same as -1 unless a caller that knows the
@@ -93,8 +97,11 @@ struct NetworkSimplexConfig {
     // bound-flip walks), while on small components it stays cheap; e.g.
     // 2-D LC-MS alignment once its components percolate into one giant
     // component: 302 s with repair vs 16 s gated, against +25% when the
-    // components stay small and every repair is cheap.
-    long repair_max_nodes = -1;
+    // components stay small and every repair is cheap.  Default 1000 (was -1)
+    // since cold starts became crash starts (NSStart::Trash): with them the
+    // gate gave 0.01-0.29x on 15-20k-peak synthetic sequences and stayed
+    // within 1.06x on small ones.
+    long repair_max_nodes = 1000;
     // Mass-based repair gate, forwarded to
     // NetworkSimplex::setWarmViolationMassFraction(): when >= 0, a failed tree
     // patch whose violated basic-arc mass exceeds this fraction of the total

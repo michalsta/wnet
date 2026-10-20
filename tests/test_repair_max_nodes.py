@@ -27,7 +27,7 @@ def run(repair_max_nodes, warm=WarmMode.DualRatio, seed=5):
 
 
 def test_default_is_disabled():
-    assert NetworkSimplex().repair_max_nodes == -1
+    assert NetworkSimplex().repair_max_nodes == 1000
 
 
 def test_gate_sends_large_subgraphs_cold_without_changing_costs():

@@ -149,9 +149,10 @@ W = WassersteinNetwork(S1, [S2], DistanceMetric.L1, max_distance=3.0, solver=sol
 ```
 
 `warm` chooses how successive solves reuse the previous basis. `start` chooses how a solve that
-starts cold begins: `StartMode.Artificial` uses LEMON's artificial-arc basis, `StartMode.Trash`
-starts from the flow that sends everything to the trash (needs a trash model) and can be much
-faster. Both give identical results. `set_warm_policy()` changes either between solves, and
+starts cold begins: `StartMode.Trash` (the default) starts from the flow that sends everything to
+the trash, `StartMode.Artificial` uses LEMON's artificial-arc basis. Both give identical results;
+the trash start is usually faster, much faster on large components, and falls back to the
+artificial one when there is no trash model. `set_warm_policy()` changes either between solves, and
 `warm_start_count()`, `cold_start_count()` and `crash_start_count()` report what happened.
 
 ## Licence

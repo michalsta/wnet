@@ -29,6 +29,11 @@ WEIGHTS = np.concatenate([np.linspace(0.5, 1.6, 10), 1.6 + np.cumsum(np.full(10,
 def config(**fields):
     cfg = NetworkSimplex()
     cfg.warm = WarmMode.DualRatio
+    # These tests measure warm repair against LEMON's artificial cold start;
+    # the default trash start makes cold solves cheaper than late repairs.
+    if hasattr(cfg, "start"):
+        from wnet.wnet_cpp import StartMode
+        cfg.start = StartMode.Artificial
     for k, v in fields.items():
         setattr(cfg, k, v)
     return cfg
