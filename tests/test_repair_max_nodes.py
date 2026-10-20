@@ -27,7 +27,9 @@ def run(repair_max_nodes, warm=WarmMode.DualRatio, seed=5):
 
 
 def test_default_is_disabled():
-    assert NetworkSimplex().repair_max_nodes == 1000
+    import wnet.wnet_cpp as c
+    # gated by default only where cold starts are crash starts (see NetworkSimplexConfig)
+    assert NetworkSimplex().repair_max_nodes == (1000 if getattr(c, "HAS_CRASH_START", False) else -1)
 
 
 def test_gate_sends_large_subgraphs_cold_without_changing_costs():

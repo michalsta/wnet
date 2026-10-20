@@ -73,6 +73,15 @@ enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio, DualGreedy, LinkC
 // makes cheap (with the Artificial start that gate loses up to 3.5x).
 enum class NSStart { Artificial, Trash };
 
+// pylmcf after 1.3.0 also adds crash starts from a given flow.
+template <typename Solver>
+inline constexpr bool ns_has_crash_start = requires(Solver& s, const std::vector<typename Solver::Value>& f) {
+    s.crashRun(f);
+    s.setColdStartFlow(&f);
+};
+inline constexpr bool wnet_has_crash_start =
+    ns_has_crash_start<lemon::NetworkSimplex<lemon::StaticDigraph, int64_t, int64_t>>;
+
 struct NetworkSimplexConfig {
     NSPivotRule pivot = NSPivotRule::BLOCK_SEARCH;
     NSWarmMode warm = NSWarmMode::DualRatio;
@@ -100,8 +109,10 @@ struct NetworkSimplexConfig {
     // components stay small and every repair is cheap.  Default 1000 (was -1)
     // since cold starts became crash starts (NSStart::Trash): with them the
     // gate gave 0.01-0.29x on 15-20k-peak synthetic sequences and stayed
-    // within 1.06x on small ones.
-    long repair_max_nodes = 1000;
+    // within 1.06x on small ones.  Without crash starts (pylmcf <= 1.3.0) the
+    // gate's cold fallbacks use the artificial start and lose up to 3.5x, so
+    // the default stays -1 there.
+    long repair_max_nodes = wnet_has_crash_start ? 1000 : -1;
     // Mass-based repair gate, forwarded to
     // NetworkSimplex::setWarmViolationMassFraction(): when >= 0, a failed tree
     // patch whose violated basic-arc mass exceeds this fraction of the total
@@ -364,13 +375,6 @@ inline constexpr bool ns_has_mass_gate = requires(Solver& s, const Solver& cs) {
     cs.lastViolationCount();
     cs.lastViolationMass();
     cs.lastPositiveSupply();
-};
-
-// pylmcf after 1.3.0 also adds crash starts from a given flow.
-template <typename Solver>
-inline constexpr bool ns_has_crash_start = requires(Solver& s, const std::vector<typename Solver::Value>& f) {
-    s.crashRun(f);
-    s.setColdStartFlow(&f);
 };
 
 template <typename VALUE_TYPE>
