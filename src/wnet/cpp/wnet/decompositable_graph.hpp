@@ -437,6 +437,9 @@ class WassersteinNetworkSubgraph {
     // flow: the Source->Emp and Theo->Sink anchors, then the trash arcs.
     std::vector<int> _crash_prefer;
     int _cold_starts_via_run = 0;
+    // Crash starts of NetworkSimplex instances already replaced (warm=None
+    // re-creates the solver every solve).
+    int _crash_starts_retired = 0;
 
     // Warm-sequence capture (WNET_DUMP_WARMSEQ): when the env var holds a
     // path prefix, every NetworkSimplex solve of this subgraph appends its
@@ -852,6 +855,7 @@ class WassersteinNetworkSubgraph {
                     }
                 } else {
                     ++_cold_starts_via_run;
+                    _crash_starts_retired = crash_start_count();
                     ns_solver.emplace(lemon_graph);
                     ns_solver->upperMap(capacities_map);
                     ns_solver->costMap(costs_map);
@@ -2033,6 +2037,13 @@ public:
         if (_use_lct())
             return ns_lct_solver.has_value() ? ns_lct_solver->warmStartCount() : 0;
         return ns_solver.has_value() ? ns_solver->warmStartCount() : 0;
+    }
+    // Cold starts taken from the all-trash flow (NSStart::Trash).
+    int crash_start_count() const {
+        if (_use_lct() || !ns_solver.has_value()) return _crash_starts_retired;
+        using NSType = std::decay_t<decltype(*ns_solver)>;
+        if constexpr (ns_has_crash_start<NSType>) return _crash_starts_retired + ns_solver->crashStartCount();
+        else return _crash_starts_retired;
     }
     int cold_start_count() const {
         if (_use_lct())
@@ -4167,6 +4178,12 @@ public:
         int total = 0;
         for (const auto& sg : flow_subgraphs)
             total += sg->warm_start_count();
+        return total;
+    }
+    int crash_start_count() const {
+        int total = 0;
+        for (const auto& sg : flow_subgraphs)
+            total += sg->crash_start_count();
         return total;
     }
     int cold_start_count() const {

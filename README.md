@@ -137,6 +137,23 @@ for _ in range(100):
 
 If you only want the re-solve and not the gradient, `update_positions_and_solve(new_base, new_targets)` is the cheaper call. Both keep the graph topology fixed, so the peak counts may not change; on 1D chain networks the peaks may also not cross one another.
 
+### Solver configuration
+
+`solver=` takes a config object. `NetworkSimplex` (the default) accepts every field as a keyword:
+
+```python
+from wnet import NetworkSimplex, WarmMode, StartMode
+
+solver = NetworkSimplex(warm=WarmMode.DualRatio, start=StartMode.Trash)
+W = WassersteinNetwork(S1, [S2], DistanceMetric.L1, max_distance=3.0, solver=solver)
+```
+
+`warm` chooses how successive solves reuse the previous basis. `start` chooses how a solve that
+starts cold begins: `StartMode.Artificial` uses LEMON's artificial-arc basis, `StartMode.Trash`
+starts from the flow that sends everything to the trash (needs a trash model) and can be much
+faster. Both give identical results. `set_warm_policy()` changes either between solves, and
+`warm_start_count()`, `cold_start_count()` and `crash_start_count()` report what happened.
+
 ## Licence
 MIT Licence
 

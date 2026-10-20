@@ -47,9 +47,13 @@ def points(seed, k=3, n=8):
     return [rng.uniform(0, 2, k) for _ in range(n)]
 
 
+ALL_WARM = [WarmMode.NONE, WarmMode.Simple, WarmMode.Dual, WarmMode.Primal, WarmMode.DualRatio,
+            WarmMode.DualGreedy]
+
+
 @pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("chain", [False, True])
-@pytest.mark.parametrize("warm", [WarmMode.NONE, WarmMode.DualRatio, WarmMode.Simple])
+@pytest.mark.parametrize("warm", ALL_WARM)
 @pytest.mark.parametrize("seed", range(4))
 def test_trash_start_matches_artificial(model, chain, warm, seed):
     if chain and model == "independent":
@@ -86,3 +90,73 @@ def test_trash_start_high_dimension():
         a.solve(list(w))
         b.solve(list(w))
         assert a.total_cost() == b.total_cost()
+
+
+@pytest.mark.parametrize("warm", ALL_WARM)
+def test_crash_start_counters(warm):
+    a = build("both", StartMode.Artificial, warm, 5, False)
+    b = build("both", StartMode.Trash, warm, 5, False)
+    pts = points(5)
+    for w in pts:
+        a.solve(list(w))
+        b.solve(list(w))
+    assert a.crash_start_count() == 0
+    assert b.crash_start_count() >= 1
+    if warm == WarmMode.NONE:
+        # every solve of every subgraph starts cold, hence from the all-trash flow
+        assert b.crash_start_count() == len(pts) * b.no_subgraphs()
+    assert b.warm_start_count() >= 0 and b.cold_start_count() >= 0
+
+
+@pytest.mark.parametrize("model", MODELS)
+@pytest.mark.parametrize("warm", [WarmMode.NONE, WarmMode.Dual, WarmMode.DualRatio])
+def test_trash_start_position_updates(model, warm):
+    """Cost changes (update_positions_and_solve) after crash-started solves stay exact."""
+    from wnet import Distribution
+    a = build(model, StartMode.Artificial, warm, 11, False)
+    b = build(model, StartMode.Trash, warm, 11, False)
+    a.solve([1.0, 0.7, 1.3])
+    b.solve([1.0, 0.7, 1.3])
+    rng = np.random.default_rng(99)
+    base_rng = np.random.default_rng(11)
+    pos = base_rng.uniform(0, 10, (2, 40))
+    ints = base_rng.uniform(0.1, 2, 40)
+    theo = [Distribution(base_rng.uniform(0, 10, (2, 30)), base_rng.uniform(0.1, 2, 30)) for _ in range(3)]
+    for step in range(4):
+        moved = Distribution(pos + rng.normal(0, 0.3, pos.shape), ints)
+        a.update_positions_and_solve(moved, theo)
+        b.update_positions_and_solve(moved, theo)
+        assert a.total_cost() == b.total_cost()
+
+
+def test_linkcut_ignores_start_mode():
+    a = build("simple", StartMode.Artificial, WarmMode.LinkCut, 2, False)
+    b = build("simple", StartMode.Trash, WarmMode.LinkCut, 2, False)
+    for w in points(2):
+        a.solve(list(w))
+        b.solve(list(w))
+        assert a.total_cost() == b.total_cost()
+    assert b.crash_start_count() == 0
+
+
+def test_network_simplex_keyword_constructor():
+    import wnet
+    s = wnet.NetworkSimplex(start=wnet.StartMode.Trash, warm=wnet.WarmMode.NONE,
+                            pivot=wnet.NSPivotRule.FIRST_ELIGIBLE, repair_max_nodes=17,
+                            warm_violation_limit=3, warm_violation_mass_fraction=0.25,
+                            warm_repair_budget=2.0, large_repair_mass_fraction=0.125)
+    assert s.start == wnet.StartMode.Trash and s.warm == wnet.WarmMode.NONE
+    assert s.pivot == wnet.NSPivotRule.FIRST_ELIGIBLE and s.repair_max_nodes == 17
+    assert s.warm_violation_limit == 3 and s.warm_violation_mass_fraction == 0.25
+    assert s.warm_repair_budget == 2.0 and s.large_repair_mass_fraction == 0.125
+    d = wnet.NetworkSimplex()
+    assert d.start == wnet.StartMode.Artificial and d.warm == wnet.WarmMode.DualRatio
+    with pytest.raises(TypeError):
+        wnet.NetworkSimplex(wnet.NSPivotRule.FIRST_ELIGIBLE)   # keyword-only
+
+
+def test_top_level_exports():
+    import wnet
+    for name in ("NetworkSimplex", "NSPivotRule", "WarmMode", "StartMode", "CostScaling",
+                 "CycleCanceling", "CapacityScaling", "SlopeDP", "ConvexSweep"):
+        assert getattr(wnet, name) is getattr(wnet.wnet_cpp, name)

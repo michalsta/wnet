@@ -78,7 +78,34 @@ NB_MODULE(wnet_cpp, m) {
 
 
     nb::class_<NetworkSimplexConfig>(m, "NetworkSimplex")
-        .def(nb::init<>())
+        .def("__init__",
+             [](NetworkSimplexConfig* self, NSPivotRule pivot, NSWarmMode warm, NSStart start,
+                long warm_violation_limit, long repair_max_nodes, double warm_violation_mass_fraction,
+                double warm_repair_budget, double large_repair_mass_fraction) {
+                 new (self) NetworkSimplexConfig{};
+                 self->pivot = pivot;
+                 self->warm = warm;
+                 self->start = start;
+                 self->warm_violation_limit = warm_violation_limit;
+                 self->repair_max_nodes = repair_max_nodes;
+                 self->warm_violation_mass_fraction = warm_violation_mass_fraction;
+                 self->warm_repair_budget = warm_repair_budget;
+                 self->large_repair_mass_fraction = large_repair_mass_fraction;
+             },
+             nb::kw_only(),
+             nb::arg("pivot") = NetworkSimplexConfig{}.pivot,
+             nb::arg("warm") = NetworkSimplexConfig{}.warm,
+             nb::arg("start") = NetworkSimplexConfig{}.start,
+             nb::arg("warm_violation_limit") = NetworkSimplexConfig{}.warm_violation_limit,
+             nb::arg("repair_max_nodes") = NetworkSimplexConfig{}.repair_max_nodes,
+             nb::arg("warm_violation_mass_fraction") = NetworkSimplexConfig{}.warm_violation_mass_fraction,
+             nb::arg("warm_repair_budget") = NetworkSimplexConfig{}.warm_repair_budget,
+             nb::arg("large_repair_mass_fraction") = NetworkSimplexConfig{}.large_repair_mass_fraction,
+             "NetworkSimplex solver config; every field is also a read/write attribute.\n"
+             "pivot: NSPivotRule.  warm: WarmMode between successive solves.\n"
+             "start: StartMode for every cold start (Artificial = LEMON's artificial\n"
+             "basis; Trash = crash start from the all-trash flow, same results).\n"
+             "The remaining fields gate warm repair; see the C++ NetworkSimplexConfig.")
         .def_rw("pivot", &NetworkSimplexConfig::pivot)
         .def_rw("warm",  &NetworkSimplexConfig::warm)
         .def_rw("start", &NetworkSimplexConfig::start)
