@@ -37,6 +37,9 @@ nb::class_<WNetIF> bind_network_if(nb::module_& m) {
         .def("scale_factor", &WassersteinNetwork<int64_t, double>::scale_factor)
         .def("intensity_scale_factor", &WassersteinNetwork<int64_t, double>::intensity_scale_factor)
         .def("refined_copy", &WassersteinNetwork<int64_t, double>::refined_copy, nb::arg("intensity_scale"))
+        .def("rescale_intensity", &WassersteinNetwork<int64_t, double>::rescale_intensity,
+             nb::arg("intensity_scale"), nb::arg("explicit_cost_scale") = -1)
+        .def("can_rescale_in_place", &WassersteinNetwork<int64_t, double>::can_rescale_in_place)
         .def("set_intensity_scale", &WassersteinNetwork<int64_t, double>::set_intensity_scale, nb::arg("scale"))
         .def("set_cost_scaling", &WassersteinNetwork<int64_t, double>::set_cost_scaling, nb::arg("scale") = 0)
         .def("set_cost_precision_bits", &WassersteinNetwork<int64_t, double>::set_cost_precision_bits, nb::arg("bits"))

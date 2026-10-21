@@ -543,27 +543,51 @@ class WassersteinNetwork:
         return self.wnet.__str__()
 
     def refine_intensity_precision(self, factor: float = 10.0) -> None:
-        """Rebuild at finer supply precision, retaining current costs, topology and backend.
+        """Move to finer supply precision, retaining current costs, topology and backend.
 
         The cost scale is selected again to fit the int64 accumulator budget.
         This invalidates the old solution, warm basis and any existing cuts.
-        A failed rebuild leaves the original network and settings intact.
+        A failed change leaves the original network and settings intact.
         """
         if not np.isfinite(factor) or factor <= 1:
             raise ValueError("Precision factor must be finite and greater than one")
-        scale = self.intensity_scale_factor() * factor
+        self.set_intensity_precision(self.intensity_scale_factor() * factor)
+
+    def set_intensity_precision(self, scale: float, cost_scale=None) -> None:
+        """Re-quantise the built network at intensity scale ``scale``.
+
+        Done in place when the C++ network allows it (no position update has
+        happened): the topology, LEMON graphs and chain order are kept and only
+        costs and anchor capacities are re-quantised, which is O(arcs) with no
+        allocation.  Otherwise the network is copied and rebuilt at the new
+        scale (``refined_copy``).  Either way the solution, warm basis and any
+        cached dual are discarded.
+
+        ``cost_scale`` is the explicit cost scale to use afterwards (``0`` for
+        automatic); ``None`` switches an opted-in cost scaling to automatic,
+        as a refinement must to respect the int64 budget.
+        """
         budget = self._flow_budget_arg
         if budget is None:
             budget = 4 * (
                 float(self._base_distribution.sum_intensities)
                 + sum(float(t.sum_intensities) for t in self._target_distributions)
             )
-        if not np.isfinite(scale) or scale * budget >= np.iinfo(np.int64).max / 4:
+        if not np.isfinite(scale) or scale <= 0 or scale * budget >= np.iinfo(np.int64).max / 4:
             raise OverflowError("Refined supplies exceed the integer flow budget")
-        refined = self.wnet.refined_copy(scale)
+        wnet = self.wnet
+        in_place = getattr(wnet, "can_rescale_in_place", None)
+        if in_place is not None and in_place():
+            wnet.rescale_intensity(scale, -1 if cost_scale is None else int(cost_scale))
+        else:
+            if cost_scale is not None:
+                raise ValueError("an explicit cost_scale needs the in-place rescale (no position update)")
+            self._wnet_obj = wnet.refined_copy(scale)
         self._intensity_scale_arg = scale
-        self._cost_scaling_arg = 0 if self._cost_scaling_arg is not None else None
-        self._wnet_obj = refined
+        if cost_scale is not None:
+            self._cost_scaling_arg = int(cost_scale)
+        else:
+            self._cost_scaling_arg = 0 if self._cost_scaling_arg is not None else None
 
     def dual_cut(self) -> dict:
         """Supporting cut and upper bound for continuous supplies.

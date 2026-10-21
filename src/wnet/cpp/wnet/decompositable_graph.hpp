@@ -1074,7 +1074,27 @@ public:
         }, edges[simple_trash_idx].get_type());
     }
 
+    // build_impl() = fixed topology (sorted arcs, the LEMON graph, chain order,
+    // arc caches) followed by everything that depends on the intensity or cost
+    // scale.  requantize() re-runs only the second half, which is how the
+    // network changes its supply precision in place instead of rebuilding.
     void build_impl() {
+        _build_topology();
+        _apply_scale();
+        built = true;
+    }
+
+    // Re-quantise costs and anchor capacities for the scales most recently
+    // passed to set_cost_scaling(), discarding any solution and warm basis.
+    // Valid only for the costs the subgraph was built with: after a position
+    // update the real costs live in the owning network's edge-cost vector.
+    void requantize() {
+        if (!built)
+            throw std::runtime_error("requantize() requires a built subgraph");
+        _apply_scale();
+    }
+
+    void _build_topology() {
         assert_fits_lemon_index(nodes.size(), "subgraph nodes");
         assert_fits_lemon_index(edges.size(), "subgraph edges");
         edges = std::move(sorted_copy(edges, [](const FlowEdge<intensity_type>& a, const FlowEdge<intensity_type>& b) {
@@ -1091,6 +1111,75 @@ public:
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(nodes.size()); ++ii)
             node_supply_map[lemon_graph.nodeFromId(ii)] = 0;
 
+        // Chain order and arc caches depend only on the sorted arcs.  The
+        // chain's gap costs are filled in by _refresh_chain_costs() once the
+        // cost map exists.
+        _build_chain_topology();
+        _matching_edge_cache.clear();
+        _theo_sink_edge_cache.clear();
+        _unlimited_arc.assign(edges.size(), false);
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            std::visit([&](const auto& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, MatchingEdge>) {
+                    _unlimited_arc[ii] = true;
+                    const auto& theo = std::get<TheoreticalNode<intensity_type>>(edges[ii].get_end_node().get_type());
+                    const auto& emp  = std::get<EmpiricalNode<intensity_type>>(edges[ii].get_start_node().get_type());
+                    _matching_edge_cache.push_back({lemon_graph.arcFromId(ii), emp.get_intensity(), theo.get_intensity(), theo.get_spectrum_id(), emp.get_peak_index(), theo.get_peak_index()});
+                } else if constexpr (std::is_same_v<T, ChainEdge>) {
+                    _unlimited_arc[ii] = true;
+                } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
+                    const auto& theo = std::get<TheoreticalNode<intensity_type>>(edges[ii].get_start_node().get_type());
+                    _theo_sink_edge_cache.push_back({lemon_graph.arcFromId(ii), theo.get_intensity(), theo.get_spectrum_id()});
+                }
+            }, edges[ii].get_type());
+        }
+        _dual_anchor_arc.assign(nodes.size(), -1);
+        _dual_trash_arc.assign(nodes.size(), -1);
+        for (size_t e = 0; e < edges.size(); ++e) {
+            std::visit([&](const auto& type) {
+                using T = std::decay_t<decltype(type)>;
+                if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>)
+                    _dual_anchor_arc[edges[e].get_end_node_id()] = e;
+                else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>)
+                    _dual_anchor_arc[edges[e].get_start_node_id()] = e;
+                else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>)
+                    _dual_trash_arc[edges[e].get_start_node_id()] = e;
+                else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>)
+                    _dual_trash_arc[edges[e].get_end_node_id()] = e;
+            }, edges[e].get_type());
+        }
+        _crash_prefer.clear();
+        for (size_t e = 0; e < edges.size(); ++e)
+            std::visit([&](const auto& type) {
+                using T = std::decay_t<decltype(type)>;
+                if constexpr (std::is_same_v<T, SrcToEmpiricalEdge> || std::is_same_v<T, TheoreticalToSinkEdge>)
+                    _crash_prefer.push_back(int(e));
+            }, edges[e].get_type());
+        for (size_t e = 0; e < edges.size(); ++e)
+            std::visit([&](const auto& type) {
+                using T = std::decay_t<decltype(type)>;
+                if constexpr (std::is_same_v<T, SimpleTrashEdge> || std::is_same_v<T, EmpiricalTrashEdge> ||
+                              std::is_same_v<T, TheoreticalTrashEdge>)
+                    _crash_prefer.push_back(int(e));
+            }, edges[e].get_type());
+        if (_chain_topo.has_value()) {
+            const size_t K = _chain_topo->order.size();
+            const size_t Km1 = K > 1 ? K - 1 : 0;
+            _chain_R_buf.resize(Km1);
+            _chain_L_buf.resize(Km1);
+            _chain_pos_buf.resize(K);
+            _chain_dist_buf.resize(nodes.size());
+            _chain_has_src_fwd.resize(K);   _chain_has_src_rev.resize(K);
+            _chain_has_sink_fwd.resize(K);  _chain_has_sink_rev.resize(K);
+            _chain_exp_trash_cost.resize(K); _chain_theo_trash_cost.resize(K);
+            _chain_exp_trash_fwd.resize(K); _chain_exp_trash_rev.resize(K);
+            _chain_theo_trash_fwd.resize(K); _chain_theo_trash_rev.resize(K);
+        }
+    }
+
+    void _apply_scale() {
+        lemon_empirical_intensity = 0;
         // Independent trash: shift matching costs by the same quantized
         // prices added back in total_cost(). Shifting in real units before
         // rounding breaks cancellation and can make a zero-cost match negative.
@@ -1203,72 +1292,11 @@ public:
         _sdp_dual.clear();
         _sdp_ce.clear(); _sdp_ct.clear(); _sdp_uc.clear(); _sdp_yc.clear(); _sdp_sc.clear();
         _sweep_pos_built = false;
+        _sweep_grid_built = false;
         _chain_arc_cache_built = false;
-        _build_chain_topology();
         _refresh_chain_costs();
-        _matching_edge_cache.clear();
-        _theo_sink_edge_cache.clear();
-        _unlimited_arc.assign(edges.size(), false);
-        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
-            std::visit([&](const auto& arg) {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr (std::is_same_v<T, MatchingEdge>) {
-                    _unlimited_arc[ii] = true;
-                    const auto& theo = std::get<TheoreticalNode<intensity_type>>(edges[ii].get_end_node().get_type());
-                    const auto& emp  = std::get<EmpiricalNode<intensity_type>>(edges[ii].get_start_node().get_type());
-                    _matching_edge_cache.push_back({lemon_graph.arcFromId(ii), emp.get_intensity(), theo.get_intensity(), theo.get_spectrum_id(), emp.get_peak_index(), theo.get_peak_index()});
-                } else if constexpr (std::is_same_v<T, ChainEdge>) {
-                    _unlimited_arc[ii] = true;
-                } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
-                    const auto& theo = std::get<TheoreticalNode<intensity_type>>(edges[ii].get_start_node().get_type());
-                    _theo_sink_edge_cache.push_back({lemon_graph.arcFromId(ii), theo.get_intensity(), theo.get_spectrum_id()});
-                }
-            }, edges[ii].get_type());
-        }
-        _dual_anchor_arc.assign(nodes.size(), -1);
-        _dual_trash_arc.assign(nodes.size(), -1);
-        for (size_t e = 0; e < edges.size(); ++e) {
-            std::visit([&](const auto& type) {
-                using T = std::decay_t<decltype(type)>;
-                if constexpr (std::is_same_v<T, SrcToEmpiricalEdge>)
-                    _dual_anchor_arc[edges[e].get_end_node_id()] = e;
-                else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>)
-                    _dual_anchor_arc[edges[e].get_start_node_id()] = e;
-                else if constexpr (std::is_same_v<T, EmpiricalTrashEdge>)
-                    _dual_trash_arc[edges[e].get_start_node_id()] = e;
-                else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>)
-                    _dual_trash_arc[edges[e].get_end_node_id()] = e;
-            }, edges[e].get_type());
-        }
-        _crash_prefer.clear();
-        for (size_t e = 0; e < edges.size(); ++e)
-            std::visit([&](const auto& type) {
-                using T = std::decay_t<decltype(type)>;
-                if constexpr (std::is_same_v<T, SrcToEmpiricalEdge> || std::is_same_v<T, TheoreticalToSinkEdge>)
-                    _crash_prefer.push_back(int(e));
-            }, edges[e].get_type());
-        for (size_t e = 0; e < edges.size(); ++e)
-            std::visit([&](const auto& type) {
-                using T = std::decay_t<decltype(type)>;
-                if constexpr (std::is_same_v<T, SimpleTrashEdge> || std::is_same_v<T, EmpiricalTrashEdge> ||
-                              std::is_same_v<T, TheoreticalTrashEdge>)
-                    _crash_prefer.push_back(int(e));
-            }, edges[e].get_type());
         _costs_buf.assign(edges.size(), VALUE_TYPE(0));
-        if (_chain_topo.has_value()) {
-            const size_t K = _chain_topo->order.size();
-            const size_t Km1 = K > 1 ? K - 1 : 0;
-            _chain_R_buf.resize(Km1);
-            _chain_L_buf.resize(Km1);
-            _chain_pos_buf.resize(K);
-            _chain_dist_buf.resize(nodes.size());
-            _chain_has_src_fwd.resize(K);   _chain_has_src_rev.resize(K);
-            _chain_has_sink_fwd.resize(K);  _chain_has_sink_rev.resize(K);
-            _chain_exp_trash_cost.resize(K); _chain_theo_trash_cost.resize(K);
-            _chain_exp_trash_fwd.resize(K); _chain_exp_trash_rev.resize(K);
-            _chain_theo_trash_fwd.resize(K); _chain_theo_trash_rev.resize(K);
-        }
-        built = true;
+        ++_solution_version;
     }
 
     // Set by the owning network before build() so build_impl() quantises costs
@@ -3390,6 +3418,11 @@ class WassersteinNetwork {
 
     bool built = false;
     bool _position_update_invalid = false;
+    // Set once update_positions_and_solve() has rewritten any subgraph's
+    // costs: the subgraphs' edge objects then hold stale real costs, so a
+    // precision change must go through refined_copy() (which reads
+    // _current_edge_costs) instead of requantising in place.
+    bool _positions_moved = false;
     SolverConfig _built_config = NetworkSimplexConfig{};
 
     // Wasserstein transport order p.  Edge cost = ground_distance^p, so the
@@ -3834,15 +3867,79 @@ public:
             // overrides.  p == 1 legacy truncation (scale 1) is unaffected.
             total_flow *= 4.0;
         }
-        // Choose one global cost scale from the largest real cost across the whole
-        // network (matching + trash), so every subgraph's integer costs — and the
-        // summed total_cost — share the same units.  p == 1 keeps _scale == 1.
-        // The integer flow the accumulator actually sees is the real flow times
-        // the intensity scale, so size the cost-scale ceiling against that.
-        // Costs are scaled (round) whenever p != 1, OR when the caller opted in
-        // via set_cost_scaling() (which lets p == 1 carry real fractional costs
-        // instead of truncating).  Otherwise p == 1 keeps the legacy S == 1
-        // truncation.  `_truncate` drives both the scale choice and quantize_cost.
+        _select_cost_scale(config, total_flow);
+        for (auto& flow_subgraph : flow_subgraphs) {
+            flow_subgraph->set_cost_scaling(_scale, _costs_truncated(), _intensity_scale,
+                                            _p_order);
+            flow_subgraph->build(config);
+        }
+        built = true;
+        _built_config = config;
+        _total_flow_for_scale = total_flow;
+    };
+
+    // Total flow bound the cost scale was sized against at build(); reused by
+    // rescale_intensity(), whose inputs differ only in the intensity scale.
+    double _total_flow_for_scale = 0.0;
+
+    // In-place counterpart of refined_copy(): the topology, trash model and
+    // backend stay, supplies are re-quantised at the new intensity scale and
+    // the cost scale is chosen again for the int64 budget.  Discards the
+    // current solution, every warm basis and any cached dual.  Only for a
+    // network whose positions never moved (see _positions_moved).  Fails
+    // before touching any subgraph when the new scale cannot be sized; a
+    // failure inside a subgraph leaves the network unusable, like a failed
+    // position update.
+    // explicit_cost_scale < 0 (default) re-selects the cost scale automatically
+    // when cost scaling is on, as refined_copy() does; >= 0 is stored as the
+    // explicit cost scale (0 = automatic) so a caller can undo a rescale and
+    // return to exactly its previous settings.
+    void rescale_intensity(double intensity_scale, int64_t explicit_cost_scale = -1) {
+        require_valid_position_update(_position_update_invalid);
+        if (!built)
+            throw std::runtime_error("rescale_intensity() requires a built network");
+        if (!can_rescale_in_place())
+            throw std::runtime_error("rescale_intensity() is unavailable after a position update; use refined_copy()");
+        const double previous_intensity_scale = _intensity_scale;
+        const int64_t previous_scale = _scale, previous_explicit = _explicit_cost_scale;
+        set_intensity_scale(intensity_scale);
+        if (explicit_cost_scale >= 0) _explicit_cost_scale = explicit_cost_scale;
+        else if (_cost_scaling_requested) _explicit_cost_scale = 0;
+        try {
+            _select_cost_scale(_built_config, _total_flow_for_scale);
+        } catch (...) {
+            _intensity_scale = previous_intensity_scale;
+            _scale = previous_scale;
+            _explicit_cost_scale = previous_explicit;
+            throw;
+        }
+        try {
+            for (auto& flow_subgraph : flow_subgraphs) {
+                flow_subgraph->set_cost_scaling(_scale, _costs_truncated(), _intensity_scale,
+                                                _p_order);
+                flow_subgraph->requantize();
+            }
+        } catch (...) {
+            _invalidate_position_update();
+            throw;
+        }
+        _last_point.clear();
+    }
+
+    bool can_rescale_in_place() const {
+        return built && !_positions_moved && !_position_update_invalid;
+    }
+
+    // Choose one global cost scale from the largest real cost across the whole
+    // network (matching + trash), so every subgraph's integer costs — and the
+    // summed total_cost — share the same units.  p == 1 keeps _scale == 1.
+    // The integer flow the accumulator actually sees is the real flow times
+    // the intensity scale, so size the cost-scale ceiling against that.
+    // Costs are scaled (round) whenever p != 1, OR when the caller opted in
+    // via set_cost_scaling() (which lets p == 1 carry real fractional costs
+    // instead of truncating).  Otherwise p == 1 keeps the legacy S == 1
+    // truncation.  `_truncate` drives both the scale choice and quantize_cost.
+    void _select_cost_scale(const SolverConfig& config, double total_flow) {
         const bool _truncate = _costs_truncated();
         if (_cost_scaling_requested && _explicit_cost_scale > 0)
             _scale = _explicit_cost_scale;
@@ -3881,14 +3978,7 @@ public:
                 throw std::overflow_error("Cost scale exceeds LinkCut artificial-cost budget; use automatic cost scaling");
             _scale = static_cast<int64_t>(limit);
         }
-        for (auto& flow_subgraph : flow_subgraphs) {
-            flow_subgraph->set_cost_scaling(_scale, _truncate, _intensity_scale,
-                                            _p_order);
-            flow_subgraph->build(config);
-        }
-        built = true;
-        _built_config = config;
-    };
+    }
 
     // Rebuild supplies and cost scales on a separate network. Copying the
     // existing edges preserves the fixed topology, even after position moves
@@ -4653,6 +4743,7 @@ public:
                 }
 
                 mutation_started = true;
+                _positions_moved = true;
                 sg.apply_new_costs(new_costs, chain_positions);
             }
             // _last_point (spectrum proportions) is unchanged — intensities are fixed.
