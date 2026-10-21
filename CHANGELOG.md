@@ -4,6 +4,26 @@
 
 ### New APIs
 
+- `StartMode` and `NetworkSimplex.start`: how a cold solve begins.
+  `StartMode.Trash` (the new default) crash-starts every subgraph from the
+  flow that sends all mass to the trash, with the `Source->Emp` and
+  `Theo->Sink` anchors as the starting tree, so every matching arc is priced
+  at its distance minus the trash cost it saves. `StartMode.Artificial` is
+  LEMON's artificial basis, as before. Answers are identical. It applies to
+  the first solve and to every warm-restart cold fallback, for all trash
+  models; with no trash model, or with `WarmMode.LinkCut`, the artificial
+  start is used. `crash_start_count()` on the network counts these starts.
+  Needs a pylmcf with `crashRun` (reported as `wnet_cpp.HAS_CRASH_START`);
+  against older pylmcf `StartMode.Trash` falls back to the artificial start.
+- `NetworkSimplex(...)` takes every field as a keyword argument (pivot, warm,
+  start, warm_violation_limit, repair_max_nodes, warm_violation_mass_fraction,
+  warm_repair_budget, large_repair_mass_fraction), with the defaults of a
+  plain `NetworkSimplex()`.
+- `NetworkSimplex`, `NSPivotRule`, `WarmMode`, `StartMode` and the other
+  solver configs (`CostScaling`, `CycleCanceling`, `CapacityScaling`,
+  `SlopeDP`, `ConvexSweep`) are importable from `wnet` directly.
+- `WassersteinNetwork` forwards `warm_start_count()`, `cold_start_count()`,
+  `crash_start_count()`, `dual_repair_count()` and `primal_repair_count()`.
 - `dual_cut()` reports allowances for cost quantization alongside its
   quantized-cost certificate (whose values are unchanged):
   `cost_rounding_error` (how far the current solution's real cost can exceed
@@ -30,12 +50,22 @@
 - `NetworkSimplex.repair_max_nodes` gates warm dual repair by subgraph size:
   subgraphs with more nodes restart cold when the cheap tree patch fails
   (as `warm_violation_limit = 0`); smaller ones keep `warm_violation_limit`.
-  Default -1 (disabled). On large connected components a repair can cost tens
-  of cold solves; measured on 2-D LC-MS alignment once components percolate:
-  302 s with repair vs 16 s gated.
+  On large connected components a repair can cost tens of cold solves;
+  measured on 2-D LC-MS alignment once components percolate: 302 s with
+  repair vs 16 s gated. The default is 1000 when crash starts are available
+  and -1 (disabled) otherwise; see the trash start below.
 
 ### Changed
 
+- `NetworkSimplex` defaults to `start=StartMode.Trash` and, when crash starts
+  are available, to `repair_max_nodes=1000`. Measured on x86-64-v3 against
+  the artificial start with the same warm mode: 2-D deconvolution runs take
+  0.48–0.97 of the time, synthetic networks 0.08–1.0, and adding the 1000-node
+  repair gate brings large components to 0.01–0.29 (at most 6% slower on small
+  ones). AVX-512 and ARM64 showed the same pattern. Without crash starts, the
+  same gate was up to 3.5× slower, which is why it stays off against older
+  pylmcf. To restore the previous behaviour, pass
+  `NetworkSimplex(start=StartMode.Artificial, repair_max_nodes=-1)`.
 - With pylmcf's deterministic warm-repair budget (work units instead of wall
   time), a solve sequence no longer depends on timing: previously an interrupt
   during a microsecond-scale repair on a tiny subgraph could trip the budget,

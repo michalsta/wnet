@@ -155,6 +155,12 @@ the trash start is usually faster, much faster on large components, and falls ba
 artificial one when there is no trash model. `set_warm_policy()` changes either between solves, and
 `warm_start_count()`, `cold_start_count()` and `crash_start_count()` report what happened.
 
+`repair_max_nodes` (default 1000) sends subgraphs larger than that straight to a cold start when
+the cheap warm patch fails, instead of a simplex repair that can cost tens of cold solves there.
+With the trash start such a cold solve is cheap. `wnet_cpp.HAS_CRASH_START` is `False` when wnet was
+built against a pylmcf without crash starts; then `StartMode.Trash` acts like
+`StartMode.Artificial` and `repair_max_nodes` defaults to -1 (no gate).
+
 ## Licence
 MIT Licence
 
