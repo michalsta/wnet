@@ -10,4 +10,6 @@
 - Establish bounds on breakpoint growth. ConvexSweep's general full-profile
   transforms still scan/rebuild profiles; persistence does not eliminate all
   retained profile data. Benchmark representative deconvolution inputs before
-  selecting a new default.
+  selecting a new default. Measured on dense profile data: vertices per event
+  grow as W², so a solve is O(n·W²), and slimming the representation removes
+  nothing; see [ConvexSweep vertex growth](convex_sweep_vertex_growth.md).
