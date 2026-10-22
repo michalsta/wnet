@@ -924,11 +924,17 @@ class WassersteinNetworkSubgraph {
     }
 
 public:
+    // node_id_scratch, when given, is a caller-owned network-sized map filled
+    // with -1 that this constructor uses for the global -> local node lookup
+    // and restores before returning, so building S subgraphs costs
+    // O(sum of component sizes) instead of O(S x network nodes); without it a
+    // fresh map is allocated here.
     WassersteinNetworkSubgraph(
         const std::vector<LEMON_INDEX>& subgraph_node_ids,
         const std::vector<FlowNode<intensity_type>>& all_nodes,
         const std::vector<FlowEdge<intensity_type>*>& my_edges,
-        size_t no_target_distributions_
+        size_t no_target_distributions_,
+        std::vector<LEMON_INDEX>* node_id_scratch = nullptr
     ) :
         lemon_graph(),
         node_supply_map(lemon_graph),
@@ -945,9 +951,14 @@ public:
         auto& source_node = nodes[0];
         auto& sink_node = nodes[1];
 
-        // TODO: this map is sized to the whole network, so building all subgraphs is
-        // O(subgraphs * nodes); a shared map or a subgraph-local lookup would make it linear.
-        std::vector<LEMON_INDEX> node_id_map(all_nodes.size(), -1);
+        std::vector<LEMON_INDEX> own_map;
+        if (node_id_scratch == nullptr) {
+            own_map.assign(all_nodes.size(), -1);
+            node_id_scratch = &own_map;
+        } else if (node_id_scratch->size() < all_nodes.size()) {
+            throw std::invalid_argument("node_id_scratch must cover every network node");
+        }
+        std::vector<LEMON_INDEX>& node_id_map = *node_id_scratch;
 
         for (const auto& node_id : subgraph_node_ids)
         {
@@ -991,6 +1002,7 @@ public:
                     edge->get_type()
             );
         }
+        for (const auto& node_id : subgraph_node_ids) node_id_map[node_id] = -1;
     }
 
     WassersteinNetworkSubgraph(const WassersteinNetworkSubgraph&) = delete;
@@ -3747,6 +3759,9 @@ public:
 
 
         flow_subgraphs.reserve(_subgraphs.size());
+        // One network-sized lookup shared by every subgraph constructor (each
+        // restores the entries it used), instead of one allocation per subgraph.
+        std::vector<LEMON_INDEX> node_id_scratch(nodes.size(), -1);
         for (size_t subgraph_idx = 0; subgraph_idx < _subgraphs.size(); ++subgraph_idx)
         {
             #ifdef DO_TONS_OF_PRINTS
@@ -3756,7 +3771,8 @@ public:
                     _subgraphs[subgraph_idx],
                     nodes,
                     subgraph_edges[subgraph_idx],
-                    _no_theoretical_spectra
+                    _no_theoretical_spectra,
+                    &node_id_scratch
             ));
         }
         _isolated_theoretical_intensity.assign(_no_theoretical_spectra, 0);
