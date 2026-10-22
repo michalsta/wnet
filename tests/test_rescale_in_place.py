@@ -1,10 +1,14 @@
-"""In-place intensity rescaling must reproduce refined_copy() exactly.
+"""In-place intensity rescaling must equal a fresh build at the new scale.
 
 refine_intensity_precision() now re-quantises the built network in place
-(rescale_intensity) instead of copying and rebuilding it.  Both routes change
-only the supply grid and the cost scale, so every observable -- scales, cost,
-cut, flows -- has to agree bit for bit, for every backend and trash model,
-and the in-place route must be the one taken when no positions have moved.
+(rescale_intensity) instead of copying and rebuilding it.  The result has to
+match, bit for bit, a network built from scratch at the finer intensity scale
+with the same settings: scales, cost, cut and flows, for every backend and
+trash model.  (refined_copy() sizes the cost scale from the total chain span
+over all components, so on multi-component chains it picks a coarser cost grid
+than a fresh build; the in-place route keeps the build-time policy, and agrees
+with refined_copy() whenever the chain has a single run or the network is
+dense.)  The in-place route must be the one taken when no positions moved.
 """
 
 import numpy as np
@@ -21,15 +25,15 @@ def simplex(mode):
     return solver
 
 
-def make_network(solver, chain, p, trash, rng):
+def make_network(solver, chain, p, trash, rng, intensity_scale=1000.0, spread=10.0):
     dim = 1 if chain else 2
     def dist(n):
-        pos = np.sort(rng.uniform(0, 10, size=(dim, n)), axis=1)
+        pos = np.sort(rng.uniform(0, spread, size=(dim, n)), axis=1)
         return Distribution(pos, rng.uniform(0.2, 2.0, size=n))
     base, targets = dist(14), [dist(9), dist(11)]
     kwargs = {"split_distance": 3.0} if chain else {"max_distance": 3.0}
     graph = WassersteinNetwork(base, targets, DistanceMetric.L1, solver=solver, p=p,
-                               intensity_scale=1000.0, round_max_distance=False, **kwargs)
+                               intensity_scale=intensity_scale, round_max_distance=False, **kwargs)
     graph.set_cost_scaling(0)
     if trash == "simple":
         graph.add_simple_trash(1.5 ** p)
@@ -76,28 +80,35 @@ CASES = [
 ]
 
 
+@pytest.mark.parametrize("spread", [10.0, 60.0])  # one chain run, or several
 @pytest.mark.parametrize("solver,chain,p,trash", CASES)
-def test_rescale_matches_refined_copy(solver, chain, p, trash):
-    rng = np.random.default_rng(3)
-    graph = make_network(solver, chain, p, trash, rng)
+def test_rescale_matches_fresh_build(solver, chain, p, trash, spread):
+    if spread != 10.0 and not chain:
+        pytest.skip("component count only matters for the chain factory")
+    graph = make_network(solver, chain, p, trash, np.random.default_rng(3), spread=spread)
     sweep = isinstance(solver, ConvexSweep)
     point = [0.6, 0.35]
     graph.solve(point, sweep)
     before = graph.total_cost()
 
-    reference = graph.wnet.refined_copy(graph.intensity_scale_factor() * 10)
     old = graph.wnet
     graph.refine_intensity_precision(10)
     assert graph.wnet is old, "no position moved, so the rescale must be in place"
     assert graph.intensity_scale_factor() == pytest.approx(10_000.0)
-
-    assert_same(observe(graph.wnet, point, sweep, 2), observe(reference, point, sweep, 2))
+    fresh = make_network(solver, chain, p, trash, np.random.default_rng(3), 10_000.0, spread)
+    assert_same(observe(graph.wnet, point, sweep, 2), observe(fresh.wnet, point, sweep, 2))
     assert graph.total_cost() == pytest.approx(before, rel=1e-2)
 
     # A second step and a different point keep agreeing (warm paths differ).
-    reference2 = graph.wnet.refined_copy(graph.intensity_scale_factor() * 10)
     graph.refine_intensity_precision(10)
-    assert_same(observe(graph.wnet, [0.2, 0.9], sweep, 2), observe(reference2, [0.2, 0.9], sweep, 2))
+    fresh = make_network(solver, chain, p, trash, np.random.default_rng(3), 100_000.0, spread)
+    assert_same(observe(graph.wnet, [0.2, 0.9], sweep, 2), observe(fresh.wnet, [0.2, 0.9], sweep, 2))
+
+    if graph.no_subgraphs() == 1 or not chain:
+        # Single run / dense: refined_copy() sizes the cost scale identically.
+        reference = graph.wnet.refined_copy(graph.intensity_scale_factor() * 10)
+        graph.refine_intensity_precision(10)
+        assert_same(observe(graph.wnet, point, sweep, 2), observe(reference, point, sweep, 2))
 
 
 def test_rescale_discards_solution_and_can_go_back():

@@ -566,6 +566,13 @@ class WassersteinNetwork:
         ``cost_scale`` is the explicit cost scale to use afterwards (``0`` for
         automatic); ``None`` switches an opted-in cost scaling to automatic,
         as a refinement must to respect the int64 budget.
+
+        The in-place route re-selects the automatic cost scale with the
+        build-time policy, i.e. exactly as a network built from scratch at
+        the new intensity scale would.  ``refined_copy`` instead sizes it
+        from the total chain span across all components, which on a
+        multi-component chain network yields a coarser cost grid, so the two
+        routes agree only for dense networks and single-run chains.
         """
         budget = self._flow_budget_arg
         if budget is None:

@@ -1294,6 +1294,7 @@ public:
         _sweep_pos_built = false;
         _sweep_grid_built = false;
         _chain_arc_cache_built = false;
+        _rounding_cache_built = false;
         _refresh_chain_costs();
         _costs_buf.assign(edges.size(), VALUE_TYPE(0));
         ++_solution_version;
@@ -2706,6 +2707,7 @@ public:
         // Recompute the common coordinate grid and synchronize both directed
         // arc costs, SlopeDP positions, and residual-distance gap costs.
         _refresh_chain_costs(new_chain_positions);
+        _rounding_cache_built = false;
         if (_use_slopedp()) {
             // positions cache derives from gap_cost — rebuild it, then re-solve
             // with the supplies of the last set_point()
@@ -3031,28 +3033,60 @@ public:
             const long double matchable = std::min(lemon_empirical_intensity, lemon_theoretical_intensity);
             return (long double)_sweep_cost_model.error() * _scale * matchable;
         }
+        _build_rounding_cache();
+        // Flow-weighted sum of the per-arc rounding residuals, over the arcs
+        // whose residual is nonzero (the zero terms cannot change the sum).
         long double acc = 0;
-        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
-            const double c = std::holds_alternative<ChainEdge>(edges[ii].get_type())
-                ? _chain_arc_real_cost(edges[ii]) : std::visit([](const auto& arg) -> double {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr (std::is_same_v<T, MatchingEdge> || std::is_same_v<T, ChainEdge>)
-                    return arg.get_cost();
-                else return -1.0;
-            }, edges[ii].get_type());
-            if (c < 0) continue;
-            const VALUE_TYPE f = _solver_flow(lemon_graph.arcFromId(ii));
+        for (size_t k = 0; k < _rounding_arcs.size(); ++k) {
+            const VALUE_TYPE f = _solver_flow(lemon_graph.arcFromId(_rounding_arcs[k]));
             if (f <= 0) continue;
+            acc += (long double)f * _rounding_residual[k];
+        }
+        return acc;
+    }
+
+    // Point-independent part of the rounding bounds: for every matching or
+    // chain arc with a positive real cost, the relative round-up / round-down
+    // of its quantised cost (the maxima are cost_round_up_ratio() and
+    // cost_round_down_ratio()), and the absolute residual |S c - q| of the
+    // arcs where it is nonzero, consumed flow-weighted by
+    // cost_rounding_slack_scaled().  Depends only on the costs, the scales and
+    // the chain geometry, so it is rebuilt when any of those change
+    // (_apply_scale, apply_new_costs) and not on every dual_cut().
+    mutable bool _rounding_cache_built = false;
+    mutable double _rounding_rho = 0.0, _rounding_sigma = 0.0;
+    mutable std::vector<LEMON_INDEX> _rounding_arcs;
+    mutable std::vector<long double> _rounding_residual;
+
+    void _build_rounding_cache() const {
+        if (_rounding_cache_built) return;
+        _rounding_rho = _rounding_sigma = 0.0;
+        _rounding_arcs.clear();
+        _rounding_residual.clear();
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
+            const auto& edge = edges[ii];
+            const bool chain = std::holds_alternative<ChainEdge>(edge.get_type());
+            const double c = chain ? _chain_arc_real_cost(edge)
+                : (std::holds_alternative<MatchingEdge>(edge.get_type())
+                    ? std::get<MatchingEdge>(edge.get_type()).get_cost() : -1.0);
+            if (c < 0) continue;
             const long double exact = _p_is_one ? (long double)c : (long double)_scale * c;
             const long double q = costs_map[lemon_graph.arcFromId(ii)];
             // Independent dense matching costs include a position-independent
             // trash-price shift, which is not part of the ground-cost error.
-            const long double ground_q = q + (independent_trash
-                && std::holds_alternative<MatchingEdge>(edges[ii].get_type())
+            const long double ground_q = q + (independent_trash && !chain
                     ? (long double)_ind_c_exp_q + _ind_c_theo_q : 0);
-            acc += (long double)f * std::fabs(exact - ground_q);
+            const long double residual = std::fabs(exact - ground_q);
+            if (residual > 0) {
+                _rounding_arcs.push_back(ii);
+                _rounding_residual.push_back(residual);
+            }
+            if (c > 0) {
+                if (ground_q > exact) _rounding_rho = std::max(_rounding_rho, (double)((ground_q - exact) / exact));
+                if (ground_q < exact) _rounding_sigma = std::max(_rounding_sigma, (double)((exact - ground_q) / exact));
+            }
         }
-        return acc;
+        _rounding_cache_built = true;
     }
 
     // Largest relative round-UP of a positive matching/chain arc cost,
@@ -3065,24 +3099,8 @@ public:
         // Coordinate costs have an absolute pair-wise allowance instead;
         // an arc-wise relative ratio can be arbitrarily large on tiny gaps.
         if (_p_order == 1 && !_p_is_one && _chain_topo) return 0;
-        double rho = 0;
-        for (size_t ii = 0; ii < edges.size(); ++ii) {
-            const auto& edge = edges[ii];
-            const double c = std::holds_alternative<ChainEdge>(edge.get_type())
-                ? _chain_arc_real_cost(edge) : std::visit([](const auto& arg) -> double {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr (std::is_same_v<T, MatchingEdge> || std::is_same_v<T, ChainEdge>)
-                    return arg.get_cost();
-                else return -1.0;
-            }, edge.get_type());
-            if (c <= 0) continue;
-            const long double exact = _p_is_one ? (long double)c : (long double)_scale * c;
-            const long double q = (long double)costs_map[lemon_graph.arcFromId(ii)]
-                + (independent_trash && std::holds_alternative<MatchingEdge>(edge.get_type())
-                    ? (long double)_ind_c_exp_q + _ind_c_theo_q : 0);
-            if (q > exact) rho = std::max(rho, (double)((q - exact) / exact));
-        }
-        return rho;
+        _build_rounding_cache();
+        return _rounding_rho;
     }
 
     // Largest relative round-DOWN of a positive matching/chain arc cost,
@@ -3091,24 +3109,8 @@ public:
     // cost_round_up_ratio(), and zero in the same coordinate-cost cases.
     double cost_round_down_ratio() const {
         if (_p_order == 1 && !_p_is_one && _chain_topo) return 0;
-        double sigma = 0;
-        for (size_t ii = 0; ii < edges.size(); ++ii) {
-            const auto& edge = edges[ii];
-            const double c = std::holds_alternative<ChainEdge>(edge.get_type())
-                ? _chain_arc_real_cost(edge) : std::visit([](const auto& arg) -> double {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr (std::is_same_v<T, MatchingEdge> || std::is_same_v<T, ChainEdge>)
-                    return arg.get_cost();
-                else return -1.0;
-            }, edge.get_type());
-            if (c <= 0) continue;
-            const long double exact = _p_is_one ? (long double)c : (long double)_scale * c;
-            const long double q = (long double)costs_map[lemon_graph.arcFromId(ii)]
-                + (independent_trash && std::holds_alternative<MatchingEdge>(edge.get_type())
-                    ? (long double)_ind_c_exp_q + _ind_c_theo_q : 0);
-            if (q < exact) sigma = std::max(sigma, (double)((exact - q) / exact));
-        }
-        return sigma;
+        _build_rounding_cache();
+        return _rounding_sigma;
     }
 
     // Absolute per-unit pair-cost error of the coordinate cost models, in
