@@ -111,7 +111,11 @@ def test_failed_refinement_preserves_solution_and_settings(monkeypatch):
     def fail(*args):
         raise OverflowError("rebuild failed")
 
+    # Both routes a refinement can take: in place, or a copy after a position
+    # update.  Either failure must leave the wrapper's settings untouched.
     monkeypatch.setattr(type(original), "refined_copy", fail)
+    if hasattr(original, "rescale_intensity"):
+        monkeypatch.setattr(type(original), "rescale_intensity", fail)
     with pytest.raises(OverflowError, match="rebuild failed"):
         graph.refine_intensity_precision(10)
     assert graph.wnet is original
