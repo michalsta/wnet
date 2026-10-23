@@ -398,6 +398,24 @@ inline void require_valid_position_update(bool invalid) {
     if (invalid) throw std::runtime_error(POSITION_UPDATE_INVALID_MESSAGE);
 }
 
+// Narrow a 128-bit scaled total cost to the int64 the API returns, throwing
+// instead of wrapping.  A true total is nonnegative, so a negative value means
+// an inconsistent model rather than overflow; both are reported.
+inline int64_t narrow_total_cost(const wide_int::wide_t& cost, const char* where) {
+    using W = wide_int::wide_t;
+    if (W(std::numeric_limits<int64_t>::max()) < cost)
+        throw std::overflow_error(std::string(where) +
+            ": the scaled total cost exceeds the int64 range. Rebuild with a smaller "
+            "cost scale (set_cost_scaling) or declare the expected point range via "
+            "set_flow_budget() before build().");
+    if (cost < W(0))
+        throw std::overflow_error(std::string(where) +
+            ": the scaled total cost is negative, which no consistent model "
+            "produces; an intermediate quantity overflowed or the trash prices "
+            "are inconsistent.");
+    return static_cast<int64_t>(cost);
+}
+
 template <typename VALUE_TYPE, typename intensity_type>
 class WassersteinNetworkSubgraph {
     std::vector<FlowNode<intensity_type>> nodes;
@@ -572,7 +590,7 @@ class WassersteinNetworkSubgraph {
     mutable std::vector<size_t> _sdp_node_pos;         // node id -> chain position
     mutable VALUE_TYPE _sdp_c_exp = -1, _sdp_c_theo = -1, _sdp_c_s = -1;   // quantized
     mutable std::vector<VALUE_TYPE> _slope_flow;       // per LEMON arc id
-    mutable VALUE_TYPE _slope_total = 0;
+    mutable wide_int::wide_t _slope_total = wide_int::wide_t(0);
     mutable bool _slope_solved = false;
 
     VALUE_TYPE _solver_potential(lemon::StaticDigraph::Node nd) const {
@@ -604,8 +622,29 @@ class WassersteinNetworkSubgraph {
         if (std::holds_alternative<CostScalingConfig>(_config))    return cs_solver->flow(arc);
         return cap_solver->flow(arc);
     }
-    VALUE_TYPE _solver_total_cost() const {
+    // Sum of flow x cost over every arc, accumulated in 128 bits: the int64
+    // products and partial sums can overflow even when the total fits (the
+    // independent-trash shift makes matching costs negative).  Reads the
+    // solver's flows and the cost map this subgraph pushed, which is the same
+    // quantity LEMON's totalCost() computes in int64 (measured: +2% on the
+    // loop with native __int128, +23% with the MSVC software fallback).
+    wide_int::wide_t _solver_total_cost_wide() const {
+        using W = wide_int::wide_t;
         if (_use_slopedp() || _use_sweep()) return _slope_total;
+        auto sum = [&](const auto& solver) {
+            W c(0);
+            for (lemon::StaticDigraph::ArcIt a(lemon_graph); a != lemon::INVALID; ++a)
+                c += W(static_cast<int64_t>(solver.flow(a))) * static_cast<long long>(costs_map[a]);
+            return c;
+        };
+        if (std::holds_alternative<NetworkSimplexConfig>(_config))
+            return _use_lct() ? sum(*ns_lct_solver) : sum(*ns_solver);
+        if (std::holds_alternative<CycleCancelingConfig>(_config)) return sum(*cc_solver);
+        if (std::holds_alternative<CostScalingConfig>(_config))    return sum(*cs_solver);
+        return sum(*cap_solver);
+    }
+    VALUE_TYPE _solver_total_cost() const {
+        if (_use_slopedp() || _use_sweep()) return static_cast<VALUE_TYPE>(_slope_total);
         if (std::holds_alternative<NetworkSimplexConfig>(_config))
             return _use_lct() ? ns_lct_solver->totalCost() : ns_solver->totalCost();
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return cc_solver->totalCost();
@@ -1690,8 +1729,8 @@ public:
         // same convention as the dense factory's shifted matching costs:
         // total_cost() then adds the analytic bracket E*C_exp + T*C_theo.
         _slope_total = independent_trash
-            ? (VALUE_TYPE)(transport - (W)tau * M)
-            : (VALUE_TYPE)total;
+            ? wide_int::wide_t(transport - (W)tau * M)
+            : wide_int::wide_t(total);
         _slope_solved = true;
     }
 
@@ -1850,7 +1889,7 @@ public:
             _sweep_dual_tau = tau;
             ++_sweep_dual_recoveries;
         }
-        _slope_total = independent_trash ? VALUE_TYPE(-W(profit)) : VALUE_TYPE(trash0 - W(profit));
+        _slope_total = independent_trash ? wide_int::wide_t(-W(profit)) : wide_int::wide_t(trash0 - W(profit));
         _slope_flow.clear();
         _sweep_last_F = F;
         _slope_solved = true;
@@ -2031,16 +2070,31 @@ public:
         _deriv_ctx_version[0] = _deriv_ctx_version[1] = -1;
     }
 
-    VALUE_TYPE total_cost() const {
+    // This subgraph's total cost in 128 bits, cached per solution: dual_cut()
+    // and total_cost() both ask for it after every solve, and on a large
+    // component the arc scan was ~6% of a fit.  Every solve, rescale and cost
+    // update advances _solution_version, which invalidates the cache.
+    mutable wide_int::wide_t _total_cost_cache = wide_int::wide_t(0);
+    mutable uint64_t _total_cost_version = std::numeric_limits<uint64_t>::max();
+
+    wide_int::wide_t total_cost_wide() const {
+        using W = wide_int::wide_t;
         if(!_solver_has_value()) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
-        VALUE_TYPE cost = _solver_total_cost();
+        if (_total_cost_version == _solution_version) return _total_cost_cache;
+        W cost = _solver_total_cost_wide();
         // Independent trash: the solver ran on shifted matching costs with
         // free trash arcs; add back the analytic bracket E*C_exp + T(w)*C_theo
         // (both totals are this subgraph's own, so decomposition stays exact).
         if (independent_trash)
-            cost += _ind_c_exp_q * lemon_empirical_intensity
-                    + _ind_c_theo_q * lemon_theoretical_intensity;
+            cost += W(static_cast<int64_t>(_ind_c_exp_q)) * static_cast<long long>(lemon_empirical_intensity)
+                    + W(static_cast<int64_t>(_ind_c_theo_q)) * static_cast<long long>(lemon_theoretical_intensity);
+        _total_cost_cache = cost;
+        _total_cost_version = _solution_version;
         return cost;
+    }
+
+    VALUE_TYPE total_cost() const {
+        return narrow_total_cost(total_cost_wide(), "subgraph total_cost()");
     };
 
     // Quantised supplies this subgraph carries for the current set_point().
@@ -4082,23 +4136,28 @@ public:
     // Mirrors the escape routes set_point() opens and the cheapest-channel-first
     // order the solvers price them in (keep in sync with WassersteinNetworkSubgraph
     // ::_sweep_trash_cost() and the set_point() flow-budget branch).
-    VALUE_TYPE _trash_at_zero_match(VALUE_TYPE E, VALUE_TYPE T) const {
+    // Accumulator-generic: A = VALUE_TYPE for the per-unit price differences
+    // (small), A = wide_t for the cost totals (products of a scaled price and
+    // a whole network's supply can exceed int64).
+    template <class A = VALUE_TYPE>
+    A _trash_at_zero_match(VALUE_TYPE E, VALUE_TYPE T) const {
         const VALUE_TYPE c_exp = _isolated_exp_trash_cost_scaled();
         const VALUE_TYPE c_theo = _isolated_theo_trash_cost_scaled();
+        auto mul = [](VALUE_TYPE c, VALUE_TYPE q) { return A(static_cast<int64_t>(c)) * static_cast<long long>(q); };
         if (_independent_trash_added)
-            return c_exp * E + c_theo * T;
+            return mul(c_exp, E) + mul(c_theo, T);
         if (_annihilating_trash()) {
             // Budget max(E, T); fill it from the cheaper channel first.  Simple
             // trash has c_exp == c_theo, for which either branch yields
             // c * max(E, T).
             const VALUE_TYPE zero = 0;
             return (c_exp <= c_theo)
-                ? c_exp * E + c_theo * std::max(zero, T - E)
-                : c_theo * T + c_exp * std::max(zero, E - T);
+                ? mul(c_exp, E) + mul(c_theo, std::max(zero, T - E))
+                : mul(c_theo, T) + mul(c_exp, std::max(zero, E - T));
         }
-        if (_experimental_trash_added) return c_exp * E;
-        if (_theoretical_trash_added) return c_theo * T;
-        return 0;  // no trash: supplies are balanced and nothing escapes
+        if (_experimental_trash_added) return mul(c_exp, E);
+        if (_theoretical_trash_added) return mul(c_theo, T);
+        return A(0);  // no trash: supplies are balanced and nothing escapes
     }
 
     bool _annihilating_trash() const {
@@ -4128,25 +4187,27 @@ public:
     // and the network-wide totals feeding A(E, T).  Returns the amount to add
     // to a per-component cost sum: A(E, T) - sum_c A(E_c, T_c), which is
     // identically zero whenever A() is additive.
-    VALUE_TYPE _decomposition_rebase() const {
-        if (!_annihilating_trash()) return 0;
-        VALUE_TYPE E_total = 0, T_total = 0, local_sum = 0;
+    template <class A = VALUE_TYPE>
+    A _decomposition_rebase() const {
+        if (!_annihilating_trash()) return A(0);
+        VALUE_TYPE E_total = 0, T_total = 0;
+        A local_sum(0);
         for (const auto& sg : flow_subgraphs) {
             const VALUE_TYPE E = sg->quantised_empirical_intensity();
             const VALUE_TYPE T = sg->quantised_theoretical_intensity();
-            local_sum += _trash_at_zero_match(E, T);
+            local_sum += _trash_at_zero_match<A>(E, T);
             E_total += E;
             T_total += T;
         }
         const VALUE_TYPE E_dead = _isolated_empirical_intensity_scaled();
-        local_sum += _trash_at_zero_match(E_dead, 0);
+        local_sum += _trash_at_zero_match<A>(E_dead, 0);
         E_total += E_dead;
         for (size_t s = 0; s < _no_theoretical_spectra; ++s) {
             const VALUE_TYPE T_dead = _isolated_theoretical_intensity_scaled(s);
-            local_sum += _trash_at_zero_match(0, T_dead);
+            local_sum += _trash_at_zero_match<A>(0, T_dead);
             T_total += T_dead;
         }
-        return _trash_at_zero_match(E_total, T_total) - local_sum;
+        return _trash_at_zero_match<A>(E_total, T_total) - local_sum;
     }
 
     // Per-unit price of one more theoretical supply unit under A(), i.e. the
@@ -4240,29 +4301,25 @@ public:
         if (_last_point.size() != _no_theoretical_spectra)
             throw std::runtime_error(
                 "You must call solve() before calling total_cost().");
-        VALUE_TYPE cost = 0;
+        // Accumulated in 128 bits and narrowed once: int64 partial sums could
+        // overflow (signed overflow is UB, so the old after-the-fact "cost < 0"
+        // test was not a reliable detector) even when the total fits.
+        using W = wide_int::wide_t;
+        W cost(0);
         for (const auto& flow_subgraph : flow_subgraphs)
-            cost += flow_subgraph->total_cost();
+            cost += flow_subgraph->total_cost_wide();
         // Dead-end nodes are components that can never match: each pays the
         // zero-match bill for its own supply.  Quantise the supply first, then
         // multiply by the integer cost, exactly as a live peak is priced.
-        cost += _trash_at_zero_match(_isolated_empirical_intensity_scaled(), 0);
+        cost += _trash_at_zero_match<W>(_isolated_empirical_intensity_scaled(), 0);
         for (size_t s = 0; s < _no_theoretical_spectra; ++s)
-            cost += _trash_at_zero_match(0, _isolated_theoretical_intensity_scaled(s));
+            cost += _trash_at_zero_match<W>(0, _isolated_theoretical_intensity_scaled(s));
         // Re-base the annihilating models onto network-wide supplies; exactly
-        // zero for every model whose bill is additive over components.
-        cost += _decomposition_rebase();
-        // The re-basing term is negative, but never by more than the local
-        // bills it replaces, so a true total is still nonnegative: a negative
-        // value here means the integer accumulator overflowed somewhere the
-        // solve()-time guard did not anticipate.
-        if (cost < 0)
-            throw std::overflow_error(
-                "total_cost(): accumulated scaled cost is negative, which means the "
-                "int64 cost accumulator overflowed. Rebuild with a smaller cost scale "
-                "(set_cost_scaling) or declare the expected point range via "
-                "set_flow_budget() before build().");
-        return cost;
+        // zero for every model whose bill is additive over components.  It is
+        // negative, but never by more than the local bills it replaces, so a
+        // true total is nonnegative.
+        cost += _decomposition_rebase<W>();
+        return narrow_total_cost(cost, "total_cost()");
     };
 
     // Change the warm/cold policy of every NetworkSimplex subgraph without
