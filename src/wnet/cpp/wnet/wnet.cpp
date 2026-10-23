@@ -243,6 +243,15 @@ NB_MODULE(wnet_cpp, m) {
         .def("build", &WassersteinNetworkSubgraph<int64_t, double>::build, nb::arg("config") = NetworkSimplexConfig{})
         .def("set_point", &WassersteinNetworkSubgraph<int64_t, double>::set_point, nb::arg("point"), nb::arg("with_duals") = false)
         .def("total_cost", &WassersteinNetworkSubgraph<int64_t, double>::total_cost)
+        .def("total_cost_by_scan", [](const WassersteinNetworkSubgraph<int64_t, double>& self) {
+            // The shifted objective of independent trash is legitimately
+            // negative, so only the int64 range is checked here.
+            using W = wide_int::wide_t;
+            const W v = self.total_cost_by_scan();
+            if (v < W(std::numeric_limits<int64_t>::min()) || W(std::numeric_limits<int64_t>::max()) < v)
+                throw std::overflow_error("total_cost_by_scan(): outside the int64 range");
+            return static_cast<int64_t>(v);
+        }, "Solver objective by the flow x cost scan over every arc (no trash bracket); a cross-check for total_cost().")
         .def("simple_trash_cost", &WassersteinNetworkSubgraph<int64_t, double>::simple_trash_cost)
         .def("to_string", &WassersteinNetworkSubgraph<int64_t, double>::to_string)
         .def("lemon_to_string", &WassersteinNetworkSubgraph<int64_t, double>::lemon_to_string)

@@ -638,10 +638,39 @@ class WassersteinNetworkSubgraph {
             return c;
         };
         if (std::holds_alternative<NetworkSimplexConfig>(_config))
-            return _use_lct() ? sum(*ns_lct_solver) : sum(*ns_solver);
+            return _use_lct() ? sum(*ns_lct_solver) : _ns_total_cost_by_duality();
         if (std::holds_alternative<CycleCancelingConfig>(_config)) return sum(*cc_solver);
         if (std::holds_alternative<CostScalingConfig>(_config))    return sum(*cs_solver);
         return sum(*cap_solver);
+    }
+    // Optimal NetworkSimplex objective from its tree potentials, without the
+    // O(arcs) flow x cost scan.  With rc_a = c_a + pi_u - pi_v and flow
+    // conservation (outflow - inflow = supply),
+    //     sum_a c_a f_a  =  sum_a rc_a f_a  -  sum_v pi_v s_v .
+    // At an optimal basis every arc has rc_a = 0 (tree) or f_a = 0 (at its
+    // lower bound) unless it sits at a finite upper bound, so only the
+    // finite-capacity arcs (the source/sink anchors; matching, chain and trash
+    // arcs are uncapacitated for this backend) contribute to the first sum.
+    // Exact in integer arithmetic: the same quantity the scan computes, for
+    // O(nodes) work.  Uniform potential shifts (renormalisation, the GEQ
+    // canonical form) cancel because the supplies balance.
+    wide_int::wide_t _ns_total_cost_by_duality() const {
+        using W = wide_int::wide_t;
+        W c(0);
+        for (LEMON_INDEX a : _finite_cap_arcs) {
+            const auto arc = lemon_graph.arcFromId(a);
+            const VALUE_TYPE f = ns_solver->flow(arc);
+            if (f == 0) continue;
+            const VALUE_TYPE rc = pylmcf::reducedCost(costs_map[arc],
+                ns_solver->potential(lemon_graph.source(arc)), ns_solver->potential(lemon_graph.target(arc)));
+            c += W(static_cast<int64_t>(f)) * static_cast<long long>(rc);
+        }
+        for (size_t v = 0; v < nodes.size(); ++v) {
+            const auto nd = lemon_graph.nodeFromId(static_cast<int>(v));
+            const VALUE_TYPE sup = node_supply_map[nd];
+            if (sup != 0) c += -(W(static_cast<int64_t>(ns_solver->potential(nd))) * static_cast<long long>(sup));
+        }
+        return c;
     }
     VALUE_TYPE _solver_total_cost() const {
         if (_use_slopedp() || _use_sweep()) return static_cast<VALUE_TYPE>(_slope_total);
@@ -1348,6 +1377,13 @@ public:
         _rounding_cache_built = false;
         _refresh_chain_costs();
         _costs_buf.assign(edges.size(), VALUE_TYPE(0));
+        // Finite-capacity arcs, for the duality form of the total cost.  The
+        // INF-ness of every arc is fixed here; set_point() only moves the
+        // values of finite capacities (anchors), never makes one infinite.
+        _finite_cap_arcs.clear();
+        for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii)
+            if (capacities_map[lemon_graph.arcFromId(ii)] != std::numeric_limits<VALUE_TYPE>::max())
+                _finite_cap_arcs.push_back(ii);
         ++_solution_version;
     }
 
@@ -2074,8 +2110,21 @@ public:
     // and total_cost() both ask for it after every solve, and on a large
     // component the arc scan was ~6% of a fit.  Every solve, rescale and cost
     // update advances _solution_version, which invalidates the cache.
+    std::vector<LEMON_INDEX> _finite_cap_arcs;   // arcs whose capacity is not INF (see _apply_scale)
     mutable wide_int::wide_t _total_cost_cache = wide_int::wide_t(0);
     mutable uint64_t _total_cost_version = std::numeric_limits<uint64_t>::max();
+
+    // The flow x cost scan the duality form replaces; kept for the backends
+    // without tree potentials and as a cross-check for tests.
+    wide_int::wide_t total_cost_by_scan() const {
+        using W = wide_int::wide_t;
+        if (!_solver_has_value()) throw std::runtime_error("You must call build() and set_point() before calling total_cost().");
+        if (_use_slopedp() || _use_sweep()) return _slope_total;
+        W c(0);
+        for (lemon::StaticDigraph::ArcIt a(lemon_graph); a != lemon::INVALID; ++a)
+            c += W(static_cast<int64_t>(_solver_flow(a))) * static_cast<long long>(costs_map[a]);
+        return c;
+    }
 
     wide_int::wide_t total_cost_wide() const {
         using W = wide_int::wide_t;

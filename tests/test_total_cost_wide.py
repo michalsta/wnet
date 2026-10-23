@@ -59,3 +59,51 @@ def test_network_solve_guard_still_rejects_first():
     g = network(2**40, 2.0**32)
     with pytest.raises(OverflowError):
         g.solve([1.0])
+
+
+# ---------------------------------------------------------------------------
+# The NetworkSimplex total comes from strong duality (potentials, supplies and
+# the finite-capacity arcs) instead of a scan over every arc.  It must equal
+# the scan exactly on every solve, warm or cold, for every trash model.
+# ---------------------------------------------------------------------------
+
+from wnet.wnet_cpp import WarmMode, CostScaling  # noqa: E402
+
+
+def random_network(solver, trash, seed, p=1, n=80):
+    rng = np.random.default_rng(seed)
+    def dist(k):
+        return Distribution(rng.uniform(0, 10, size=(2, k)), rng.uniform(0.2, 2.0, size=k))
+    g = WassersteinNetwork(dist(n), [dist(n // 2), dist(n // 3)], DistanceMetric.LINF, solver=solver,
+                           p=p, max_distance=2.5, intensity_scale=1000.0, round_max_distance=False)
+    g.set_cost_scaling(0)
+    if trash == "simple":
+        g.add_simple_trash(1.5 ** p)
+    elif trash == "asymmetric":
+        g.add_experimental_trash(1.0 ** p); g.add_theoretical_trash(1.5 ** p)
+    else:
+        g.add_independent_asymmetric_trash(0.8 ** p, 0.9 ** p)
+    g.build()
+    return g
+
+
+@pytest.mark.parametrize("p", [1, 2])
+@pytest.mark.parametrize("trash", ["simple", "asymmetric", "independent"])
+@pytest.mark.parametrize("warm", [WarmMode.NONE, WarmMode.DualRatio, WarmMode.Dual, WarmMode.Primal])
+def test_duality_total_equals_scan(p, trash, warm):
+    cfg = NetworkSimplex(); cfg.warm = warm
+    g = random_network(cfg, trash, seed=17, p=p)
+    ref = random_network(CostScaling(), trash, seed=17, p=p)
+    rng = np.random.default_rng(1)
+    for _ in range(12):
+        point = list(rng.uniform(0.1, 1.5, size=2))
+        g.solve(point); ref.solve(point)
+        assert g.wnet.total_cost() == ref.wnet.total_cost()   # independent algorithm, same optimum
+        for k in range(g.no_subgraphs()):
+            sg = g.wnet.get_subgraph(k)
+            bracket = sg.total_cost() - sg.total_cost_by_scan()
+            if trash != "independent":
+                assert bracket == 0
+    g.refine_intensity_precision(10); ref.refine_intensity_precision(10)
+    g.solve([0.7, 0.4]); ref.solve([0.7, 0.4])
+    assert g.wnet.total_cost() == ref.wnet.total_cost()
