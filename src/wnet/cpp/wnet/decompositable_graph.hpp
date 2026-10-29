@@ -74,10 +74,14 @@ enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio, DualGreedy, LinkC
 //                cheapest arc in one pass; larger ones take each peak's
 //                kGreedyTopK cheapest arcs in one global order (see
 //                _greedy_improve()).  Same fallback as Trash.
-// Trash is the default: measured on x86-64-v3 (i5-12500, 2026-10-20) it never
-// lost more than 6% (on ~1 ms solves) and won up to 10x alone, up to 100x
-// together with the repair_max_nodes gate below, whose cold fallbacks it
-// makes cheap (with the Artificial start that gate loses up to 3.5x).
+// Trash beat Artificial on x86-64-v3 (i5-12500, 2026-10-20): never more than
+// 6% slower (on ~1 ms solves), up to 10x faster alone, up to 100x together
+// with the repair_max_nodes gate below, whose cold fallbacks it makes cheap
+// (with the Artificial start that gate loses up to 3.5x).  Greedy is the
+// default: over Trash it cut the deconv and synthetic benchmark totals to
+// 0.87-0.89 on nighthaven, solace and spot (2026-10-29; heavy 2-D NMR jobs
+// 0.81-0.98, large synthetic clouds 0.58-0.89), at worst +11% (~2 ms) on tiny
+// 3-D/6-D clouds.
 enum class NSStart { Artificial, Trash, Greedy };
 
 // pylmcf after 1.3.0 also adds crash starts from a given flow.
@@ -92,7 +96,7 @@ inline constexpr bool wnet_has_crash_start =
 struct NetworkSimplexConfig {
     NSPivotRule pivot = NSPivotRule::BLOCK_SEARCH;
     NSWarmMode warm = NSWarmMode::DualRatio;
-    NSStart start = NSStart::Trash;
+    NSStart start = NSStart::Greedy;
     // Warm/cold repair policy, forwarded to
     // NetworkSimplex::setWarmViolationLimit() before each warmRun():
     //   -2 (default) — auto/unset: same as -1 unless a caller that knows the

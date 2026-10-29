@@ -194,7 +194,7 @@ def test_network_simplex_keyword_constructor():
     assert s.warm_violation_limit == 3 and s.warm_violation_mass_fraction == 0.25
     assert s.warm_repair_budget == 2.0 and s.large_repair_mass_fraction == 0.125
     d = wnet.NetworkSimplex()
-    assert d.start == wnet.StartMode.Trash and d.warm == wnet.WarmMode.DualRatio
+    assert d.start == wnet.StartMode.Greedy and d.warm == wnet.WarmMode.DualRatio
     assert d.repair_max_nodes == (1000 if HAS_CRASH_START else -1)
     with pytest.raises(TypeError):
         wnet.NetworkSimplex(wnet.NSPivotRule.FIRST_ELIGIBLE)   # keyword-only

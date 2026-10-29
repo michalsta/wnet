@@ -144,21 +144,23 @@ If you only want the re-solve and not the gradient, `update_positions_and_solve(
 ```python
 from wnet import NetworkSimplex, WarmMode, StartMode
 
-solver = NetworkSimplex(warm=WarmMode.DualRatio, start=StartMode.Trash)
+solver = NetworkSimplex(warm=WarmMode.DualRatio, start=StartMode.Greedy)
 W = WassersteinNetwork(S1, [S2], DistanceMetric.L1, max_distance=3.0, solver=solver)
 ```
 
 `warm` chooses how successive solves reuse the previous basis. `start` chooses how a solve that
-starts cold begins: `StartMode.Trash` (the default) starts from the flow that sends everything to
-the trash, `StartMode.Artificial` uses LEMON's artificial-arc basis. Both give identical results;
-the trash start is usually faster, much faster on large components, and falls back to the
-artificial one when there is no trash model. `set_warm_policy()` changes either between solves, and
+starts cold begins: `StartMode.Greedy` (the default) starts from the flow that sends everything to
+the trash and then moves flow onto matching arcs that are cheaper than the trash they replace,
+`StartMode.Trash` starts from the all-trash flow alone, `StartMode.Artificial` uses LEMON's
+artificial-arc basis. All give the same optimal cost (with ties, possibly a different optimal flow);
+the crash starts are usually faster, much faster on large components (greedy beats plain trash by
+10-40% there), and fall back to the artificial one when there is no trash model. `set_warm_policy()` changes either between solves, and
 `warm_start_count()`, `cold_start_count()` and `crash_start_count()` report what happened.
 
 `repair_max_nodes` (default 1000) sends subgraphs larger than that straight to a cold start when
 the cheap warm patch fails, instead of a simplex repair that can cost tens of cold solves there.
 With the trash start such a cold solve is cheap. `wnet_cpp.HAS_CRASH_START` is `False` when wnet was
-built against a pylmcf without crash starts; then `StartMode.Trash` acts like
+built against a pylmcf without crash starts; then `StartMode.Greedy` and `StartMode.Trash` act like
 `StartMode.Artificial` and `repair_max_nodes` defaults to -1 (no gate).
 
 ## Licence
