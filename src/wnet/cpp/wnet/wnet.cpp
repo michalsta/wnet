@@ -78,7 +78,8 @@ NB_MODULE(wnet_cpp, m) {
 
     nb::enum_<NSStart>(m, "StartMode")
         .value("Artificial", NSStart::Artificial)
-        .value("Trash", NSStart::Trash);
+        .value("Trash", NSStart::Trash)
+        .value("Greedy", NSStart::Greedy);
 
 
     nb::class_<NetworkSimplexConfig>(m, "NetworkSimplex")
@@ -108,7 +109,8 @@ NB_MODULE(wnet_cpp, m) {
              "NetworkSimplex solver config; every field is also a read/write attribute.\n"
              "pivot: NSPivotRule.  warm: WarmMode between successive solves.\n"
              "start: StartMode for every cold start (Artificial = LEMON's artificial\n"
-             "basis; Trash = crash start from the all-trash flow, same results).\n"
+             "basis; Trash = crash start from the all-trash flow; Greedy = crash start\n"
+             "from the all-trash flow improved by a greedy matching).  Same results.\n"
              "The remaining fields gate warm repair; see the C++ NetworkSimplexConfig.")
         .def_rw("pivot", &NetworkSimplexConfig::pivot)
         .def_rw("warm",  &NetworkSimplexConfig::warm)

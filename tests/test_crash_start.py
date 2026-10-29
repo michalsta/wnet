@@ -1,4 +1,5 @@
-"""NetworkSimplex StartMode.Trash (crash start from the all-trash flow) must not change any answer.
+"""NetworkSimplex crash starts (StartMode.Trash: the all-trash flow; StartMode.Greedy: the
+all-trash flow improved by a greedy matching) must not change any answer.
 
 Every combination of trash model, factory (dense / 1-D chain), warm mode and
 point sequence is solved twice, once per start mode, and the total cost and
@@ -60,11 +61,12 @@ ALL_WARM = [WarmMode.NONE, WarmMode.Simple, WarmMode.Dual, WarmMode.Primal, Warm
 @pytest.mark.parametrize("chain", [False, True])
 @pytest.mark.parametrize("warm", ALL_WARM)
 @pytest.mark.parametrize("seed", range(4))
-def test_trash_start_matches_artificial(model, chain, warm, seed):
+@pytest.mark.parametrize("start", [StartMode.Trash, StartMode.Greedy])
+def test_trash_start_matches_artificial(model, chain, warm, seed, start):
     if chain and model == "independent":
         pytest.skip("independent trash on the chain needs SlopeDP")
     a = build(model, StartMode.Artificial, warm, seed, chain)
-    b = build(model, StartMode.Trash, warm, seed, chain)
+    b = build(model, start, warm, seed, chain)
     for w in points(seed):
         a.solve(list(w))
         b.solve(list(w))
@@ -98,9 +100,10 @@ def test_trash_start_high_dimension():
 
 
 @pytest.mark.parametrize("warm", ALL_WARM)
-def test_crash_start_counters(warm):
+@pytest.mark.parametrize("start", [StartMode.Trash, StartMode.Greedy])
+def test_crash_start_counters(warm, start):
     a = build("both", StartMode.Artificial, warm, 5, False)
-    b = build("both", StartMode.Trash, warm, 5, False)
+    b = build("both", start, warm, 5, False)
     pts = points(5)
     for w in pts:
         a.solve(list(w))
@@ -118,11 +121,12 @@ def test_crash_start_counters(warm):
 
 @pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("warm", [WarmMode.NONE, WarmMode.Dual, WarmMode.DualRatio])
-def test_trash_start_position_updates(model, warm):
+@pytest.mark.parametrize("start", [StartMode.Trash, StartMode.Greedy])
+def test_trash_start_position_updates(model, warm, start):
     """Cost changes (update_positions_and_solve) after crash-started solves stay exact."""
     from wnet import Distribution
     a = build(model, StartMode.Artificial, warm, 11, False)
-    b = build(model, StartMode.Trash, warm, 11, False)
+    b = build(model, start, warm, 11, False)
     a.solve([1.0, 0.7, 1.3])
     b.solve([1.0, 0.7, 1.3])
     rng = np.random.default_rng(99)
@@ -134,6 +138,38 @@ def test_trash_start_position_updates(model, warm):
         moved = Distribution(pos + rng.normal(0, 0.3, pos.shape), ints)
         a.update_positions_and_solve(moved, theo)
         b.update_positions_and_solve(moved, theo)
+        assert a.total_cost() == b.total_cost()
+
+
+@pytest.mark.parametrize("model", MODELS)
+@pytest.mark.parametrize("warm", [WarmMode.NONE, WarmMode.DualRatio])
+def test_greedy_start_large_component(model, warm):
+    """Subgraphs above 1000 nodes take the top-k greedy path; it must stay exact too."""
+    a = build(model, StartMode.Artificial, warm, 21, False, n_emp=700, n_theo=300, k=2)
+    b = build(model, StartMode.Greedy, warm, 21, False, n_emp=700, n_theo=300, k=2)
+    big = max(b.get_subgraph(i).no_nodes() for i in range(b.no_subgraphs()))
+    assert big > 1000
+    for w in points(21, k=2, n=5):
+        a.solve(list(w))
+        b.solve(list(w))
+        assert a.total_cost() == b.total_cost()
+        np.testing.assert_array_equal(a.spectrum_proportion_derivatives(),
+                                      b.spectrum_proportion_derivatives())
+    if HAS_CRASH_START:
+        assert b.crash_start_count() >= 1
+
+
+def test_greedy_start_runtime_switch():
+    """set_warm_policy() can switch to the greedy start between solves."""
+    a = build("both", StartMode.Artificial, WarmMode.NONE, 7, False)
+    b = build("both", StartMode.Trash, WarmMode.NONE, 7, False)
+    p = NetworkSimplex()
+    p.warm = WarmMode.NONE
+    p.start = StartMode.Greedy
+    b.set_warm_policy(p)
+    for w in points(7):
+        a.solve(list(w))
+        b.solve(list(w))
         assert a.total_cost() == b.total_cost()
 
 

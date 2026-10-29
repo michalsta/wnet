@@ -67,11 +67,18 @@ enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio, DualGreedy, LinkC
 //   Trash      - crash start from the all-trash flow (no matching flow; every
 //                unit of the flow budget leaves through its trash arcs).
 //                Falls back to Artificial when the subgraph has no trash.
+//   Greedy     - crash start from the all-trash flow improved by a greedy
+//                matching: arcs that beat the trash arc they displace carry
+//                what fits, cheapest saving first.  Subgraphs with at most
+//                kGreedySmallNodes nodes take each empirical peak's single
+//                cheapest arc in one pass; larger ones take each peak's
+//                kGreedyTopK cheapest arcs in one global order (see
+//                _greedy_improve()).  Same fallback as Trash.
 // Trash is the default: measured on x86-64-v3 (i5-12500, 2026-10-20) it never
 // lost more than 6% (on ~1 ms solves) and won up to 10x alone, up to 100x
 // together with the repair_max_nodes gate below, whose cold fallbacks it
 // makes cheap (with the Artificial start that gate loses up to 3.5x).
-enum class NSStart { Artificial, Trash };
+enum class NSStart { Artificial, Trash, Greedy };
 
 // pylmcf after 1.3.0 also adds crash starts from a given flow.
 template <typename Solver>
@@ -460,8 +467,18 @@ class WassersteinNetworkSubgraph {
     mutable std::vector<VALUE_TYPE> _dual_pi, _dual_caps;
     mutable std::vector<long double> _dual_matched, _dual_alpha, _dual_beta;
     std::vector<LEMON_INDEX> _dual_anchor_arc, _dual_trash_arc;
-    // All-trash starting flow (NSStart::Trash), indexed by edge/arc id.
+    // All-trash starting flow (NSStart::Trash), indexed by edge/arc id;
+    // NSStart::Greedy adds a greedy matching on top of it.
     std::vector<VALUE_TYPE> _crash_flow;
+    // NSStart::Greedy: matching arcs grouped by their empirical node (CSR,
+    // nodes ascending, arcs ascending within a node), with the theoretical
+    // end of each; and a reused candidate buffer.
+    std::vector<int> _greedy_emps, _greedy_head;
+    std::vector<LEMON_INDEX> _greedy_arc, _greedy_theo;
+    struct GreedyCand { VALUE_TYPE gain; LEMON_INDEX arc, emp, theo; };
+    std::vector<GreedyCand> _greedy_cands;
+    static constexpr size_t kGreedySmallNodes = 1000;
+    static constexpr int kGreedyTopK = 8;
     // Arcs the crash start may use to join components left by the all-trash
     // flow: the Source->Emp and Theo->Sink anchors, then the trash arcs.
     std::vector<int> _crash_prefer;
@@ -807,12 +824,13 @@ class WassersteinNetworkSubgraph {
     // Source->Emp->Sink, or every theoretical unit Source->Theo->Sink, on the
     // side whose total equals F).  Returns false when there is no trash route
     // (the caller then starts from LEMON's artificial basis).
-    bool _fill_crash_flow() {
+    bool _fill_crash_flow(bool greedy = false) {
         const VALUE_TYPE F = node_supply_map[lemon_graph.nodeFromId(0)];
         _crash_flow.assign(edges.size(), VALUE_TYPE(0));
         if (simple_trash_added) {
             if (simple_trash_idx < 0) return false;
             _crash_flow[simple_trash_idx] = F;
+            if (greedy) _greedy_improve(0);
             return true;
         }
         bool emp_side;
@@ -832,7 +850,87 @@ class WassersteinNetworkSubgraph {
             _crash_flow[t] = cap;
             routed += cap;
         }
-        return routed == F;
+        if (routed != F) return false;
+        if (greedy) _greedy_improve(emp_side ? 1 : 2);
+        return true;
+    }
+
+    // NSStart::Greedy: improve the all-trash _crash_flow by pushing flow along
+    // matching arcs that cost less than the trash arc they displace (side 0:
+    // the simple trash arc; 1: the empirical peak's trash arc, every empirical
+    // unit already injected; 2: the theoretical peak's trash arc).  Each push
+    // takes what fits on both ends, so the flow stays feasible.  Measured on
+    // captured production solves (dualns_work, 2026-10-29): on small
+    // subgraphs ordering costs more than it saves, so each empirical peak
+    // just takes its single cheapest arc; on large ones each peak's
+    // kGreedyTopK cheapest arcs are pushed in one global (gain, arc) order,
+    // which matches a fully sorted greedy at a fraction of the volume.
+    void _greedy_improve(int side) {
+        const auto cost = [&](LEMON_INDEX a) { return costs_map[lemon_graph.arcFromId(a)]; };
+        const auto cap = [&](LEMON_INDEX a) { return capacities_map[lemon_graph.arcFromId(a)]; };
+        auto& f = _crash_flow;
+        const auto displaced = [&](LEMON_INDEX x, LEMON_INDEX y) {
+            return side == 0 ? cost(simple_trash_idx)
+                 : side == 1 ? cost(_dual_trash_arc[x]) : cost(_dual_trash_arc[y]);
+        };
+        const auto push = [&](LEMON_INDEX a, LEMON_INDEX x, LEMON_INDEX y) {
+            const LEMON_INDEX ae = _dual_anchor_arc[x], at = _dual_anchor_arc[y];
+            VALUE_TYPE room_e, room_t;
+            if (side == 0) {
+                room_e = std::min<VALUE_TYPE>(cap(ae) - f[ae], f[simple_trash_idx]);
+                room_t = cap(at) - f[at];
+            } else if (side == 1) {
+                room_e = f[_dual_trash_arc[x]];
+                room_t = cap(at) - f[at];
+            } else {
+                room_e = cap(ae) - f[ae];
+                room_t = f[_dual_trash_arc[y]];
+            }
+            const VALUE_TYPE d = std::min(room_e, room_t);
+            if (d <= 0) return;
+            f[a] += d;
+            if (side == 0) { f[ae] += d; f[at] += d; f[simple_trash_idx] -= d; }
+            else if (side == 1) { f[_dual_trash_arc[x]] -= d; f[at] += d; }
+            else { f[ae] += d; f[_dual_trash_arc[y]] -= d; }
+        };
+        if (nodes.size() <= kGreedySmallNodes) {
+            for (const int x : _greedy_emps) {
+                LEMON_INDEX best = -1, best_y = -1;
+                VALUE_TYPE best_gain = 0;
+                for (int k = _greedy_head[x]; k < _greedy_head[x + 1]; ++k) {
+                    const LEMON_INDEX a = _greedy_arc[k], y = _greedy_theo[k];
+                    const VALUE_TYPE g = cost(a) - displaced(x, y);
+                    if (g < best_gain) { best_gain = g; best = a; best_y = y; }
+                }
+                if (best >= 0) push(best, x, best_y);
+            }
+            return;
+        }
+        auto& cands = _greedy_cands;
+        cands.clear();
+        std::pair<VALUE_TYPE, int> buf[kGreedyTopK];   // (gain, CSR slot), ascending
+        for (const int x : _greedy_emps) {
+            int cnt = 0;
+            for (int k = _greedy_head[x]; k < _greedy_head[x + 1]; ++k) {
+                const VALUE_TYPE g = cost(_greedy_arc[k]) - displaced(x, _greedy_theo[k]);
+                if (g >= 0) continue;
+                const std::pair<VALUE_TYPE, int> e{g, k};
+                int j;
+                if (cnt < kGreedyTopK) j = cnt++;
+                else if (e < buf[kGreedyTopK - 1]) j = kGreedyTopK - 1;
+                else continue;
+                while (j > 0 && e < buf[j - 1]) { buf[j] = buf[j - 1]; --j; }
+                buf[j] = e;
+            }
+            for (int i = 0; i < cnt; ++i) {
+                const int k = buf[i].second;
+                cands.push_back({buf[i].first, _greedy_arc[k], LEMON_INDEX(x), _greedy_theo[k]});
+            }
+        }
+        std::sort(cands.begin(), cands.end(), [](const GreedyCand& a, const GreedyCand& b) {
+            return a.gain != b.gain ? a.gain < b.gain : a.arc < b.arc;
+        });
+        for (const GreedyCand& c : cands) push(c.arc, c.emp, c.theo);
     }
 
     // Run (or warm-restart) the configured solver using the current
@@ -922,7 +1020,8 @@ class WassersteinNetworkSubgraph {
                     // path inside warmRun (stale potentials); the basis is
                     // still reused and start() reoptimizes.
                     if constexpr (ns_has_crash_start<NSType>) {
-                        const bool crash = cfg.start == NSStart::Trash && _fill_crash_flow();
+                        const bool crash = cfg.start != NSStart::Artificial
+                            && _fill_crash_flow(cfg.start == NSStart::Greedy);
                         ns_solver->setColdStartFlow(crash ? &_crash_flow : nullptr,
                                                     crash ? &_crash_prefer : nullptr);
                         const auto status = ns_solver->warmRun(pivot, strategy, costs_changed);
@@ -941,7 +1040,8 @@ class WassersteinNetworkSubgraph {
                     ns_solver->supplyMap(node_supply_map);
                     using NSType = std::decay_t<decltype(*ns_solver)>;
                     if constexpr (ns_has_crash_start<NSType>) {
-                        if (cfg.start == NSStart::Trash && _fill_crash_flow())
+                        if (cfg.start != NSStart::Artificial
+                            && _fill_crash_flow(cfg.start == NSStart::Greedy))
                             require_optimal(ns_solver->crashRun(_crash_flow, pivot, &_crash_prefer),
                                             "NetworkSimplex::crashRun()");
                         else
@@ -1228,6 +1328,26 @@ public:
                 else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>)
                     _dual_trash_arc[edges[e].get_end_node_id()] = e;
             }, edges[e].get_type());
+        }
+        _greedy_emps.clear();
+        _greedy_head.assign(nodes.size() + 1, 0);
+        for (size_t e = 0; e < edges.size(); ++e)
+            if (std::holds_alternative<MatchingEdge>(edges[e].get_type()))
+                ++_greedy_head[edges[e].get_start_node_id() + 1];
+        for (size_t v = 0; v < nodes.size(); ++v) {
+            if (_greedy_head[v + 1] > 0) _greedy_emps.push_back(int(v));
+            _greedy_head[v + 1] += _greedy_head[v];
+        }
+        _greedy_arc.assign(_greedy_head.back(), -1);
+        _greedy_theo.assign(_greedy_head.back(), -1);
+        {
+            std::vector<int> pos(_greedy_head.begin(), _greedy_head.end() - 1);
+            for (size_t e = 0; e < edges.size(); ++e)
+                if (std::holds_alternative<MatchingEdge>(edges[e].get_type())) {
+                    const int k = pos[edges[e].get_start_node_id()]++;
+                    _greedy_arc[k] = LEMON_INDEX(e);
+                    _greedy_theo[k] = edges[e].get_end_node_id();
+                }
         }
         _crash_prefer.clear();
         for (size_t e = 0; e < edges.size(); ++e)
@@ -2193,7 +2313,7 @@ public:
             return ns_lct_solver.has_value() ? ns_lct_solver->warmStartCount() : 0;
         return ns_solver.has_value() ? ns_solver->warmStartCount() : 0;
     }
-    // Cold starts taken from the all-trash flow (NSStart::Trash).
+    // Cold starts taken from a crash flow (NSStart::Trash or Greedy).
     int crash_start_count() const {
         if (_use_lct() || !ns_solver.has_value()) return _crash_starts_retired;
         using NSType = std::decay_t<decltype(*ns_solver)>;
