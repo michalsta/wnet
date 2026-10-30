@@ -34,6 +34,12 @@ env:
   # $HOME is a persistent bind mount, so caching leaks state across jobs/repos.
   PIP_NO_CACHE_DIR: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # Authenticate git clones of pinned dependencies (git+https:// requirements,
+  # also inside pip's isolated builds): anonymous clones from the self-hosted
+  # runner's IP were intermittently refused with "could not read Username".
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+  GIT_CONFIG_VALUE_0: https://github.com/
 
 jobs:
   # Which combinations run is decided in one place, in Python, where the
