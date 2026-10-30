@@ -167,6 +167,10 @@ jobs:
         run: |
           python -VV
           python -m pip install --upgrade pip
+          # Dependencies pinned to a git revision have no wheel; install them from
+          # the pin first (a version range just takes PyPI's wheel), so the
+          # binary-only install below finds them satisfied.
+          python -m pip install "$(python .github/scripts/pinned_requirement.py pylmcf)"
           python -m pip install --only-binary=:all: dist/*cp310-abi3*.whl
       - name: Smoke-test the prebuilt extension, and check the build mode
         run: |
@@ -209,6 +213,10 @@ jobs:
         run: |
           python -VV
           python -m pip install --upgrade pip
+          # Dependencies pinned to a git revision have no wheel; install them from
+          # the pin first (a version range just takes PyPI's wheel), so the
+          # binary-only install below finds them satisfied.
+          python -m pip install "$(python .github/scripts/pinned_requirement.py pylmcf)"
           python -m pip install --only-binary=:all: dist/*abi3t*.whl
       - name: The GIL must still be off once the extension is imported
         run: |

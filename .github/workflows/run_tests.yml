@@ -201,10 +201,11 @@ jobs:
         # it is uninstrumented, and in the hardened lanes it disagrees with wnet
         # about the layout of every std:: container that crosses between them --
         # _GLIBCXX_DEBUG and _LIBCPP_HARDENING_MODE change the ABI, silently.
-        # So build pylmcf from the sdist with this lane's exact compiler, build
-        # type, flags and nanobind mode. Same version the wheel would have been;
-        # the later `pip install .[pytest]` finds the requirement satisfied and
-        # leaves this build in place.
+        # So build pylmcf from source with this lane's exact compiler, build
+        # type, flags and nanobind mode, from the requirement wnet declares (a
+        # version range, or a pinned git revision between releases); the later
+        # `pip install .[pytest]` finds it satisfied and leaves this build in
+        # place.
         env:
           VERBOSE: '1'
           CXX_FLAGS: ${{ matrix.cxx_flags }}
@@ -216,7 +217,7 @@ jobs:
               --config-settings="cmake.define.CMAKE_MODULE_LINKER_FLAGS=${WNET_LINK_FLAGS}"
             )
           fi
-          python -m pip install -v --no-binary pylmcf pylmcf \
+          python -m pip install -v --no-binary pylmcf "$(python .github/scripts/pinned_requirement.py pylmcf)" \
             --config-settings="cmake.build-type=${{ matrix.build_type }}" \
             --config-settings="cmake.define.WNET_NB_LINKED=ON" \
             --config-settings="cmake.define.CMAKE_CXX_FLAGS=${CXX_FLAGS}" \
@@ -354,12 +355,13 @@ jobs:
         with:
           python-version: "3.14"
       - name: Install the dependencies' headers
-        # Header-only use: the suites compile pylmcf's C++ directly. Released
-        # versions, as the Python lanes resolve them.
+        # Header-only use: the suites compile pylmcf's C++ directly. The
+        # version wnet declares (a pinned git revision between releases), as
+        # the Python lanes resolve it.
         run: |
           python -m venv /opt/ci-venv
           /opt/ci-venv/bin/pip install --upgrade pip
-          /opt/ci-venv/bin/pip install pylmcf
+          /opt/ci-venv/bin/pip install "$(python .github/scripts/pinned_requirement.py pylmcf)"
           for pkg in pylmcf; do
             var=$(echo "$pkg" | tr a-z A-Z)_INCLUDE
             echo "$var=$(/opt/ci-venv/bin/python -m $pkg --include)" >> "$GITHUB_ENV"

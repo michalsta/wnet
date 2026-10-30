@@ -21,21 +21,24 @@ SAN_FLAGS="-fsanitize=address,undefined -fno-sanitize=vptr -fno-sanitize-recover
 # nanobind type registrations at runtime, so a stock split-mode pylmcf wheel
 # next to a linked wnet fails at import ("nanobind build modes disagree"), and
 # an uninstrumented pylmcf would be a blind spot in the middle of the run.
-# Rebuild it here with the same flags and the same mode. Point
-# PYLMCF_SRC at a checkout to build that instead of the PyPI sdist.
+# Rebuild it here with the same flags and the same mode, from the requirement
+# wnet declares (a version range or a pinned git revision). Point PYLMCF_SRC at
+# a checkout to build that instead.
 PYLMCF_SRC="${PYLMCF_SRC:-}"
 pip uninstall -y pylmcf wnet || true
 if [ -n "$PYLMCF_SRC" ]; then
     PYLMCF_TARGET=("$PYLMCF_SRC")
 else
-    PYLMCF_TARGET=(--no-binary pylmcf pylmcf)
+    PYLMCF_TARGET=(--no-binary pylmcf "$(python .github/scripts/pinned_requirement.py pylmcf)")
 fi
 VERBOSE=1 pip install -v "${PYLMCF_TARGET[@]}" \
     --config-settings="cmake.build-type=Debug" \
     --config-settings="cmake.define.WNET_NB_LINKED=ON" \
     --config-settings="cmake.define.CMAKE_CXX_FLAGS=${SAN_FLAGS}"
 
-VERBOSE=1 pip install -v -e . \
+# --no-deps: keep the instrumented pylmcf above (a PYLMCF_SRC build does not
+# satisfy a pinned requirement and would otherwise be replaced).
+VERBOSE=1 pip install -v -e . --no-deps \
     --config-settings="cmake.build-type=Debug" \
     --config-settings="cmake.define.WNET_NB_LINKED=ON" \
     --config-settings="cmake.define.CMAKE_CXX_FLAGS=${SAN_FLAGS}"

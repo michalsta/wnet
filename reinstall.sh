@@ -11,9 +11,11 @@ TAG="$(hostname -s)_$(python -c 'import sys, os; print(os.path.basename(sys.pref
 # (the whole point of the persistent dir), but needs the build deps already
 # present in the active venv. nanobind_backend is in the list because a split-mode
 # extension built without it in the venv links fine and then fails at import.
-# Fall back to an isolated build otherwise.
+# Fall back to an isolated build otherwise. --no-deps with it: when pylmcf is
+# pinned to a git revision, resolving dependencies would replace the venv's
+# (editable) pylmcf with a build of that revision.
 if python -c 'import scikit_build_core, nanobind, pylmcf, nanobind_backend' 2>/dev/null; then
-    ISOLATION=--no-build-isolation
+    ISOLATION="--no-build-isolation --no-deps"
 else
     echo "reinstall.sh: build deps missing in this venv -> isolated build (nanobind will recompile)" >&2
     ISOLATION=
