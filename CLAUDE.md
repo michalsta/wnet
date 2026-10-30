@@ -48,6 +48,42 @@ UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1:log_path=/tmp/ubsan \
 python -m pytest tests/ -v
 ```
 
+## Dependency pins within the stack (pylmcf → wnet → wnetalign / wnetdeconv)
+
+wnet may pin pylmcf to a git revision, and wnetalign/wnetdeconv may pin wnet.
+Current state: see `_wnet_metadata.py`. The rules, shared by all four repos:
+
+- **Prefer version requirements** (`pylmcf>=1.3.0`). They are what a release ships.
+- **Pin to a git revision once a repo uses API its dependency has not released**,
+  even API it only uses behind a feature check (`hasattr`, `HAS_*`, a C++
+  `requires` concept): `pylmcf @ git+https://github.com/michalsta/pylmcf@<full 40-char sha>`.
+  Full SHAs only, never a branch or tag: pip caches the built wheel only for an
+  immutable revision, and a moving ref changes what users get.
+- **Two places, identical strings:** `[build-system] requires` in `pyproject.toml`
+  (the C++ build compiles the dependency's headers) and `BASE_DEPENDENCIES` in
+  `_<pkg>_metadata.py` (runtime). A mismatch builds against one revision and runs
+  against another.
+- **One revision per dependency across the whole stack.** wnetalign/wnetdeconv pin
+  the same pylmcf revision that their pinned wnet pins; pip refuses two different
+  URLs for one package.
+- **Keep the pins current without asking**, as part of ordinary work: when a
+  dependency's main gains code this repo should run or test against, push the
+  dependency first, then move the pin to its new SHA (in every repo that pins it)
+  and push that. Workflow- or docs-only commits of the dependency need no bump.
+- **Switch back to a version requirement as soon as a release covers what is
+  used** — and always before releasing: the `no_direct_references` job in
+  `publish.yml` refuses a release while any pin remains (it checks the sources
+  before building and the built metadata before upload), because PyPI rejects
+  direct references. Releases go pylmcf → wnet → downstream, each replacing its
+  pins with the versions just released. Releasing itself still needs the user's
+  explicit permission every time.
+- Plumbing: `.github/scripts/pinned_requirement.py NAME [--ref]` prints the declared
+  requirement (or the git revision to check out); CI jobs that build a dependency
+  from source with their own flags (sanitizer, header-only, binary-only wheel tests)
+  install from it. `reinstall.sh` passes `--no-deps` with `--no-build-isolation`,
+  so a pinned requirement does not replace the workspace's editable checkouts.
+  While pins are in place, CI compiles pinned dependencies from source (slower).
+
 ## CI
 
 `run_tests.yml` no longer contains a matrix. Which combinations run is decided by
