@@ -37,9 +37,13 @@ env:
   # Authenticate git clones of pinned dependencies (git+https:// requirements,
   # also inside pip's isolated builds): anonymous clones from the self-hosted
   # runner's IP were intermittently refused with "could not read Username".
-  GIT_CONFIG_COUNT: "1"
+  # The empty credential.helper drops every configured helper: macOS's
+  # osxkeychain otherwise blocks forever on the token in the URL.
+  GIT_CONFIG_COUNT: "2"
   GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
   GIT_CONFIG_VALUE_0: https://github.com/
+  GIT_CONFIG_KEY_1: credential.helper
+  GIT_CONFIG_VALUE_1: ""
 
 jobs:
   # Which combinations run is decided in one place, in Python, where the
