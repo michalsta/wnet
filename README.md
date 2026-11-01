@@ -159,7 +159,7 @@ the crash starts are usually faster, much faster on large components (greedy bea
 `warm_start_count()`, `cold_start_count()`, `crash_start_count()` and `dual_start_count()` report
 what happened.
 
-`repair_max_nodes` (default 1000) sends subgraphs larger than that straight to a cold start when
+`repair_max_nodes` (default 100) sends subgraphs larger than that straight to a cold start when
 the cheap warm patch fails, instead of a simplex repair that can cost tens of cold solves there.
 With the trash start such a cold solve is cheap. `wnet_cpp.HAS_CRASH_START` is `False` when wnet was
 built against a pylmcf without crash starts; then `StartMode.Greedy` and `StartMode.Trash` act like

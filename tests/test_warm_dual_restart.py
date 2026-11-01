@@ -34,6 +34,7 @@ def _build(seed, dim, n_targets, size, mode, trash=7):
     targets = [_dist(rng, dim, size) for _ in range(n_targets)]
     ns = NetworkSimplex()
     ns.warm = mode
+    ns.repair_max_nodes = -1  # these tests exercise repair; the size gate would skip it
     net = WassersteinNetwork(base, targets, DistanceMetric.L2, solver=ns)
     net.add_simple_trash(trash)
     net.build()

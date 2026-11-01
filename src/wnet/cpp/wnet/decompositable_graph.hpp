@@ -134,10 +134,14 @@ struct NetworkSimplexConfig {
     // components stay small and every repair is cheap.  Default 1000 (was -1)
     // since cold starts became crash starts (NSStart::Trash): with them the
     // gate gave 0.01-0.29x on 15-20k-peak synthetic sequences and stayed
-    // within 1.06x on small ones.  Without crash starts (pylmcf <= 1.3.0) the
-    // gate's cold fallbacks use the artificial start and lose up to 3.5x, so
-    // the default stays -1 there.
-    long repair_max_nodes = wnet_has_crash_start ? 1000 : -1;
+    // within 1.06x on small ones.  Lowered to 100 (2026-11-01; greedy cold
+    // starts, replayed production solve sequences, serial): 0.42-0.62x on
+    // 2-D deconvolution (benzen, fbr, hsqcabs) on nighthaven, solace and
+    // spot, the other jobs within 1.7%; 0 (never repair) costs 2-D LC-MS
+    // alignment +12% (its ~20k tiny components repair cheaply).  Without
+    // crash starts (pylmcf <= 1.3.0) the gate's cold fallbacks use the
+    // artificial start and lose up to 3.5x, so the default stays -1 there.
+    long repair_max_nodes = wnet_has_crash_start ? 100 : -1;
     // Mass-based repair gate, forwarded to
     // NetworkSimplex::setWarmViolationMassFraction(): when >= 0, a failed tree
     // patch whose violated basic-arc mass exceeds this fraction of the total

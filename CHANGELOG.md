@@ -60,13 +60,13 @@
   (as `warm_violation_limit = 0`); smaller ones keep `warm_violation_limit`.
   On large connected components a repair can cost tens of cold solves;
   measured on 2-D LC-MS alignment once components percolate: 302 s with
-  repair vs 16 s gated. The default is 1000 when crash starts are available
+  repair vs 16 s gated. The default is 100 when crash starts are available
   and -1 (disabled) otherwise; see the trash start below.
 
 ### Changed
 
 - `NetworkSimplex` defaults to `start=StartMode.Trash` and, when crash starts
-  are available, to `repair_max_nodes=1000`. Measured on x86-64-v3 against
+  are available, to `repair_max_nodes=100`. Measured on x86-64-v3 against
   the artificial start with the same warm mode: 2-D deconvolution runs take
   0.48–0.97 of the time, synthetic networks 0.08–1.0, and adding the 1000-node
   repair gate brings large components to 0.01–0.29 (at most 6% slower on small
@@ -74,6 +74,11 @@
   same gate was up to 3.5× slower, which is why it stays off against older
   pylmcf. To restore the previous behaviour, pass
   `NetworkSimplex(start=StartMode.Artificial, repair_max_nodes=-1)`.
+- The gate threshold was then lowered from 1000 to 100 nodes: on replayed
+  production solve sequences with the greedy start, 2-D deconvolution runs
+  take 0.42–0.62 of the solver time of the 1000-node gate (x86-64-v3,
+  AVX-512 and ARM64 alike), everything else within 2%; never repairing
+  (`repair_max_nodes=0`) costs 2-D LC-MS alignment 12%.
 - With pylmcf's deterministic warm-repair budget (work units instead of wall
   time), a solve sequence no longer depends on timing: previously an interrupt
   during a microsecond-scale repair on a tiny subgraph could trip the budget,
