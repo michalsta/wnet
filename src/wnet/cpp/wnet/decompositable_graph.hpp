@@ -74,6 +74,13 @@ enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio, DualGreedy, LinkC
 //                cheapest arc in one pass; larger ones take each peak's
 //                kGreedyTopK cheapest arcs in one global order (see
 //                _greedy_improve()).  Same fallback as Trash.
+//   DualSimplex - EXPERIMENTAL: dual network simplex (pylmcf
+//                NetworkSimplex::dualSimplexRun()) from a nearest-neighbour
+//                dual-feasible basis (see _fill_dual_basis()).  Falls back to
+//                Greedy when the subgraph has chain arcs or no trash route,
+//                or when the dual simplex gets stuck.  Exact, but 1.3-19x
+//                slower than Trash on captured production solves (2026-11-01):
+//                every dual iteration prices its whole cut.
 // Trash beat Artificial on x86-64-v3 (i5-12500, 2026-10-20): never more than
 // 6% slower (on ~1 ms solves), up to 10x faster alone, up to 100x together
 // with the repair_max_nodes gate below, whose cold fallbacks it makes cheap
@@ -82,13 +89,20 @@ enum class NSWarmMode { None, Simple, Dual, Primal, DualRatio, DualGreedy, LinkC
 // 0.87-0.89 on nighthaven, solace and spot (2026-10-29; heavy 2-D NMR jobs
 // 0.81-0.98, large synthetic clouds 0.58-0.89), at worst +11% (~2 ms) on tiny
 // 3-D/6-D clouds.
-enum class NSStart { Artificial, Trash, Greedy };
+enum class NSStart { Artificial, Trash, Greedy, DualSimplex };
 
 // pylmcf after 1.3.0 also adds crash starts from a given flow.
 template <typename Solver>
 inline constexpr bool ns_has_crash_start = requires(Solver& s, const std::vector<typename Solver::Value>& f) {
     s.crashRun(f);
     s.setColdStartFlow(&f);
+};
+// pylmcf after 1.3.0 also adds dual network simplex starts from a basis.
+template <typename Solver>
+inline constexpr bool ns_has_dual_start = requires(Solver& s, const std::vector<int>& t) {
+    s.dualSimplexRun(t, t);
+    s.setColdStartBasis(&t, &t);
+    s.dualStartCount();
 };
 inline constexpr bool wnet_has_crash_start =
     ns_has_crash_start<lemon::NetworkSimplex<lemon::StaticDigraph, int64_t, int64_t>>;
@@ -486,10 +500,17 @@ class WassersteinNetworkSubgraph {
     // Arcs the crash start may use to join components left by the all-trash
     // flow: the Source->Emp and Theo->Sink anchors, then the trash arcs.
     std::vector<int> _crash_prefer;
+    // NSStart::DualSimplex: the starting basis (LEMON arc ids in the tree,
+    // arc ids at their upper bound), the empirical and theoretical nodes, and
+    // whether chain arcs exist (the basis ignores them, so it is not built).
+    std::vector<int> _dual_tree, _dual_upper;
+    std::vector<int> _dual_emps, _dual_theos;
+    bool _has_chain_arcs = false;
     int _cold_starts_via_run = 0;
-    // Crash starts of NetworkSimplex instances already replaced (warm=None
-    // re-creates the solver every solve).
+    // Crash and dual starts of NetworkSimplex instances already replaced
+    // (warm=None re-creates the solver every solve).
     int _crash_starts_retired = 0;
+    int _dual_starts_retired = 0;
 
     // Warm-sequence capture (WNET_DUMP_WARMSEQ): when the env var holds a
     // path prefix, every NetworkSimplex solve of this subgraph appends its
@@ -937,6 +958,133 @@ class WassersteinNetworkSubgraph {
         for (const GreedyCand& c : cands) push(c.arc, c.emp, c.theo);
     }
 
+    // NSStart::DualSimplex: fill _dual_tree / _dual_upper with a nearest-
+    // neighbour dual-feasible basis.  Potentials (reduced cost = c + pi_u -
+    // pi_v): pi_Sink = 0; each theoretical peak hangs on Sink by its anchor;
+    // each empirical peak on its cheapest outlet (the matching or trash arc
+    // maximizing pi_target - cost); Source on its cheapest uncapacitated
+    // outlet (simple or theoretical trash), or, with none, on the empirical
+    // anchor that lets every other anchor sit at its capacity.  Empirical
+    // anchors off the tree start at capacity when their reduced cost is <= 0.
+    // Then the budget is spread: theoretical peaks whose trash arc is tight
+    // and whose nearest-neighbour load fits their anchor hang on Source by
+    // that trash arc, with the anchor at capacity, instead of on Sink; the
+    // one with the most spare room keeps its anchor in the tree as the
+    // Source-Sink link.  Returns false when no basis is built (chain arcs,
+    // a peak without anchor, no outlet for Source).
+    bool _fill_dual_basis() {
+        _dual_tree.clear();
+        _dual_upper.clear();
+        if (_has_chain_arcs) return false;
+        const auto cost = [&](LEMON_INDEX a) { return costs_map[lemon_graph.arcFromId(a)]; };
+        const auto cap = [&](LEMON_INDEX a) { return capacities_map[lemon_graph.arcFromId(a)]; };
+        const size_t n = nodes.size();
+        std::vector<VALUE_TYPE> pi(n, 0);
+        std::vector<char> known(n, 0);
+        std::vector<LEMON_INDEX> emp_tree(n, -1);
+        known[1] = 1;
+        for (const int y : _dual_theos) {
+            const LEMON_INDEX at = _dual_anchor_arc[y];
+            if (at < 0) return false;
+            pi[y] = -cost(at);
+            known[y] = 1;
+            _dual_tree.push_back(int(at));
+        }
+        for (const int x : _dual_emps) {
+            if (_dual_anchor_arc[x] < 0) return false;
+            VALUE_TYPE best = 0;
+            LEMON_INDEX arg = -1;
+            for (int k = _greedy_head[x]; k < _greedy_head[x + 1]; ++k) {
+                const VALUE_TYPE v = pi[_greedy_theo[k]] - cost(_greedy_arc[k]);
+                if (arg < 0 || v > best) { best = v; arg = _greedy_arc[k]; }
+            }
+            if (const LEMON_INDEX et = _dual_trash_arc[x]; et >= 0) {
+                const VALUE_TYPE v = -cost(et);
+                if (arg < 0 || v > best) { best = v; arg = et; }
+            }
+            if (arg >= 0) {
+                pi[x] = best;
+                known[x] = 1;
+                emp_tree[x] = arg;
+                _dual_tree.push_back(int(arg));
+            }
+        }
+        // Source
+        VALUE_TYPE ps = 0;
+        LEMON_INDEX sarc = -1;
+        bool has_tt = false;
+        for (const int y : _dual_theos)
+            if (const LEMON_INDEX tt = _dual_trash_arc[y]; tt >= 0) {
+                has_tt = true;
+                const VALUE_TYPE v = pi[y] - cost(tt);
+                if (sarc < 0 || v > ps) { ps = v; sarc = tt; }
+            }
+        if (simple_trash_added && simple_trash_idx >= 0) {
+            const VALUE_TYPE v = -cost(simple_trash_idx);
+            if (sarc < 0 || v > ps) { ps = v; sarc = simple_trash_idx; }
+        }
+        if (sarc < 0) {
+            for (const int x : _dual_emps)
+                if (known[x]) {
+                    const VALUE_TYPE v = pi[x] - cost(_dual_anchor_arc[x]);
+                    if (sarc < 0 || v < ps) { ps = v; sarc = _dual_anchor_arc[x]; }
+                }
+            if (sarc < 0) return false;
+        }
+        std::vector<char> injected(n, 0);
+        for (const int x : _dual_emps) {
+            const LEMON_INDEX a = _dual_anchor_arc[x];
+            if (a == sarc) continue;
+            if (!known[x]) {
+                pi[x] = ps + cost(a);
+                known[x] = 1;
+                _dual_tree.push_back(int(a));
+                continue;
+            }
+            if (cost(a) + ps - pi[x] <= 0) {
+                _dual_upper.push_back(int(a));
+                injected[x] = 1;
+            }
+        }
+        // Spread (only when Source hangs on a theoretical trash arc).
+        if (has_tt && sarc != simple_trash_idx) {
+            std::vector<VALUE_TYPE> load(n, 0);
+            for (const int x : _dual_emps)
+                if (injected[x] && emp_tree[x] >= 0) {
+                    const int y = edges[emp_tree[x]].get_end_node_id();
+                    if (y > 1) load[y] += cap(_dual_anchor_arc[x]);
+                }
+            int link = -1;
+            VALUE_TYPE best_room = -1;
+            std::vector<char> moved(n, 0);
+            for (const int y : _dual_theos) {
+                const LEMON_INDEX tt = _dual_trash_arc[y];
+                if (tt < 0 || pi[y] - cost(tt) != ps) continue;
+                const VALUE_TYPE room = cap(_dual_anchor_arc[y]) - load[y];
+                if (room < 0) continue;
+                moved[y] = 1;
+                if (room > best_room) { best_room = room; link = y; }
+            }
+            if (link >= 0) {
+                size_t w = 0;
+                for (const int a : _dual_tree) {
+                    const int u = edges[a].get_start_node_id();
+                    if (moved[u] && u != link && a == _dual_anchor_arc[u]) {
+                        _dual_upper.push_back(a);
+                        continue;
+                    }
+                    _dual_tree[w++] = a;
+                }
+                _dual_tree.resize(w);
+                for (const int y : _dual_theos)
+                    if (moved[y]) _dual_tree.push_back(int(_dual_trash_arc[y]));
+                return true;
+            }
+        }
+        _dual_tree.push_back(int(sarc));
+        return true;
+    }
+
     // Run (or warm-restart) the configured solver using the current
     // capacities_map, costs_map and node_supply_map.
     // costs_changed=true: costs were updated since the last solve (e.g.
@@ -1025,11 +1173,17 @@ class WassersteinNetworkSubgraph {
                     // still reused and start() reoptimizes.
                     if constexpr (ns_has_crash_start<NSType>) {
                         const bool crash = cfg.start != NSStart::Artificial
-                            && _fill_crash_flow(cfg.start == NSStart::Greedy);
+                            && _fill_crash_flow(cfg.start != NSStart::Trash);
                         ns_solver->setColdStartFlow(crash ? &_crash_flow : nullptr,
                                                     crash ? &_crash_prefer : nullptr);
+                        if constexpr (ns_has_dual_start<NSType>) {
+                            if (cfg.start == NSStart::DualSimplex && _fill_dual_basis())
+                                ns_solver->setColdStartBasis(&_dual_tree, &_dual_upper);
+                        }
                         const auto status = ns_solver->warmRun(pivot, strategy, costs_changed);
                         ns_solver->setColdStartFlow(nullptr);
+                        if constexpr (ns_has_dual_start<NSType>)
+                            ns_solver->setColdStartBasis(nullptr, nullptr);
                         require_optimal(status, "NetworkSimplex::warmRun()");
                     } else {
                         require_optimal(ns_solver->warmRun(pivot, strategy, costs_changed),
@@ -1038,17 +1192,31 @@ class WassersteinNetworkSubgraph {
                 } else {
                     ++_cold_starts_via_run;
                     _crash_starts_retired = crash_start_count();
+                    _dual_starts_retired = dual_start_count();
                     ns_solver.emplace(lemon_graph);
                     ns_solver->upperMap(capacities_map);
                     ns_solver->costMap(costs_map);
                     ns_solver->supplyMap(node_supply_map);
                     using NSType = std::decay_t<decltype(*ns_solver)>;
                     if constexpr (ns_has_crash_start<NSType>) {
-                        if (cfg.start != NSStart::Artificial
-                            && _fill_crash_flow(cfg.start == NSStart::Greedy))
+                        const bool crash = cfg.start != NSStart::Artificial
+                            && _fill_crash_flow(cfg.start != NSStart::Trash);
+                        bool dual = false;
+                        if constexpr (ns_has_dual_start<NSType>) {
+                            if (cfg.start == NSStart::DualSimplex && _fill_dual_basis()) {
+                                // The crash flow is the dual start's fallback.
+                                ns_solver->setColdStartFlow(crash ? &_crash_flow : nullptr,
+                                                            crash ? &_crash_prefer : nullptr);
+                                const auto status = ns_solver->dualSimplexRun(_dual_tree, _dual_upper, pivot);
+                                ns_solver->setColdStartFlow(nullptr);
+                                require_optimal(status, "NetworkSimplex::dualSimplexRun()");
+                                dual = true;
+                            }
+                        }
+                        if (!dual && crash)
                             require_optimal(ns_solver->crashRun(_crash_flow, pivot, &_crash_prefer),
                                             "NetworkSimplex::crashRun()");
-                        else
+                        else if (!dual)
                             require_optimal(ns_solver->run(pivot), "NetworkSimplex::run()");
                     } else {
                         require_optimal(ns_solver->run(pivot), "NetworkSimplex::run()");
@@ -1302,6 +1470,7 @@ public:
         _matching_edge_cache.clear();
         _theo_sink_edge_cache.clear();
         _unlimited_arc.assign(edges.size(), false);
+        _has_chain_arcs = false;
         for (LEMON_INDEX ii = 0; ii < static_cast<LEMON_INT>(edges.size()); ++ii) {
             std::visit([&](const auto& arg) {
                 using T = std::decay_t<decltype(arg)>;
@@ -1312,6 +1481,7 @@ public:
                     _matching_edge_cache.push_back({lemon_graph.arcFromId(ii), emp.get_intensity(), theo.get_intensity(), theo.get_spectrum_id(), emp.get_peak_index(), theo.get_peak_index()});
                 } else if constexpr (std::is_same_v<T, ChainEdge>) {
                     _unlimited_arc[ii] = true;
+                    _has_chain_arcs = true;
                 } else if constexpr (std::is_same_v<T, TheoreticalToSinkEdge>) {
                     const auto& theo = std::get<TheoreticalNode<intensity_type>>(edges[ii].get_start_node().get_type());
                     _theo_sink_edge_cache.push_back({lemon_graph.arcFromId(ii), theo.get_intensity(), theo.get_spectrum_id()});
@@ -1332,6 +1502,14 @@ public:
                 else if constexpr (std::is_same_v<T, TheoreticalTrashEdge>)
                     _dual_trash_arc[edges[e].get_end_node_id()] = e;
             }, edges[e].get_type());
+        }
+        _dual_emps.clear();
+        _dual_theos.clear();
+        for (size_t v = 2; v < nodes.size(); ++v) {
+            if (std::holds_alternative<EmpiricalNode<intensity_type>>(nodes[v].get_type()))
+                _dual_emps.push_back(int(v));
+            else if (std::holds_alternative<TheoreticalNode<intensity_type>>(nodes[v].get_type()))
+                _dual_theos.push_back(int(v));
         }
         _greedy_emps.clear();
         _greedy_head.assign(nodes.size() + 1, 0);
@@ -2323,6 +2501,13 @@ public:
         using NSType = std::decay_t<decltype(*ns_solver)>;
         if constexpr (ns_has_crash_start<NSType>) return _crash_starts_retired + ns_solver->crashStartCount();
         else return _crash_starts_retired;
+    }
+    // Cold starts taken by the dual network simplex (NSStart::DualSimplex).
+    int dual_start_count() const {
+        if (_use_lct() || !ns_solver.has_value()) return _dual_starts_retired;
+        using NSType = std::decay_t<decltype(*ns_solver)>;
+        if constexpr (ns_has_dual_start<NSType>) return _dual_starts_retired + ns_solver->dualStartCount();
+        else return _dual_starts_retired;
     }
     int cold_start_count() const {
         if (_use_lct())
@@ -4533,6 +4718,12 @@ public:
         int total = 0;
         for (const auto& sg : flow_subgraphs)
             total += sg->crash_start_count();
+        return total;
+    }
+    int dual_start_count() const {
+        int total = 0;
+        for (const auto& sg : flow_subgraphs)
+            total += sg->dual_start_count();
         return total;
     }
     int cold_start_count() const {

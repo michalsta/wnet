@@ -68,6 +68,7 @@ nb::class_<WNetII> bind_network_ii(nb::module_& m) {
         .def("spectrum_proportion_derivatives_fast_approx", &WassersteinNetwork<int64_t, int64_t>::spectrum_proportion_derivatives_fast_approx)
         .def("warm_start_count", &WassersteinNetwork<int64_t, int64_t>::warm_start_count)
         .def("crash_start_count", &WassersteinNetwork<int64_t, int64_t>::crash_start_count)
+        .def("dual_start_count", &WassersteinNetwork<int64_t, int64_t>::dual_start_count)
         .def("set_warm_policy", &WassersteinNetwork<int64_t, int64_t>::set_warm_policy, nb::arg("policy"))
         .def("ns_stats", [](const WassersteinNetwork<int64_t, int64_t>& self) {
             auto [work, policy_cold, viol, mass, supply] = self.ns_stats();

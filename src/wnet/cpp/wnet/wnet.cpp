@@ -26,6 +26,10 @@ NB_MODULE(wnet_cpp, m) {
     // without it StartMode.Trash and Greedy fall back to the artificial start.
     m.attr("HAS_CRASH_START") = ns_has_crash_start<
         lemon::NetworkSimplex<lemon::StaticDigraph, int64_t, int64_t>>;
+    // Whether it has the dual network simplex start (pylmcf after 1.3.0);
+    // without it StartMode.DualSimplex falls back to Greedy.
+    m.attr("HAS_DUAL_SIMPLEX_START") = ns_has_dual_start<
+        lemon::NetworkSimplex<lemon::StaticDigraph, int64_t, int64_t>>;
 
     m.doc() = "WNet C++ imlementation module";
     // Surface C++ InfeasibleException as wnet_cpp.InfeasibleError, derived
@@ -79,7 +83,8 @@ NB_MODULE(wnet_cpp, m) {
     nb::enum_<NSStart>(m, "StartMode")
         .value("Artificial", NSStart::Artificial)
         .value("Trash", NSStart::Trash)
-        .value("Greedy", NSStart::Greedy);
+        .value("Greedy", NSStart::Greedy)
+        .value("DualSimplex", NSStart::DualSimplex);
 
 
     nb::class_<NetworkSimplexConfig>(m, "NetworkSimplex")
@@ -110,7 +115,9 @@ NB_MODULE(wnet_cpp, m) {
              "pivot: NSPivotRule.  warm: WarmMode between successive solves.\n"
              "start: StartMode for every cold start (Artificial = LEMON's artificial\n"
              "basis; Trash = crash start from the all-trash flow; Greedy = crash start\n"
-             "from the all-trash flow improved by a greedy matching).  Same results.\n"
+             "from the all-trash flow improved by a greedy matching; DualSimplex =\n"
+             "EXPERIMENTAL dual network simplex from a nearest-neighbour basis, slower).\n"
+             "Same results.\n"
              "The remaining fields gate warm repair; see the C++ NetworkSimplexConfig.")
         .def_rw("pivot", &NetworkSimplexConfig::pivot)
         .def_rw("warm",  &NetworkSimplexConfig::warm)

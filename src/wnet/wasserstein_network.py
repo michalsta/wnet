@@ -81,7 +81,7 @@ class WassersteinNetwork:
         max_distance (float | None): Per-pair matching threshold (dense semantics, see above). If None or infinity, no cap.
         force_dense_1d (bool): In 1D, force the O(m*n) dense factory instead of the O(m+n) chain factory; the chain factory is never used. Incompatible with split_distance.
         p (float): Wasserstein transport order, any real number >= 1. Each matching edge costs ground_distance**p, so total_cost() and all derivatives are in W_p**p units; take the p-th root for the literal W_p distance (the high-level WassersteinDistance() does this). For p != 1 the cost is fractional, so the integer solver works in auto-scaled units (round(scale_factor() * d**p)); the public total_cost()/derivatives divide that back out. p == 1 uses legacy cost truncation unless set_cost_scaling() is requested. For p != 1 the dense factory is used, except with ConvexSweep, which prices pairs directly on the 1D chain.
-        solver: Solver configuration object. One of NetworkSimplex(), CostScaling(), CycleCanceling(), CapacityScaling(), SlopeDP(), or ConvexSweep(). Defaults to NetworkSimplex() (warm restarts, BLOCK_SEARCH pivot, cold solves crash-started from the all-trash flow improved by a greedy matching); StartMode.Trash crash-starts them from the plain all-trash flow, and StartMode.Artificial uses LEMON's artificial basis (same results either way). SlopeDP and ConvexSweep are chain-native: they require split_distance or an absent/infinite max_distance, together with 1D data and force_dense_1d=False. SlopeDP requires p == 1.
+        solver: Solver configuration object. One of NetworkSimplex(), CostScaling(), CycleCanceling(), CapacityScaling(), SlopeDP(), or ConvexSweep(). Defaults to NetworkSimplex() (warm restarts, BLOCK_SEARCH pivot, cold solves crash-started from the all-trash flow improved by a greedy matching); StartMode.Trash crash-starts them from the plain all-trash flow, StartMode.Artificial uses LEMON's artificial basis, and StartMode.DualSimplex (experimental, slower) runs the dual network simplex from a nearest-neighbour basis (same results either way). SlopeDP and ConvexSweep are chain-native: they require split_distance or an absent/infinite max_distance, together with 1D data and force_dense_1d=False. SlopeDP requires p == 1.
         intensity_scale (float | None): None => auto (FineGridScaler, chosen at build() time so it sees the declared trash costs); an explicit value is used verbatim.
         round_max_distance (bool): Round a fractional cap up to an integer (legacy p == 1 truncation behaviour) with a warning. Applied to whichever of max_distance/split_distance was given.
         split_distance (float | None): Explicit chain-semantics split radius (see above).
@@ -126,6 +126,7 @@ class WassersteinNetwork:
             "warm_start_count",
             "cold_start_count",
             "crash_start_count",
+            "dual_start_count",
             "dual_repair_count",
             "primal_repair_count",
         }

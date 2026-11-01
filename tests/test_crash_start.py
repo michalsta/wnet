@@ -1,5 +1,6 @@
 """NetworkSimplex crash starts (StartMode.Trash: the all-trash flow; StartMode.Greedy: the
-all-trash flow improved by a greedy matching) must not change any answer.
+all-trash flow improved by a greedy matching) and dual network simplex starts
+(StartMode.DualSimplex) must not change any answer.
 
 Every combination of trash model, factory (dense / 1-D chain), warm mode and
 point sequence is solved twice, once per start mode, and the total cost and
@@ -16,6 +17,7 @@ import wnet.wnet_cpp as _wnet_cpp
 # Built against a pylmcf without crashRun (e.g. the 1.3.0 wheel), StartMode.Trash
 # falls back to the artificial start: answers are identical, counters stay 0.
 HAS_CRASH_START = getattr(_wnet_cpp, "HAS_CRASH_START", False)
+HAS_DUAL_SIMPLEX_START = getattr(_wnet_cpp, "HAS_DUAL_SIMPLEX_START", False)
 
 MODELS = ["simple", "both", "independent", "experimental", "theoretical"]
 
@@ -61,7 +63,7 @@ ALL_WARM = [WarmMode.NONE, WarmMode.Simple, WarmMode.Dual, WarmMode.Primal, Warm
 @pytest.mark.parametrize("chain", [False, True])
 @pytest.mark.parametrize("warm", ALL_WARM)
 @pytest.mark.parametrize("seed", range(4))
-@pytest.mark.parametrize("start", [StartMode.Trash, StartMode.Greedy])
+@pytest.mark.parametrize("start", [StartMode.Trash, StartMode.Greedy, StartMode.DualSimplex])
 def test_trash_start_matches_artificial(model, chain, warm, seed, start):
     if chain and model == "independent":
         pytest.skip("independent trash on the chain needs SlopeDP")
@@ -121,7 +123,7 @@ def test_crash_start_counters(warm, start):
 
 @pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("warm", [WarmMode.NONE, WarmMode.Dual, WarmMode.DualRatio])
-@pytest.mark.parametrize("start", [StartMode.Trash, StartMode.Greedy])
+@pytest.mark.parametrize("start", [StartMode.Trash, StartMode.Greedy, StartMode.DualSimplex])
 def test_trash_start_position_updates(model, warm, start):
     """Cost changes (update_positions_and_solve) after crash-started solves stay exact."""
     from wnet import Distribution
@@ -143,10 +145,11 @@ def test_trash_start_position_updates(model, warm, start):
 
 @pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("warm", [WarmMode.NONE, WarmMode.DualRatio])
-def test_greedy_start_large_component(model, warm):
+@pytest.mark.parametrize("start", [StartMode.Greedy, StartMode.DualSimplex])
+def test_greedy_start_large_component(model, warm, start):
     """Subgraphs above 1000 nodes take the top-k greedy path; it must stay exact too."""
     a = build(model, StartMode.Artificial, warm, 21, False, n_emp=700, n_theo=300, k=2)
-    b = build(model, StartMode.Greedy, warm, 21, False, n_emp=700, n_theo=300, k=2)
+    b = build(model, start, warm, 21, False, n_emp=700, n_theo=300, k=2)
     big = max(b.get_subgraph(i).no_nodes() for i in range(b.no_subgraphs()))
     assert big > 1000
     for w in points(21, k=2, n=5):
@@ -155,8 +158,32 @@ def test_greedy_start_large_component(model, warm):
         assert a.total_cost() == b.total_cost()
         np.testing.assert_array_equal(a.spectrum_proportion_derivatives(),
                                       b.spectrum_proportion_derivatives())
-    if HAS_CRASH_START:
+    if start == StartMode.DualSimplex and HAS_DUAL_SIMPLEX_START:
+        assert b.dual_start_count() >= 1
+    elif HAS_CRASH_START:
         assert b.crash_start_count() >= 1
+
+
+@pytest.mark.parametrize("model", MODELS)
+@pytest.mark.parametrize("chain", [False, True])
+@pytest.mark.parametrize("warm", ALL_WARM)
+def test_dual_simplex_start_counters(model, chain, warm):
+    if chain and model == "independent":
+        pytest.skip("independent trash on the chain needs SlopeDP")
+    b = build(model, StartMode.DualSimplex, warm, 5, chain)
+    pts = points(5)
+    for w in pts:
+        b.solve(list(w))
+    if not HAS_DUAL_SIMPLEX_START or chain:
+        # no basis on the chain: those subgraphs start from the greedy flow
+        assert b.dual_start_count() == 0
+        return
+    assert b.dual_start_count() >= 1
+    if warm == WarmMode.NONE:
+        # every solve of every subgraph starts cold, hence from the basis
+        assert b.dual_start_count() == len(pts) * b.no_subgraphs()
+    else:
+        assert b.dual_start_count() <= b.cold_start_count()
 
 
 def test_greedy_start_runtime_switch():
@@ -209,3 +236,4 @@ def test_top_level_exports():
 
 def test_has_crash_start_flag_is_bool():
     assert isinstance(HAS_CRASH_START, bool)
+    assert isinstance(HAS_DUAL_SIMPLEX_START, bool)

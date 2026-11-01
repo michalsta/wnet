@@ -15,6 +15,14 @@
   start is used. `crash_start_count()` on the network counts these starts.
   Needs a pylmcf with `crashRun` (reported as `wnet_cpp.HAS_CRASH_START`);
   against older pylmcf `StartMode.Trash` falls back to the artificial start.
+- `StartMode.DualSimplex` (experimental): cold solves run the dual network
+  simplex (pylmcf's `dualSimplexRun`) from a nearest-neighbour dual-feasible
+  basis, with the greedy flow as its fallback; `dual_start_count()` counts
+  these starts. Exact, but slower than the greedy start on every captured
+  production solve (1.3-19x, 2026-11). Subgraphs with chain arcs start
+  greedy. Needs a pylmcf with `dualSimplexRun`
+  (`wnet_cpp.HAS_DUAL_SIMPLEX_START`); otherwise it acts as
+  `StartMode.Greedy`.
 - `NetworkSimplex(...)` takes every field as a keyword argument (pivot, warm,
   start, warm_violation_limit, repair_max_nodes, warm_violation_mass_fraction,
   warm_repair_budget, large_repair_mass_fraction), with the defaults of a

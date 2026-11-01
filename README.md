@@ -152,10 +152,12 @@ W = WassersteinNetwork(S1, [S2], DistanceMetric.L1, max_distance=3.0, solver=sol
 starts cold begins: `StartMode.Greedy` (the default) starts from the flow that sends everything to
 the trash and then moves flow onto matching arcs that are cheaper than the trash they replace,
 `StartMode.Trash` starts from the all-trash flow alone, `StartMode.Artificial` uses LEMON's
-artificial-arc basis. All give the same optimal cost (with ties, possibly a different optimal flow);
+artificial-arc basis, and `StartMode.DualSimplex` (experimental, slower) runs the dual network
+simplex from a nearest-neighbour basis. All give the same optimal cost (with ties, possibly a different optimal flow);
 the crash starts are usually faster, much faster on large components (greedy beats plain trash by
 10-40% there), and fall back to the artificial one when there is no trash model. `set_warm_policy()` changes either between solves, and
-`warm_start_count()`, `cold_start_count()` and `crash_start_count()` report what happened.
+`warm_start_count()`, `cold_start_count()`, `crash_start_count()` and `dual_start_count()` report
+what happened.
 
 `repair_max_nodes` (default 1000) sends subgraphs larger than that straight to a cold start when
 the cheap warm patch fails, instead of a simplex repair that can cost tens of cold solves there.
